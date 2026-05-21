@@ -86,11 +86,16 @@ namespace UnityMCP.Editor
         /// </summary>
         public static bool IsVirtualPlayer()
         {
-            InitializeReflection();
-            if (_currentPlayerType == null) return false;
+            // MPPM's CurrentPlayer type moved between Unity versions:
+            //   Unity 6+    : Unity.Multiplayer.PlayMode.CurrentPlayer in UnityEngine.MultiplayerModule
+            //   pre-Unity 6 : Unity.Multiplayer.Playmode.CurrentPlayer in Unity.Multiplayer.Playmode
+            var currentPlayerType =
+                Type.GetType("Unity.Multiplayer.PlayMode.CurrentPlayer, UnityEngine.MultiplayerModule")
+                ?? Type.GetType("Unity.Multiplayer.Playmode.CurrentPlayer, Unity.Multiplayer.Playmode");
+            if (currentPlayerType == null) return false;
             try
             {
-                var isMainEditorProperty = _currentPlayerType.GetProperty("IsMainEditor",
+                var isMainEditorProperty = currentPlayerType.GetProperty("IsMainEditor",
                     BindingFlags.Static | BindingFlags.Public);
                 if (isMainEditorProperty == null) return false;
                 return isMainEditorProperty.GetValue(null) is bool isMain && !isMain;
