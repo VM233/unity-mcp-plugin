@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.31.2] - 2026-05-21
+
+### Changed
+- **Settings panel grouped into labelled sections** — the Dashboard's *Settings* foldout now has three bold sub-headers (**General**, **Port**, **Multiplayer Play Mode (MPPM)**) instead of an unlabelled flat list. The *Start on Virtual Players* toggle is now under the explicit **MPPM** header so its scope is clear, and it was moved below the Port settings. UI-only change, no behaviour difference.
+
 ## [2.31.1] - 2026-05-21
 
 ### Fixed

@@ -687,25 +687,18 @@ namespace UnityMCP.Editor
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            // Auto-start
+            // ─── General ───
+            EditorGUILayout.LabelField("General", EditorStyles.boldLabel);
+
             bool autoStart = EditorGUILayout.Toggle("Auto-start on Editor Load", MCPSettingsManager.AutoStart);
             if (autoStart != MCPSettingsManager.AutoStart)
                 MCPSettingsManager.AutoStart = autoStart;
 
-            EditorGUILayout.Space(2);
+            EditorGUILayout.Space(6);
 
-            // Start on MPPM Virtual Players
-            bool startOnVP = EditorGUILayout.Toggle(
-                new GUIContent("Start on Virtual Players",
-                    "When off, the MCP bridge does not auto-start on Multiplayer Play Mode " +
-                    "virtual players — only on the main Editor. Manual start still works."),
-                MCPSettingsManager.StartOnVirtualPlayers);
-            if (startOnVP != MCPSettingsManager.StartOnVirtualPlayers)
-                MCPSettingsManager.StartOnVirtualPlayers = startOnVP;
+            // ─── Port ───
+            EditorGUILayout.LabelField("Port", EditorStyles.boldLabel);
 
-            EditorGUILayout.Space(2);
-
-            // Port mode toggle
             bool useManual = EditorGUILayout.Toggle("Use Manual Port", MCPSettingsManager.UseManualPort);
             if (useManual != MCPSettingsManager.UseManualPort)
                 MCPSettingsManager.UseManualPort = useManual;
@@ -732,6 +725,20 @@ namespace UnityMCP.Editor
                     : $"Will auto-select from range {MCPInstanceRegistry.PortRangeStart}-{MCPInstanceRegistry.PortRangeEnd}";
                 EditorGUILayout.HelpBox(autoInfo, MessageType.None);
             }
+
+            EditorGUILayout.Space(6);
+
+            // ─── Multiplayer Play Mode (MPPM) ───
+            EditorGUILayout.LabelField("Multiplayer Play Mode (MPPM)", EditorStyles.boldLabel);
+
+            // Start on MPPM Virtual Players
+            bool startOnVP = EditorGUILayout.Toggle(
+                new GUIContent("Start on Virtual Players",
+                    "When off, the MCP bridge does not auto-start on Multiplayer Play Mode " +
+                    "virtual players — only on the main Editor. Manual start still works."),
+                MCPSettingsManager.StartOnVirtualPlayers);
+            if (startOnVP != MCPSettingsManager.StartOnVirtualPlayers)
+                MCPSettingsManager.StartOnVirtualPlayers = startOnVP;
 
             EditorGUILayout.Space(4);
 
