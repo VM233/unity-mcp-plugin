@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.27.2] - 2026-05-21
+
+### Fixed
+- **Roslyn assemblies not found on macOS** — `MCPEditorCommands.TryLoadRoslyn()` assumed the Windows/Linux `Data/` editor layout; on macOS the assemblies live inside `Unity.app/Contents/`, so `unity_execute_code` always failed with "Roslyn is not available". The lookup now detects the `.app` bundle and adds `Unity.app/Contents` as a data root, plus `Tools/ScriptUpdater`. Contributed by [@dougfy](https://github.com/dougfy) in [#13](https://github.com/AnkleBreaker-Studio/unity-mcp-plugin/pull/13).
+
 ## [2.27.1] - 2026-05-21
 
 ### Fixed
