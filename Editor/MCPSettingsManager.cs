@@ -50,6 +50,19 @@ namespace UnityMCP.Editor
             set => EditorPrefs.SetBool(Prefix + "AutoStart", value);
         }
 
+        // ─── Multiplayer Play Mode ───
+
+        /// <summary>
+        /// When false, the MCP bridge does not auto-start on MPPM Virtual Players —
+        /// only on the main Editor. Manual start still works. Default true
+        /// (preserves the historical behaviour where every Editor starts a bridge).
+        /// </summary>
+        public static bool StartOnVirtualPlayers
+        {
+            get => EditorPrefs.GetBool(Prefix + "StartOnVirtualPlayers", true);
+            set => EditorPrefs.SetBool(Prefix + "StartOnVirtualPlayers", value);
+        }
+
         // ─── Project Context ───
 
         public static bool ContextEnabled
@@ -141,6 +154,7 @@ namespace UnityMCP.Editor
         {
             Port = 7890;
             AutoStart = true;
+            StartOnVirtualPlayers = true;
             ContextEnabled = true;
             ContextPath = "Assets/MCP/Context";
             ActionHistoryPersistence = false;

@@ -79,6 +79,29 @@ namespace UnityMCP.Editor
         }
 
         /// <summary>
+        /// Whether this Editor is an MPPM Virtual Player (a clone launched by
+        /// Multiplayer Play Mode), as opposed to the main Editor. Returns false
+        /// when MPPM is not installed or the player role cannot be determined —
+        /// callers should treat "unknown" as "main Editor" (do not block startup).
+        /// </summary>
+        public static bool IsVirtualPlayer()
+        {
+            InitializeReflection();
+            if (_currentPlayerType == null) return false;
+            try
+            {
+                var isMainEditorProperty = _currentPlayerType.GetProperty("IsMainEditor",
+                    BindingFlags.Static | BindingFlags.Public);
+                if (isMainEditorProperty == null) return false;
+                return isMainEditorProperty.GetValue(null) is bool isMain && !isMain;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        /// <summary>
         /// List all ScenarioConfig assets in the project.
         /// Since GetAllInstances is an instance method, we find configs via AssetDatabase.
         /// </summary>

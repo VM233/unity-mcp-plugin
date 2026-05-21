@@ -694,6 +694,17 @@ namespace UnityMCP.Editor
 
             EditorGUILayout.Space(2);
 
+            // Start on MPPM Virtual Players
+            bool startOnVP = EditorGUILayout.Toggle(
+                new GUIContent("Start on Virtual Players",
+                    "When off, the MCP bridge does not auto-start on Multiplayer Play Mode " +
+                    "virtual players — only on the main Editor. Manual start still works."),
+                MCPSettingsManager.StartOnVirtualPlayers);
+            if (startOnVP != MCPSettingsManager.StartOnVirtualPlayers)
+                MCPSettingsManager.StartOnVirtualPlayers = startOnVP;
+
+            EditorGUILayout.Space(2);
+
             // Port mode toggle
             bool useManual = EditorGUILayout.Toggle("Use Manual Port", MCPSettingsManager.UseManualPort);
             if (useManual != MCPSettingsManager.UseManualPort)

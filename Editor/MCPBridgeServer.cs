@@ -60,6 +60,15 @@ namespace UnityMCP.Editor
         private static double _manualPortRetryAt;
         private static bool _manualPortRetryPending;
 
+        /// <summary>
+        /// Whether the MCP bridge may auto-start in this Editor. False on MPPM
+        /// Virtual Players when StartOnVirtualPlayers is disabled (issue #21) —
+        /// manual start is unaffected.
+        /// </summary>
+        private static bool AutoStartAllowed =>
+            MCPSettingsManager.AutoStart &&
+            (MCPSettingsManager.StartOnVirtualPlayers || !MCPScenarioCommands.IsVirtualPlayer());
+
         static MCPBridgeServer()
         {
             // Skip batch-mode Unity subprocesses (AssetImportWorker, CLI builds, etc.).
@@ -67,9 +76,10 @@ namespace UnityMCP.Editor
             // ports in the 7890-7899 range and exhaust availability for real editors.
             if (Application.isBatchMode) return;
 
-            // Restart if: AutoStart is enabled OR server was running before a domain reload
+            // Restart if: auto-start is allowed (respects the Virtual Player setting)
+            // OR the server was running before a domain reload.
             bool wasRunning = SessionState.GetBool(WasRunningKey, false);
-            if (MCPSettingsManager.AutoStart || wasRunning)
+            if (AutoStartAllowed || wasRunning)
             {
                 Start();
                 SessionState.SetBool(WasRunningKey, false);
@@ -90,7 +100,7 @@ namespace UnityMCP.Editor
         {
             if (state == PlayModeStateChange.EnteredPlayMode || state == PlayModeStateChange.EnteredEditMode)
             {
-                if (!_isRunning && (MCPSettingsManager.AutoStart || SessionState.GetBool(WasRunningKey, false)))
+                if (!_isRunning && (AutoStartAllowed || SessionState.GetBool(WasRunningKey, false)))
                 {
                     Debug.Log("[MCP Bridge] Restarting server after Play Mode transition...");
                     Start();
