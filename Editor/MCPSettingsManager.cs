@@ -108,7 +108,7 @@ namespace UnityMCP.Editor
         {
             "amplify", "animation", "asmdef", "asset", "audio", "build", "component", "console",
             "constraint", "debugger", "editor", "gameobject", "graphics", "input", "lighting",
-            "memoryprofiler", "navigation", "packagemanager", "particle", "physics", "prefab",
+            "memoryprofiler", "mppm", "navigation", "packagemanager", "particle", "physics", "prefab",
             "prefabasset", "prefs", "profiler", "project", "projectsettings", "renderer",
             "scenario", "scene", "screenshot", "script", "scriptableobject", "search",
             "selection", "shadergraph", "spriteatlas", "taglayer", "terrain", "testing",

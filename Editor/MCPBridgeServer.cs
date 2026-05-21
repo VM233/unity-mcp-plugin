@@ -1282,6 +1282,16 @@ namespace UnityMCP.Editor
                     return MCPScenarioCommands.StopScenario(ParseJson(body));
                 case "scenario/info":
                     return MCPScenarioCommands.GetMultiplayerInfo(ParseJson(body));
+                case "scenario/create":
+                    return MCPScenarioCommands.CreateScenario(ParseJson(body));
+
+                // ─── MPPM Virtual Player management ───
+                case "mppm/list-players":
+                    return MCPScenarioCommands.MppmListPlayers(ParseJson(body));
+                case "mppm/activate-player":
+                    return MCPScenarioCommands.MppmActivatePlayer(ParseJson(body));
+                case "mppm/deactivate-player":
+                    return MCPScenarioCommands.MppmDeactivatePlayer(ParseJson(body));
 
 #if UMA_INSTALLED
                 // === UMA (Unity Multipurpose Avatar)
