@@ -510,7 +510,7 @@ namespace UnityMCP.Editor
         {
             if (record.TargetInstanceId != 0)
             {
-                var obj = EditorUtility.InstanceIDToObject(record.TargetInstanceId);
+                var obj = MCPObjectId.ToObject(record.TargetInstanceId);
                 if (obj != null)
                 {
                     Selection.activeObject = obj;

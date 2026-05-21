@@ -331,7 +331,7 @@ namespace UnityMCP.Editor
                 { "success", true },
                 { "original", go.name },
                 { "duplicate", duplicate.name },
-                { "instanceId", duplicate.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(duplicate) },
             };
         }
 

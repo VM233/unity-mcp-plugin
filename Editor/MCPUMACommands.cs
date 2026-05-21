@@ -1897,14 +1897,14 @@ namespace UnityMCP.Editor
         {
             var textRecipes = indexer.GetAllAssets<UMATextRecipe>();
             var wardrobeRecipes = indexer.GetAllAssets<UMAWardrobeRecipe>();
-            var seen = new HashSet<int>();
+            var seen = new HashSet<string>();
             var combined = new List<UMATextRecipe>();
             if (textRecipes != null)
                 foreach (var r in textRecipes)
-                    if (r != null && seen.Add(r.GetInstanceID())) combined.Add(r);
+                    if (r != null && seen.Add(MCPObjectId.Get(r))) combined.Add(r);
             if (wardrobeRecipes != null)
                 foreach (var r in wardrobeRecipes)
-                    if (r != null && seen.Add(r.GetInstanceID())) combined.Add(r);
+                    if (r != null && seen.Add(MCPObjectId.Get(r))) combined.Add(r);
             return combined;
         }
 

@@ -46,7 +46,7 @@ namespace UnityMCP.Editor
                 { "success", true },
                 { "name", canvasGo.name },
                 { "renderMode", canvas.renderMode.ToString() },
-                { "instanceId", canvasGo.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(canvasGo) },
             };
         }
 
@@ -135,7 +135,7 @@ namespace UnityMCP.Editor
                 { "success", true },
                 { "name", go.name },
                 { "type", type },
-                { "instanceId", go.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(go) },
                 { "parent", parentTransform.name },
             };
         }
@@ -156,7 +156,7 @@ namespace UnityMCP.Editor
                     { "renderMode", canvas.renderMode.ToString() },
                     { "sortingOrder", canvas.sortingOrder },
                     { "uiElementCount", childCount },
-                    { "instanceId", canvas.gameObject.GetInstanceID() },
+                    { "instanceId", MCPObjectId.Get(canvas.gameObject) },
                 });
             }
 

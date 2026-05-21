@@ -34,7 +34,7 @@ namespace UnityMCP.Editor
                 var preview = AssetPreview.GetAssetPreview(asset);
                 if (preview != null) return preview;
 
-                if (!AssetPreview.IsLoadingAssetPreview(asset.GetInstanceID()))
+                if (!MCPObjectId.IsLoadingPreview(asset))
                     break;
 
                 System.Threading.Thread.Sleep(100);

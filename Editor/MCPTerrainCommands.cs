@@ -50,7 +50,7 @@ namespace UnityMCP.Editor
             {
                 { "success", true },
                 { "name", name },
-                { "instanceId", terrainGO.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(terrainGO) },
                 { "dataPath", dataPath },
                 { "size", new Dictionary<string, object> { { "x", width }, { "y", height }, { "z", length } } },
                 { "heightmapResolution", heightmapRes },
@@ -114,7 +114,7 @@ namespace UnityMCP.Editor
             return new Dictionary<string, object>
             {
                 { "name", terrain.name },
-                { "instanceId", terrain.gameObject.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(terrain.gameObject) },
                 { "position", Vec3Dict(terrain.transform.position) },
                 { "size", Vec3Dict(data.size) },
                 { "heightmapResolution", data.heightmapResolution },
@@ -143,7 +143,7 @@ namespace UnityMCP.Editor
                 result.Add(new Dictionary<string, object>
                 {
                     { "name", t.name },
-                    { "instanceId", t.gameObject.GetInstanceID() },
+                    { "instanceId", MCPObjectId.Get(t.gameObject) },
                     { "position", Vec3Dict(t.transform.position) },
                     { "size", Vec3Dict(t.terrainData.size) },
                     { "isActive", t == Terrain.activeTerrain },
@@ -1421,7 +1421,7 @@ namespace UnityMCP.Editor
                     createdTerrains.Add(new Dictionary<string, object>
                     {
                         { "name", tileName },
-                        { "instanceId", go.GetInstanceID() },
+                        { "instanceId", MCPObjectId.Get(go) },
                         { "gridPosition", new Dictionary<string, object> { { "x", x }, { "z", z } } },
                     });
                 }
@@ -1657,7 +1657,7 @@ namespace UnityMCP.Editor
 
             if (args.ContainsKey("instanceId"))
             {
-                var go = EditorUtility.InstanceIDToObject(Convert.ToInt32(args["instanceId"])) as GameObject;
+                var go = MCPObjectId.ToObject(args["instanceId"]) as GameObject;
                 return go != null ? go.GetComponent<Terrain>() : null;
             }
 

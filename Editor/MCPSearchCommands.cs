@@ -57,7 +57,7 @@ namespace UnityMCP.Editor
                     {
                         { "name", comp.gameObject.name },
                         { "path", GetGameObjectPath(comp.gameObject) },
-                        { "instanceId", comp.gameObject.GetInstanceID() },
+                        { "instanceId", MCPObjectId.Get(comp.gameObject) },
                         { "active", comp.gameObject.activeInHierarchy },
                         { "scene", comp.gameObject.scene.name },
                     });
@@ -100,7 +100,7 @@ namespace UnityMCP.Editor
                 {
                     { "name", go.name },
                     { "path", GetGameObjectPath(go) },
-                    { "instanceId", go.GetInstanceID() },
+                    { "instanceId", MCPObjectId.Get(go) },
                     { "active", go.activeInHierarchy },
                     { "layer", LayerMask.LayerToName(go.layer) },
                 });
@@ -149,7 +149,7 @@ namespace UnityMCP.Editor
                         {
                             { "name", go.name },
                             { "path", GetGameObjectPath(go) },
-                            { "instanceId", go.GetInstanceID() },
+                            { "instanceId", MCPObjectId.Get(go) },
                             { "active", go.activeInHierarchy },
                             { "tag", go.tag },
                         });
@@ -211,7 +211,7 @@ namespace UnityMCP.Editor
                         {
                             { "name", go.name },
                             { "path", GetGameObjectPath(go) },
-                            { "instanceId", go.GetInstanceID() },
+                            { "instanceId", MCPObjectId.Get(go) },
                             { "active", go.activeInHierarchy },
                             { "tag", go.tag },
                             { "layer", LayerMask.LayerToName(go.layer) },
@@ -262,7 +262,7 @@ namespace UnityMCP.Editor
                             {
                                 { "name", renderer.gameObject.name },
                                 { "path", GetGameObjectPath(renderer.gameObject) },
-                                { "instanceId", renderer.gameObject.GetInstanceID() },
+                                { "instanceId", MCPObjectId.Get(renderer.gameObject) },
                                 { "material", mat.name },
                                 { "shader", mat.shader.name },
                             });
@@ -368,7 +368,7 @@ namespace UnityMCP.Editor
                         {
                             if (sp.propertyType == SerializedPropertyType.ObjectReference &&
                                 sp.objectReferenceValue == null &&
-                                sp.objectReferenceInstanceIDValue != 0)
+                                MCPObjectId.HasObjectRef(sp))
                             {
                                 totalFound++;
                                 if (results.Count < limit)

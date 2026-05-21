@@ -49,7 +49,7 @@ namespace UnityMCP.Editor
             {
                 { "success", true },
                 { "name", name },
-                { "instanceId", go.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(go) },
             };
         }
 
@@ -67,7 +67,7 @@ namespace UnityMCP.Editor
             return new Dictionary<string, object>
             {
                 { "name", ps.gameObject.name },
-                { "instanceId", ps.gameObject.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(ps.gameObject) },
                 { "isPlaying", ps.isPlaying },
                 { "isPaused", ps.isPaused },
                 { "isStopped", ps.isStopped },
@@ -264,7 +264,7 @@ namespace UnityMCP.Editor
 
             if (args.ContainsKey("instanceId"))
             {
-                var obj = EditorUtility.InstanceIDToObject(Convert.ToInt32(args["instanceId"]));
+                var obj = MCPObjectId.ToObject(args["instanceId"]);
                 var go = obj as GameObject;
                 return go != null ? go.GetComponent<ParticleSystem>() : null;
             }

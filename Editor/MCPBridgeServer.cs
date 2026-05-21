@@ -49,6 +49,26 @@ namespace UnityMCP.Editor
         // SessionState key to persist running state across domain reloads (Play Mode, recompile)
         private const string WasRunningKey = "UnityMCP_WasRunningBeforeReload";
 
+        // ─── Manual-port restart retry (unity-mcp-server issue #10) ───
+        // Right after a domain reload the configured manual port can be briefly
+        // unbindable while the previous listener's socket is released. Auto-port
+        // mode survives this (it probes and falls back); manual mode had neither
+        // probe nor retry and failed permanently. Retry the SAME port instead.
+        private const int MaxManualPortRetries = 10;
+        private const double ManualPortRetryDelaySeconds = 0.5;
+        private static int _manualPortRetryCount;
+        private static double _manualPortRetryAt;
+        private static bool _manualPortRetryPending;
+
+        /// <summary>
+        /// Whether the MCP bridge may auto-start in this Editor. False on MPPM
+        /// Virtual Players when StartOnVirtualPlayers is disabled (issue #21) —
+        /// manual start is unaffected.
+        /// </summary>
+        private static bool AutoStartAllowed =>
+            MCPSettingsManager.AutoStart &&
+            (MCPSettingsManager.StartOnVirtualPlayers || !MCPScenarioCommands.IsVirtualPlayer());
+
         static MCPBridgeServer()
         {
             // Skip batch-mode Unity subprocesses (AssetImportWorker, CLI builds, etc.).
@@ -56,9 +76,10 @@ namespace UnityMCP.Editor
             // ports in the 7890-7899 range and exhaust availability for real editors.
             if (Application.isBatchMode) return;
 
-            // Restart if: AutoStart is enabled OR server was running before a domain reload
+            // Restart if: auto-start is allowed (respects the Virtual Player setting)
+            // OR the server was running before a domain reload.
             bool wasRunning = SessionState.GetBool(WasRunningKey, false);
-            if (MCPSettingsManager.AutoStart || wasRunning)
+            if (AutoStartAllowed || wasRunning)
             {
                 Start();
                 SessionState.SetBool(WasRunningKey, false);
@@ -79,7 +100,7 @@ namespace UnityMCP.Editor
         {
             if (state == PlayModeStateChange.EnteredPlayMode || state == PlayModeStateChange.EnteredEditMode)
             {
-                if (!_isRunning && (MCPSettingsManager.AutoStart || SessionState.GetBool(WasRunningKey, false)))
+                if (!_isRunning && (AutoStartAllowed || SessionState.GetBool(WasRunningKey, false)))
                 {
                     Debug.Log("[MCP Bridge] Restarting server after Play Mode transition...");
                     Start();
@@ -162,18 +183,46 @@ namespace UnityMCP.Editor
                 // Register in the shared instance registry
                 MCPInstanceRegistry.Register(port);
 
+                // Successful bind — clear any pending manual-port retry state.
+                _manualPortRetryCount = 0;
+                _manualPortRetryPending = false;
+
                 Debug.Log($"[AB-UMCP] Server started on port {port}");
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[AB-UMCP] Failed to start on port {port}: {ex.Message}");
-
-                // Retry only in auto-port mode, only if another port is actually free.
-                // The previous implementation retried whenever port < PortRangeEnd which
-                // caused an infinite loop when FindAvailablePort kept returning the same
-                // unavailable default port.
-                if (!MCPSettingsManager.UseManualPort)
+                if (MCPSettingsManager.UseManualPort)
                 {
+                    // Manual port: do NOT fall back to another port — the user
+                    // explicitly chose this one. The port is usually only briefly
+                    // unavailable (socket release after a domain reload), so retry
+                    // the SAME port a few times before giving up (issue #10).
+                    if (_manualPortRetryCount < MaxManualPortRetries)
+                    {
+                        _manualPortRetryCount++;
+                        Debug.LogWarning(
+                            $"[AB-UMCP] Port {port} not yet available ({ex.Message}). " +
+                            $"Retry {_manualPortRetryCount}/{MaxManualPortRetries} in {ManualPortRetryDelaySeconds:0.0}s...");
+                        _manualPortRetryAt = EditorApplication.timeSinceStartup + ManualPortRetryDelaySeconds;
+                        _manualPortRetryPending = true;
+                    }
+                    else
+                    {
+                        _manualPortRetryCount = 0;
+                        Debug.LogError(
+                            $"[AB-UMCP] Failed to start on port {port} after {MaxManualPortRetries} retries: {ex.Message}. " +
+                            "Choose a different manual port in MCP settings, or switch to automatic port selection.");
+                    }
+                }
+                else
+                {
+                    Debug.LogError($"[AB-UMCP] Failed to start on port {port}: {ex.Message}");
+
+                    // Auto-port mode: fall back to another free port.
+                    // Retry only if another port is actually free — the previous
+                    // implementation retried whenever port < PortRangeEnd which
+                    // caused an infinite loop when FindAvailablePort kept returning
+                    // the same unavailable default port.
                     int nextPort = MCPInstanceRegistry.FindAvailablePort();
                     if (nextPort < 0 || nextPort == port)
                     {
@@ -191,6 +240,10 @@ namespace UnityMCP.Editor
         public static void Stop()
         {
             _isRunning = false;
+
+            // Cancel any pending manual-port restart retry.
+            _manualPortRetryPending = false;
+            _manualPortRetryCount = 0;
 
             // Unregister from shared instance registry
             MCPInstanceRegistry.Unregister();
@@ -210,6 +263,15 @@ namespace UnityMCP.Editor
 
         private static void OnEditorUpdate()
         {
+            // 0. Manual-port restart retry (issue #10): the manual port can be
+            //    briefly unbindable after a domain reload — retry on a short delay.
+            if (_manualPortRetryPending && !_isRunning &&
+                EditorApplication.timeSinceStartup >= _manualPortRetryAt)
+            {
+                _manualPortRetryPending = false;
+                Start();
+            }
+
             // 1. Process legacy main-thread actions
             ProcessMainThreadQueue();
 
@@ -1220,6 +1282,16 @@ namespace UnityMCP.Editor
                     return MCPScenarioCommands.StopScenario(ParseJson(body));
                 case "scenario/info":
                     return MCPScenarioCommands.GetMultiplayerInfo(ParseJson(body));
+                case "scenario/create":
+                    return MCPScenarioCommands.CreateScenario(ParseJson(body));
+
+                // ─── MPPM Virtual Player management ───
+                case "mppm/list-players":
+                    return MCPScenarioCommands.MppmListPlayers(ParseJson(body));
+                case "mppm/activate-player":
+                    return MCPScenarioCommands.MppmActivatePlayer(ParseJson(body));
+                case "mppm/deactivate-player":
+                    return MCPScenarioCommands.MppmDeactivatePlayer(ParseJson(body));
 
 #if UMA_INSTALLED
                 // === UMA (Unity Multipurpose Avatar)

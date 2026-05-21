@@ -180,7 +180,7 @@ namespace UnityMCP.Editor
             string assetPath = args.ContainsKey("assetPath") ? args["assetPath"].ToString() : "";
             string gameObjectRef = args.ContainsKey("referenceGameObject") ? args["referenceGameObject"].ToString() : "";
             string componentRef = args.ContainsKey("referenceComponentType") ? args["referenceComponentType"].ToString() : "";
-            int refInstanceId = args.ContainsKey("referenceInstanceId") ? Convert.ToInt32(args["referenceInstanceId"]) : 0;
+            object refInstanceId = args.ContainsKey("referenceInstanceId") ? args["referenceInstanceId"] : null;
             bool clearRef = args.ContainsKey("clear") && Convert.ToBoolean(args["clear"]);
 
             UnityEngine.Object targetRef = null;
@@ -205,10 +205,10 @@ namespace UnityMCP.Editor
                 if (targetRef == null)
                     return new { error = $"Asset not found at '{assetPath}'" };
             }
-            else if (refInstanceId != 0)
+            else if (refInstanceId != null)
             {
                 // Find by instance ID
-                targetRef = EditorUtility.InstanceIDToObject(refInstanceId);
+                targetRef = MCPObjectId.ToObject(refInstanceId);
                 if (targetRef == null)
                     return new { error = $"No object found with instanceId {refInstanceId}" };
             }
@@ -400,7 +400,7 @@ namespace UnityMCP.Editor
                     {
                         { "name", comp.gameObject.name },
                         { "type", comp.GetType().Name },
-                        { "instanceId", comp.GetInstanceID() },
+                        { "instanceId", MCPObjectId.Get(comp) },
                         { "path", GetGameObjectPath(comp.gameObject) },
                     });
                     if (sceneObjects.Count >= 50) break; // Limit results
@@ -415,7 +415,7 @@ namespace UnityMCP.Editor
                     {
                         { "name", obj.name },
                         { "type", "GameObject" },
-                        { "instanceId", obj.GetInstanceID() },
+                        { "instanceId", MCPObjectId.Get(obj) },
                         { "path", GetGameObjectPath(obj) },
                     });
                     if (sceneObjects.Count >= 50) break;
@@ -541,7 +541,7 @@ namespace UnityMCP.Editor
                         {
                             { "name", refObj.name },
                             { "type", refObj.GetType().Name },
-                            { "instanceId", refObj.GetInstanceID() },
+                            { "instanceId", MCPObjectId.Get(refObj) },
                         };
                         // Add asset path for project assets
                         string assetPath = AssetDatabase.GetAssetPath(refObj);
@@ -692,7 +692,7 @@ namespace UnityMCP.Editor
                 }
                 else if (dict.ContainsKey("instanceId"))
                 {
-                    resolved = EditorUtility.InstanceIDToObject(Convert.ToInt32(dict["instanceId"]));
+                    resolved = MCPObjectId.ToObject(dict["instanceId"]);
                 }
                 else if (dict.ContainsKey("gameObject") || dict.ContainsKey("path"))
                 {

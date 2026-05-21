@@ -70,7 +70,7 @@ namespace UnityMCP.Editor
                     { "gameObject", col.gameObject.name },
                     { "colliderType", col.GetType().Name },
                     { "position", MCPGameObjectCommands.Vector3ToDict(col.transform.position) },
-                    { "instanceId", col.gameObject.GetInstanceID() },
+                    { "instanceId", MCPObjectId.Get(col.gameObject) },
                 });
             }
 
@@ -99,7 +99,7 @@ namespace UnityMCP.Editor
                     { "gameObject", col.gameObject.name },
                     { "colliderType", col.GetType().Name },
                     { "position", MCPGameObjectCommands.Vector3ToDict(col.transform.position) },
-                    { "instanceId", col.gameObject.GetInstanceID() },
+                    { "instanceId", MCPObjectId.Get(col.gameObject) },
                 });
             }
 
@@ -184,7 +184,7 @@ namespace UnityMCP.Editor
             return new Dictionary<string, object>
             {
                 { "gameObject", hit.collider.gameObject.name },
-                { "instanceId", hit.collider.gameObject.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(hit.collider.gameObject) },
                 { "point", MCPGameObjectCommands.Vector3ToDict(hit.point) },
                 { "normal", MCPGameObjectCommands.Vector3ToDict(hit.normal) },
                 { "distance", hit.distance },
