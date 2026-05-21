@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.28.1] - 2026-05-21
+
+### Fixed
+- **Manual (fixed) port not reclaimed after a domain reload** — with a manual port configured, `MCPBridgeServer.Start()` bound the port directly and gave up permanently on the first failure. Right after a domain reload the port can be briefly unbindable while the previous listener's socket is released; auto-port mode already survived this (it probes and falls back) but manual mode had neither probe nor retry. `Start()` now retries the same manual port up to 10 times on a 0.5s delay before giving up. Addresses [unity-mcp-server#10](https://github.com/AnkleBreaker-Studio/unity-mcp-server/issues/10).
+
 ## [2.28.0] - 2026-05-21
 
 ### Added
