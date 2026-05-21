@@ -180,7 +180,7 @@ namespace UnityMCP.Editor
             string assetPath = args.ContainsKey("assetPath") ? args["assetPath"].ToString() : "";
             string gameObjectRef = args.ContainsKey("referenceGameObject") ? args["referenceGameObject"].ToString() : "";
             string componentRef = args.ContainsKey("referenceComponentType") ? args["referenceComponentType"].ToString() : "";
-            int refInstanceId = args.ContainsKey("referenceInstanceId") ? Convert.ToInt32(args["referenceInstanceId"]) : 0;
+            object refInstanceId = args.ContainsKey("referenceInstanceId") ? args["referenceInstanceId"] : null;
             bool clearRef = args.ContainsKey("clear") && Convert.ToBoolean(args["clear"]);
 
             UnityEngine.Object targetRef = null;
@@ -205,7 +205,7 @@ namespace UnityMCP.Editor
                 if (targetRef == null)
                     return new { error = $"Asset not found at '{assetPath}'" };
             }
-            else if (refInstanceId != 0)
+            else if (refInstanceId != null)
             {
                 // Find by instance ID
                 targetRef = MCPObjectId.ToObject(refInstanceId);
@@ -692,7 +692,7 @@ namespace UnityMCP.Editor
                 }
                 else if (dict.ContainsKey("instanceId"))
                 {
-                    resolved = MCPObjectId.ToObject(Convert.ToInt32(dict["instanceId"]));
+                    resolved = MCPObjectId.ToObject(dict["instanceId"]);
                 }
                 else if (dict.ContainsKey("gameObject") || dict.ContainsKey("path"))
                 {

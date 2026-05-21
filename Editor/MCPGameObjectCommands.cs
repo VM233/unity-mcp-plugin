@@ -151,8 +151,7 @@ namespace UnityMCP.Editor
         {
             if (args.ContainsKey("instanceId"))
             {
-                int id = Convert.ToInt32(args["instanceId"]);
-                return MCPObjectId.ToObject(id) as GameObject;
+                return MCPObjectId.ToObject(args["instanceId"]) as GameObject;
             }
 
             if (args.ContainsKey("path") || args.ContainsKey("gameObjectPath"))

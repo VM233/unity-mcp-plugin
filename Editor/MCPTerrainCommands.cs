@@ -1657,7 +1657,7 @@ namespace UnityMCP.Editor
 
             if (args.ContainsKey("instanceId"))
             {
-                var go = MCPObjectId.ToObject(Convert.ToInt32(args["instanceId"])) as GameObject;
+                var go = MCPObjectId.ToObject(args["instanceId"]) as GameObject;
                 return go != null ? go.GetComponent<Terrain>() : null;
             }
 

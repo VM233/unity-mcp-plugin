@@ -264,7 +264,7 @@ namespace UnityMCP.Editor
 
             if (args.ContainsKey("instanceId"))
             {
-                var obj = MCPObjectId.ToObject(Convert.ToInt32(args["instanceId"]));
+                var obj = MCPObjectId.ToObject(args["instanceId"]);
                 var go = obj as GameObject;
                 return go != null ? go.GetComponent<ParticleSystem>() : null;
             }

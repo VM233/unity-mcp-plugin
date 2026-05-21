@@ -54,8 +54,7 @@ namespace UnityMCP.Editor
 
             if (args.ContainsKey("instanceId"))
             {
-                int id = Convert.ToInt32(args["instanceId"]);
-                var go = MCPObjectId.ToObject(id) as GameObject;
+                var go = MCPObjectId.ToObject(args["instanceId"]) as GameObject;
                 if (go != null) gameObjects.Add(go);
             }
 

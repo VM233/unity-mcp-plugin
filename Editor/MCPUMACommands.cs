@@ -1897,7 +1897,7 @@ namespace UnityMCP.Editor
         {
             var textRecipes = indexer.GetAllAssets<UMATextRecipe>();
             var wardrobeRecipes = indexer.GetAllAssets<UMAWardrobeRecipe>();
-            var seen = new HashSet<long>();
+            var seen = new HashSet<string>();
             var combined = new List<UMATextRecipe>();
             if (textRecipes != null)
                 foreach (var r in textRecipes)

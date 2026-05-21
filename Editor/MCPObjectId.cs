@@ -6,45 +6,55 @@ namespace UnityMCP.Editor
     /// <summary>
     /// Cross-version object-identity helpers.
     ///
-    /// Unity 6.5 (6000.5) deprecates the legacy InstanceID APIs as compile errors
-    /// (CS0619) in favour of EntityId, and also deprecates EntityId's int cast —
-    /// entity ids will no longer be representable by an int. This shim therefore
-    /// exposes ids as long and, on 6.5, round-trips through the non-obsolete
-    /// EntityId.ToULong / EntityId.FromULong API. Pre-6.5 (down to the supported
-    /// 2021.3 LTS) keeps the classic int InstanceID APIs, widened to long.
+    /// Unity 6.5 (6000.5) deprecates the legacy InstanceID APIs (CS0619) in favour
+    /// of EntityId, and EntityId's int cast is itself deprecated — entity ids no
+    /// longer fit in an int. On 6.5 the raw id is a 64-bit value (~5.7e17) that
+    /// exceeds JavaScript's safe-integer range (2^53), so it cannot travel as a
+    /// JSON number through the Node MCP server without precision loss.
     ///
-    /// long is chosen because int converts to it implicitly, so existing int-based
-    /// call sites are unaffected. The JSON "instanceId" wire field stays a number.
+    /// Ids are therefore exposed as decimal STRINGS. On 6.5 the value is
+    /// EntityId.ToULong(); pre-6.5 (down to the supported 2021.3 LTS) it is the
+    /// classic int InstanceID. The JSON "instanceId" wire field is a string on
+    /// every Unity version.
     /// </summary>
     internal static class MCPObjectId
     {
-        /// <summary>Stable per-object id. JSON "instanceId" wire field (numeric).</summary>
-        public static long Get(Object obj)
+        /// <summary>Stable per-object id as a decimal string (JSON "instanceId" wire field).</summary>
+        public static string Get(Object obj)
         {
 #if UNITY_6000_5_OR_NEWER
-            return (long)EntityId.ToULong(obj.GetEntityId());
+            return EntityId.ToULong(obj.GetEntityId()).ToString();
 #else
-            return obj.GetInstanceID();
+            return obj.GetInstanceID().ToString();
 #endif
         }
 
-        /// <summary>Resolve the object previously identified by <see cref="Get"/>.</summary>
-        public static Object ToObject(long id)
+        /// <summary>
+        /// Resolve the object previously identified by <see cref="Get"/>. Accepts the
+        /// wire value (string) or a boxed numeric id; returns null if unresolvable.
+        /// </summary>
+        public static Object ToObject(object id)
         {
+            if (id == null) return null;
+            string s = id as string ?? id.ToString();
 #if UNITY_6000_5_OR_NEWER
-            return EditorUtility.EntityIdToObject(EntityId.FromULong((ulong)id));
+            return ulong.TryParse(s, out var raw)
+                ? EditorUtility.EntityIdToObject(EntityId.FromULong(raw))
+                : null;
 #else
-            return EditorUtility.InstanceIDToObject((int)id);
+            return int.TryParse(s, out var iid)
+                ? EditorUtility.InstanceIDToObject(iid)
+                : null;
 #endif
         }
 
-        /// <summary>Whether the asset preview for the given object id is still loading.</summary>
-        public static bool IsLoadingPreview(long id)
+        /// <summary>Whether the asset preview for the given object is still loading.</summary>
+        public static bool IsLoadingPreview(Object obj)
         {
 #if UNITY_6000_5_OR_NEWER
-            return AssetPreview.IsLoadingAssetPreview(EntityId.FromULong((ulong)id));
+            return AssetPreview.IsLoadingAssetPreview(obj.GetEntityId());
 #else
-            return AssetPreview.IsLoadingAssetPreview((int)id);
+            return AssetPreview.IsLoadingAssetPreview(obj.GetInstanceID());
 #endif
         }
 
