@@ -59,15 +59,19 @@ namespace UnityMCP.Editor
 
                 if (scenariosAssembly != null)
                 {
+                    // The "scenario config" ScriptableObject: ScenarioConfig pre-Unity 6,
+                    // renamed OrchestratedScenario in MPPM 2.0 (Unity 6).
                     _scenarioConfigType = FirstType(scenariosAssembly,
-                        "Unity.Multiplayer.PlayMode.Scenarios.Editor.ScenarioConfig",   // old
-                        "Unity.Multiplayer.PlayMode.Editor.ScenarioConfig");            // Unity 6
+                        "Unity.Multiplayer.PlayMode.Scenarios.Editor.ScenarioConfig",     // old (pre-Unity 6)
+                        "Unity.Multiplayer.PlayMode.Editor.OrchestratedScenario");        // MPPM 2.0 (Unity 6)
                     _scenarioRunnerType = FirstType(scenariosAssembly,
                         "Unity.Multiplayer.PlayMode.Scenarios.Editor.ScenarioRunner",
                         "Unity.Multiplayer.PlayMode.Editor.ScenarioRunner");
+                    // The scenario status struct: ScenarioStatus pre-Unity 6,
+                    // renamed ScenarioStatusData in MPPM 2.0.
                     _scenarioStatusType = FirstType(scenariosAssembly,
-                        "Unity.Multiplayer.PlayMode.Scenarios.Editor.Api.ScenarioStatus",
-                        "Unity.Multiplayer.PlayMode.Editor.ScenarioStatus");
+                        "Unity.Multiplayer.PlayMode.Scenarios.Editor.Api.ScenarioStatus", // old
+                        "Unity.Multiplayer.PlayMode.Editor.ScenarioStatusData");          // MPPM 2.0
                     _scenarioType = FirstType(scenariosAssembly,
                         "Unity.Multiplayer.PlayMode.Scenarios.Editor.GraphsFoundation.Scenario",
                         "Unity.Multiplayer.PlayMode.Editor.Scenario");
@@ -313,9 +317,14 @@ namespace UnityMCP.Editor
                 var bindFlags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
                 var scenarioProperty = _scenarioConfigType.GetProperty("Scenario", bindFlags);
                 var descriptionProperty = _scenarioConfigType.GetProperty("Description", bindFlags);
+                // Old ScenarioConfig exposed instances as properties; MPPM 2.0's
+                // OrchestratedScenario stores them in m_* fields — read either.
                 var editorInstanceProperty = _scenarioConfigType.GetProperty("EditorInstance", bindFlags);
                 var virtualEditorInstancesProperty = _scenarioConfigType.GetProperty("VirtualEditorInstances", bindFlags);
                 var localInstancesProperty = _scenarioConfigType.GetProperty("LocalInstances", bindFlags);
+                var editorInstanceField = _scenarioConfigType.GetField("m_MainEditorInstance", bindFlags);
+                var virtualEditorInstancesField = _scenarioConfigType.GetField("m_EditorInstances", bindFlags);
+                var localInstancesField = _scenarioConfigType.GetField("m_LocalInstances", bindFlags);
 
                 foreach (var guid in guids)
                 {
@@ -329,9 +338,9 @@ namespace UnityMCP.Editor
                         var scenarioName = (scenarioObj as UnityEngine.Object)?.name ?? asset.name;
                         var description = descriptionProperty?.GetValue(asset) as string ?? "";
 
-                        var editorInst = editorInstanceProperty?.GetValue(asset);
-                        var virtualInsts = virtualEditorInstancesProperty?.GetValue(asset) as System.Collections.IEnumerable;
-                        var localInsts = localInstancesProperty?.GetValue(asset) as System.Collections.IEnumerable;
+                        var editorInst = editorInstanceProperty?.GetValue(asset) ?? editorInstanceField?.GetValue(asset);
+                        var virtualInsts = (virtualEditorInstancesProperty?.GetValue(asset) ?? virtualEditorInstancesField?.GetValue(asset)) as System.Collections.IEnumerable;
+                        var localInsts = (localInstancesProperty?.GetValue(asset) ?? localInstancesField?.GetValue(asset)) as System.Collections.IEnumerable;
 
                         var scenarioInfo = new Dictionary<string, object>
                         {
@@ -731,6 +740,7 @@ namespace UnityMCP.Editor
                 Type localInstType = FirstType(scenariosAssembly,
                     "Unity.Multiplayer.PlayMode.Scenarios.Editor.LocalInstanceDescription",
                     "Unity.Multiplayer.PlayMode.Editor.LocalInstanceDescription");
+                // Remote instances were removed in MPPM 2.0 (Unity 6) — this type is optional.
                 Type remoteInstType = FirstType(scenariosAssembly,
                     "Unity.Multiplayer.PlayMode.Scenarios.Editor.RemoteInstanceDescription",
                     "Unity.Multiplayer.PlayMode.Editor.RemoteInstanceDescription");
@@ -741,7 +751,7 @@ namespace UnityMCP.Editor
                     if ((roleFlagsType = asm.GetType("UnityEngine.Multiplayer.Internal.MultiplayerRoleFlags")) != null) break;
 
                 if (mainEditorInstType == null || virtualEditorInstType == null || localInstType == null
-                    || remoteInstType == null || roleFlagsType == null)
+                    || roleFlagsType == null)
                     return WrapError("Required MPPM types not found; incompatible Unity version?");
 
                 // ScenarioRunner.LoadScenario expects an actual Scenario object, so we create
@@ -793,8 +803,9 @@ namespace UnityMCP.Editor
                 // Empty lists for local/remote so the MPPM UI doesn't NRE on null.
                 _scenarioConfigType.GetField("m_LocalInstances", instFlags)
                     ?.SetValue(config, Activator.CreateInstance(typeof(List<>).MakeGenericType(localInstType)));
-                _scenarioConfigType.GetField("m_RemoteInstances", instFlags)
-                    ?.SetValue(config, Activator.CreateInstance(typeof(List<>).MakeGenericType(remoteInstType)));
+                if (remoteInstType != null)
+                    _scenarioConfigType.GetField("m_RemoteInstances", instFlags)
+                        ?.SetValue(config, Activator.CreateInstance(typeof(List<>).MakeGenericType(remoteInstType)));
 
                 // Make sure the folder exists, then persist the config and the nested scenario.
                 var folder = System.IO.Path.GetDirectoryName(path);

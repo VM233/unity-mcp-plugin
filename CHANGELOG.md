@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.31.1] - 2026-05-21
+
+### Fixed
+- **MPPM scenario commands now work on MPPM 2.0 (Unity 6)** — the 2.31.0 Unity 6 port resolved the scenario types under the wrong names. In MPPM 2.0 the scenario "config" ScriptableObject was renamed `OrchestratedScenario` (from `ScenarioConfig`) and the status struct `ScenarioStatusData` (from `ScenarioStatus`); `MCPScenarioCommands` now resolves both. `create_scenario` no longer requires the removed `RemoteInstanceDescription` type (remote instances were dropped in MPPM 2.0), and `list_scenarios` reads instance counts from `OrchestratedScenario`'s fields. All MPPM tools verified end-to-end on Unity 6000.5.0b8 + MPPM 2.0.2.
+
 ## [2.31.0] - 2026-05-21
 
 ### Added
