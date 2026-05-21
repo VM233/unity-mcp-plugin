@@ -16,7 +16,7 @@ namespace UnityMCP.Editor
                 selected.Add(new Dictionary<string, object>
                 {
                     { "name", obj.name },
-                    { "instanceId", obj.GetInstanceID() },
+                    { "instanceId", MCPObjectId.Get(obj) },
                     { "path", MCPGameObjectCommands.GetHierarchyPath(obj) },
                 });
             }
@@ -55,7 +55,7 @@ namespace UnityMCP.Editor
             if (args.ContainsKey("instanceId"))
             {
                 int id = Convert.ToInt32(args["instanceId"]);
-                var go = EditorUtility.InstanceIDToObject(id) as GameObject;
+                var go = MCPObjectId.ToObject(id) as GameObject;
                 if (go != null) gameObjects.Add(go);
             }
 
@@ -145,7 +145,7 @@ namespace UnityMCP.Editor
                     results.Add(new Dictionary<string, object>
                     {
                         { "gameObject", comp.gameObject.name },
-                        { "instanceId", comp.gameObject.GetInstanceID() },
+                        { "instanceId", MCPObjectId.Get(comp.gameObject) },
                         { "path", MCPGameObjectCommands.GetHierarchyPath(comp.gameObject) },
                     });
                 }

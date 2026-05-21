@@ -160,7 +160,7 @@ namespace UnityMCP.Editor
             {
                 { "success", true },
                 { "name", instance.name },
-                { "instanceId", instance.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(instance) },
                 { "position", MCPGameObjectCommands.Vector3ToDict(instance.transform.position) },
             };
         }

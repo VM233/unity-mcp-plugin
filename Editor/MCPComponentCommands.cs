@@ -208,7 +208,7 @@ namespace UnityMCP.Editor
             else if (refInstanceId != 0)
             {
                 // Find by instance ID
-                targetRef = EditorUtility.InstanceIDToObject(refInstanceId);
+                targetRef = MCPObjectId.ToObject(refInstanceId);
                 if (targetRef == null)
                     return new { error = $"No object found with instanceId {refInstanceId}" };
             }
@@ -400,7 +400,7 @@ namespace UnityMCP.Editor
                     {
                         { "name", comp.gameObject.name },
                         { "type", comp.GetType().Name },
-                        { "instanceId", comp.GetInstanceID() },
+                        { "instanceId", MCPObjectId.Get(comp) },
                         { "path", GetGameObjectPath(comp.gameObject) },
                     });
                     if (sceneObjects.Count >= 50) break; // Limit results
@@ -415,7 +415,7 @@ namespace UnityMCP.Editor
                     {
                         { "name", obj.name },
                         { "type", "GameObject" },
-                        { "instanceId", obj.GetInstanceID() },
+                        { "instanceId", MCPObjectId.Get(obj) },
                         { "path", GetGameObjectPath(obj) },
                     });
                     if (sceneObjects.Count >= 50) break;
@@ -541,7 +541,7 @@ namespace UnityMCP.Editor
                         {
                             { "name", refObj.name },
                             { "type", refObj.GetType().Name },
-                            { "instanceId", refObj.GetInstanceID() },
+                            { "instanceId", MCPObjectId.Get(refObj) },
                         };
                         // Add asset path for project assets
                         string assetPath = AssetDatabase.GetAssetPath(refObj);
@@ -692,7 +692,7 @@ namespace UnityMCP.Editor
                 }
                 else if (dict.ContainsKey("instanceId"))
                 {
-                    resolved = EditorUtility.InstanceIDToObject(Convert.ToInt32(dict["instanceId"]));
+                    resolved = MCPObjectId.ToObject(Convert.ToInt32(dict["instanceId"]));
                 }
                 else if (dict.ContainsKey("gameObject") || dict.ContainsKey("path"))
                 {

@@ -48,7 +48,7 @@ namespace UnityMCP.Editor
             {
                 { "success", true },
                 { "name", go.name },
-                { "instanceId", go.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(go) },
                 { "position", Vector3ToDict(go.transform.position) },
             };
         }
@@ -87,7 +87,7 @@ namespace UnityMCP.Editor
             return new Dictionary<string, object>
             {
                 { "name", go.name },
-                { "instanceId", go.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(go) },
                 { "active", go.activeSelf },
                 { "activeInHierarchy", go.activeInHierarchy },
                 { "isStatic", go.isStatic },
@@ -152,7 +152,7 @@ namespace UnityMCP.Editor
             if (args.ContainsKey("instanceId"))
             {
                 int id = Convert.ToInt32(args["instanceId"]);
-                return EditorUtility.InstanceIDToObject(id) as GameObject;
+                return MCPObjectId.ToObject(id) as GameObject;
             }
 
             if (args.ContainsKey("path") || args.ContainsKey("gameObjectPath"))

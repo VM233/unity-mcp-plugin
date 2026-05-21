@@ -20,7 +20,7 @@ namespace UnityMCP.Editor
                 var info = new Dictionary<string, object>
                 {
                     { "name", light.gameObject.name },
-                    { "instanceId", light.gameObject.GetInstanceID() },
+                    { "instanceId", MCPObjectId.Get(light.gameObject) },
                     { "type", light.type.ToString() },
                     { "color", new Dictionary<string, object> { { "r", light.color.r }, { "g", light.color.g }, { "b", light.color.b }, { "a", light.color.a } } },
                     { "intensity", light.intensity },
@@ -94,7 +94,7 @@ namespace UnityMCP.Editor
             {
                 { "success", true },
                 { "name", go.name },
-                { "instanceId", go.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(go) },
                 { "lightType", lightType.ToString() },
                 { "intensity", light.intensity },
                 { "position", MCPGameObjectCommands.Vector3ToDict(go.transform.position) },
@@ -185,7 +185,7 @@ namespace UnityMCP.Editor
             {
                 { "success", true },
                 { "name", go.name },
-                { "instanceId", go.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(go) },
                 { "position", MCPGameObjectCommands.Vector3ToDict(go.transform.position) },
                 { "size", MCPGameObjectCommands.Vector3ToDict(probe.size) },
             };
@@ -207,7 +207,7 @@ namespace UnityMCP.Editor
             {
                 { "success", true },
                 { "name", go.name },
-                { "instanceId", go.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(go) },
                 { "probeCount", group.probePositions.Length },
             };
         }

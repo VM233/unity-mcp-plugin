@@ -16,7 +16,7 @@ namespace UnityMCP.Editor
                 sourceList.Add(new Dictionary<string, object>
                 {
                     { "gameObject", src.gameObject.name },
-                    { "instanceId", src.gameObject.GetInstanceID() },
+                    { "instanceId", MCPObjectId.Get(src.gameObject) },
                     { "clip", src.clip != null ? src.clip.name : null },
                     { "volume", src.volume },
                     { "pitch", src.pitch },
@@ -76,7 +76,7 @@ namespace UnityMCP.Editor
             {
                 { "success", true },
                 { "gameObject", go.name },
-                { "instanceId", go.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(go) },
                 { "clip", source.clip != null ? source.clip.name : null },
                 { "volume", source.volume },
                 { "loop", source.loop },

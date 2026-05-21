@@ -175,7 +175,7 @@ namespace UnityMCP.Editor
             var node = new Dictionary<string, object>
             {
                 { "name", go.name },
-                { "instanceId", go.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(go) },
                 { "active", go.activeSelf },
                 { "tag", go.tag },
                 { "layer", LayerMask.LayerToName(go.layer) },
