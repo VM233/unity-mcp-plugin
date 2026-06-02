@@ -2,6 +2,14 @@
 
 All notable changes to this package will be documented in this file.
 
+## [2.32.0] - 2026-06-02
+
+### Added
+- **`screenshot/editor-window` command** — `MCPScreenshotCommands.CaptureEditorWindow` captures any EditorWindow (Inspector, Project, Console, custom windows) to a PNG via the Win32 `PrintWindow` API (`PW_RENDERFULLCONTENT`), occlusion-proof (the window renders itself offscreen — no raise or focus-steal). Docked windows are captured by PrintWindowing the main window and cropping the panel rect; floating windows by resolving their own HWND (exact title match) and capturing the whole window. Defaults to `Assets/Screenshots/`, honours any user-chosen `.png` path; bounds dimensions against `SystemInfo.maxTextureSize`, all GDI handles + the `Texture2D` released in `try/finally`. **Windows editor only** (`#if UNITY_EDITOR_WIN`) — returns a clear unsupported-platform error on macOS/Linux (no `PrintWindow` equivalent); use `screenshot/scene` / `screenshot/game` (camera-based) there. Companion to the `unity-mcp-server` 2.30.0 change.
+
+### Changed
+- **Welcome window reworked into a modular, themed system** — the single-file `Editor/MCPWelcomeWindow.cs` is replaced by `1-Scripts/Editor/WelcomeWindow/` (own assembly `UnityMCP.Editor.Welcome`, namespace `UnityMCP.Editor.Welcome`): a USS theme, Welcome + Studio tabs, auto-open on first load with per-project detection, a config-driven content seam (custom sections / buttons, cross-sell entries via `welcome.gen.json`), a devlog fetcher, and bundled icons.
+
 ## [2.31.2] - 2026-05-21
 
 ### Changed
