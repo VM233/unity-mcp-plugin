@@ -247,6 +247,11 @@ If Unity MCP helps your workflow, consider supporting its development! Your supp
 
 **Sponsor tiers include priority feature requests** — your ideas get bumped up the roadmap! Check out the tiers on [GitHub Sponsors](https://github.com/sponsors/AnkleBreaker-Studio) or [Patreon](https://www.patreon.com/AnkleBreakerStudio).
 
+## What's New in v2.32.0
+
+- **Editor-window screenshots (`screenshot/editor-window`)** — capture any EditorWindow (Inspector, Project, Console, custom windows) to a PNG via the Win32 `PrintWindow` API. Occlusion-proof (the window renders itself offscreen — no raising or focus-stealing), with automatic docked-vs-floating handling. Defaults to `Assets/Screenshots/`, accepts any `.png` path. **Windows editor only** (`#if UNITY_EDITOR_WIN`) — on macOS/Linux it returns a clear "unsupported platform" error (PrintWindow has no equivalent there); use scene/game capture, which are camera-based and cross-platform. Companion to `unity-mcp-server` v2.30.0.
+- **Welcome window reworked** — the single-file welcome window is replaced by a modular, themed system (`UnityMCP.Editor.Welcome` assembly): USS theme, Welcome + Studio tabs, auto-open on first load with per-project detection, a config-driven content seam, and a devlog feed.
+
 ## What's New in v2.27.0
 
 - **Path-based lookup works on inactive GameObjects** — Every tool that accepts a `path` (`prefab_info`, `set_active`, `info`, `delete`, `set_transform`, `reparent`, etc.) now correctly finds and operates on inactive targets, where previously it silently failed with "GameObject not found". Fix contributed by [@BadranRaza](https://github.com/BadranRaza).
