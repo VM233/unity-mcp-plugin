@@ -661,6 +661,10 @@ namespace UnityMCP.Editor
                     return "Trigger repaint on a UI Toolkit EditorWindow or element.";
                 case "animation/set-object-reference-curve":
                     return "Set AnimationClip ObjectReference keyframes, such as SpriteRenderer.m_Sprite.";
+                case "project-tools/list":
+                    return "List project-defined MCP extension tools discovered in loaded Unity editor assemblies.";
+                case "project-tools/execute":
+                    return "Execute a project-defined MCP extension tool by toolName.";
                 default:
                     return $"Lazy Unity route: {route}";
             }
@@ -807,6 +811,13 @@ namespace UnityMCP.Editor
                         Prop("hasFixedDuration", "boolean", "Fixed duration flag applied to created transitions."),
                         Prop("conditions", "array", "Conditions applied to every created transition.")
                     ), "controllerPath", "stateNames");
+                case "project-tools/list":
+                    return Schema(Props());
+                case "project-tools/execute":
+                    return Schema(Props(
+                        Prop("toolName", "string", "Project tool name from project-tools/list."),
+                        Prop("args", "object", "Arguments passed to the project tool as Dictionary<string, object>.")
+                    ), "toolName");
                 case "uitoolkit/windows":
                     return Schema(Props());
                 case "uitoolkit/tree":
@@ -1032,6 +1043,10 @@ namespace UnityMCP.Editor
                 // ─── Project ───
                 case "project/info":
                     return MCPProjectCommands.GetInfo();
+                case "project-tools/list":
+                    return MCPProjectToolCommands.List(ParseJson(body));
+                case "project-tools/execute":
+                    return MCPProjectToolCommands.Execute(ParseJson(body));
 
                 // ─── Animation ───
                 case "animation/create-controller":

@@ -45,6 +45,38 @@ http://127.0.0.1:7890/api/ping
 | Animator editing | `unity_animation_update_transition` | `animation/update-transition` | Modify an existing transition and add, update, remove, or replace transition conditions. |
 | Animator editing | `unity_animation_connect_states` | `animation/connect-states` | Create directed pairwise transitions between a list of Animator states. |
 | Package management | `unity_packages_update_git` | `packages/update-git` | Update a Git package through a deferred route so Unity does not block its main thread while Package Manager resolves the dependency. |
+| Project extensions | `unity_project_tools_list` | `project-tools/list` | List project-defined extension tools from loaded Unity editor assemblies. |
+| Project extensions | `unity_project_tools_execute` | `project-tools/execute` | Execute a project-defined extension tool by `toolName`. |
+
+## Project Extensions
+
+Project-specific batch tools can live in the Unity project instead of this package. Put an Editor script in the project and mark a static method with `MCPProjectToolAttribute`:
+
+```csharp
+using System.Collections.Generic;
+using UnityMCP.Editor;
+
+public static class ProjectMcpTools
+{
+    [MCPProjectTool("battleidle/add-property", Description = "Create and register a BattleIdle property.")]
+    public static object AddProperty(Dictionary<string, object> args)
+    {
+        // Project-specific AssetDatabase / prefab / settings edits go here.
+        return new { success = true };
+    }
+}
+```
+
+Call `project-tools/list` to discover tools, then `project-tools/execute` with:
+
+```json
+{
+  "toolName": "battleidle/add-property",
+  "args": {
+    "id": "gold_amount"
+  }
+}
+```
 
 ## Notes
 
