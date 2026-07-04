@@ -72,54 +72,61 @@ namespace UnityMCP.Editor
 
         // ─── Update Git Package ───
 
-        public static object UpdateGitPackage(Dictionary<string, object> args)
+        public static void UpdateGitPackageDeferred(Dictionary<string, object> args, Action<object> resolve)
         {
-            string name = GetString(args, "name");
-            if (string.IsNullOrEmpty(name))
-                return new { error = "name is required (e.g. 'com.example.package')" };
-
-            string gitUrl = GetString(args, "gitUrl");
-            string refName = GetString(args, "ref");
-            if (string.IsNullOrEmpty(refName))
-                refName = GetString(args, "commit");
-            if (string.IsNullOrEmpty(refName))
-                refName = GetString(args, "branch");
-            if (string.IsNullOrEmpty(refName))
-                refName = "main";
-
-            if (string.IsNullOrEmpty(gitUrl))
+            if (!TryBuildGitPackageIdentifier(args, out var name, out var identifier, out var error))
             {
-                string manifestDependency = GetManifestDependency(name);
-                if (string.IsNullOrEmpty(manifestDependency))
-                    return new { error = $"Package '{name}' was not found in Packages/manifest.json" };
-
-                if (!IsGitIdentifier(manifestDependency))
-                    return new { error = $"Package '{name}' is not a Git dependency. Pass gitUrl to update it as a Git package." };
-
-                gitUrl = StripGitRef(manifestDependency);
+                resolve(new { error });
+                return;
             }
 
-            string identifier = StripGitRef(gitUrl) + "#" + refName;
-            var addRequest = Client.Add(identifier);
-            while (!addRequest.IsCompleted)
-                System.Threading.Thread.Sleep(10);
-
-            if (addRequest.Status == StatusCode.Failure)
-                return new { error = addRequest.Error?.message ?? "Failed to update Git package" };
-
-            var lockInfo = GetPackageLockInfo(name);
-            var pkg = addRequest.Result;
-            return new Dictionary<string, object>
+            AddRequest addRequest;
+            try
             {
-                { "success", true },
-                { "name", pkg.name },
-                { "displayName", pkg.displayName },
-                { "requestedIdentifier", identifier },
-                { "resolvedVersion", pkg.version },
-                { "lockVersion", lockInfo.version },
-                { "lockSource", lockInfo.source },
-                { "lockHash", lockInfo.hash },
-            };
+                addRequest = Client.Add(identifier);
+            }
+            catch (Exception e)
+            {
+                resolve(new { error = $"Failed to start Git package update: {e.Message}" });
+                return;
+            }
+
+            void Tick()
+            {
+                if (!addRequest.IsCompleted)
+                    return;
+
+                EditorApplication.update -= Tick;
+
+                if (addRequest.Status == StatusCode.Failure)
+                {
+                    resolve(new { error = addRequest.Error?.message ?? "Failed to update Git package" });
+                    return;
+                }
+
+                var lockInfo = GetPackageLockInfo(name);
+                var pkg = addRequest.Result;
+                resolve(new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "name", pkg.name },
+                    { "displayName", pkg.displayName },
+                    { "requestedIdentifier", identifier },
+                    { "resolvedVersion", pkg.version },
+                    { "lockVersion", lockInfo.version },
+                    { "lockSource", lockInfo.source },
+                    { "lockHash", lockInfo.hash },
+                });
+            }
+
+            Tick();
+            if (!addRequest.IsCompleted)
+                EditorApplication.update += Tick;
+        }
+
+        public static object UpdateGitPackage(Dictionary<string, object> args)
+        {
+            return new { error = "packages/update-git must be executed through the deferred route." };
         }
 
         // ─── Lint Package .meta Files ───
@@ -364,6 +371,50 @@ namespace UnityMCP.Editor
                 return defaultValue;
 
             return int.TryParse(args[key].ToString(), out int parsed) ? parsed : defaultValue;
+        }
+
+        private static bool TryBuildGitPackageIdentifier(Dictionary<string, object> args, out string name,
+            out string identifier, out string error)
+        {
+            name = GetString(args, "name");
+            identifier = "";
+            error = "";
+
+            if (string.IsNullOrEmpty(name))
+            {
+                error = "name is required (e.g. 'com.example.package')";
+                return false;
+            }
+
+            string gitUrl = GetString(args, "gitUrl");
+            string refName = GetString(args, "ref");
+            if (string.IsNullOrEmpty(refName))
+                refName = GetString(args, "commit");
+            if (string.IsNullOrEmpty(refName))
+                refName = GetString(args, "branch");
+            if (string.IsNullOrEmpty(refName))
+                refName = "main";
+
+            if (string.IsNullOrEmpty(gitUrl))
+            {
+                string manifestDependency = GetManifestDependency(name);
+                if (string.IsNullOrEmpty(manifestDependency))
+                {
+                    error = $"Package '{name}' was not found in Packages/manifest.json";
+                    return false;
+                }
+
+                if (!IsGitIdentifier(manifestDependency))
+                {
+                    error = $"Package '{name}' is not a Git dependency. Pass gitUrl to update it as a Git package.";
+                    return false;
+                }
+
+                gitUrl = StripGitRef(manifestDependency);
+            }
+
+            identifier = StripGitRef(gitUrl) + "#" + refName;
+            return true;
         }
 
         private static string GetManifestDependency(string name)

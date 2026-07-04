@@ -47,6 +47,7 @@ namespace UnityMCP.Editor
         {
             { "testing/list-tests", MCPTestRunnerCommands.ListTests },
             { "wait/editor-idle", MCPEditorCommands.WaitForIdle },
+            { "packages/update-git", MCPPackageManagerCommands.UpdateGitPackageDeferred },
         };
 
         // SessionState key to persist running state across domain reloads (Play Mode, recompile)
