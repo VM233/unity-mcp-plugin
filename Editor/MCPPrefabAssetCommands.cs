@@ -1133,6 +1133,7 @@ namespace UnityMCP.Editor
                 string basePath = basePrefab != null ? AssetDatabase.GetAssetPath(basePrefab) : null;
                 if (string.IsNullOrEmpty(basePath))
                     return new { error = "Could not determine base prefab path" };
+                var beforeSnapshot = CaptureAssetText(basePath);
 
                 int appliedCount = 0;
 
@@ -1201,13 +1202,15 @@ namespace UnityMCP.Editor
                     }
                 }
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "variant", asset.name },
                     { "basePrefab", basePrefab != null ? basePrefab.name : "unknown" },
                     { "appliedCount", appliedCount == -1 ? "all" : (object)appliedCount },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, basePath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -1228,6 +1231,7 @@ namespace UnityMCP.Editor
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
+            var beforeSnapshot = CaptureAssetText(assetPath);
 
             bool revertAll = args.ContainsKey("revertAll") && Convert.ToBoolean(args["revertAll"]);
             string targetComponentType = GetString(args, "targetComponentType");
@@ -1312,12 +1316,14 @@ namespace UnityMCP.Editor
                 // Save the reverted variant back to disk
                 PrefabUtility.ApplyPrefabInstance(instance, InteractionMode.AutomatedAction);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "variant", asset.name },
                     { "revertedCount", revertedCount == -1 ? "all" : (object)revertedCount },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -1342,6 +1348,7 @@ namespace UnityMCP.Editor
                 return new { error = "sourceAssetPath is required" };
             if (string.IsNullOrEmpty(targetAssetPath))
                 return new { error = "targetAssetPath is required" };
+            var beforeSnapshot = CaptureAssetText(targetAssetPath);
 
             var sourceAsset = AssetDatabase.LoadAssetAtPath<GameObject>(sourceAssetPath);
             var targetAsset = AssetDatabase.LoadAssetAtPath<GameObject>(targetAssetPath);
@@ -1401,13 +1408,15 @@ namespace UnityMCP.Editor
                 PrefabUtility.SetPropertyModifications(targetRoot, newMods.ToArray());
                 PrefabUtility.SaveAsPrefabAsset(targetRoot, targetAssetPath);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "source", sourceAsset.name },
                     { "target", targetAsset.name },
                     { "transferredOverrides", transferred },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, targetAssetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
