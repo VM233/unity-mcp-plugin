@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using UnityEditor;
+using UnityEditor.PackageManager;
 using UnityEngine;
 
 namespace UnityMCP.Editor
@@ -521,40 +522,16 @@ namespace UnityMCP.Editor
         {
             try
             {
-                foreach (string guid in AssetDatabase.FindAssets("MCPBridgeServer t:MonoScript"))
+                foreach (string absolutePath in GetSourceCandidatePaths())
                 {
-                    string path = AssetDatabase.GUIDToAssetPath(guid);
-                    if (!path.EndsWith("MCPBridgeServer.cs", StringComparison.Ordinal))
-                        continue;
-
-                    string absolutePath = Path.IsPathRooted(path)
-                        ? path
-                        : Path.Combine(Directory.GetParent(Application.dataPath).FullName, path);
-
                     if (!File.Exists(absolutePath))
                         continue;
 
                     string source = File.ReadAllText(absolutePath);
-                    int methodIndex = source.IndexOf("private static object RouteRequest", StringComparison.Ordinal);
-                    if (methodIndex < 0)
-                        continue;
+                    var routes = ExtractRouteCases(source);
 
-                    int switchIndex = source.IndexOf("switch (path)", methodIndex, StringComparison.Ordinal);
-                    if (switchIndex < 0)
-                        continue;
-
-                    int defaultIndex = source.IndexOf("default:", switchIndex, StringComparison.Ordinal);
-                    if (defaultIndex < 0)
-                        defaultIndex = source.Length;
-
-                    string switchBlock = source.Substring(switchIndex, defaultIndex - switchIndex);
-                    var routes = new List<string>();
-                    foreach (Match match in Regex.Matches(switchBlock, "case\\s+\"([^\"]+)\"\\s*:"))
-                    {
-                        routes.Add(match.Groups[1].Value);
-                    }
-
-                    return routes;
+                    if (routes.Count > 0)
+                        return routes;
                 }
             }
             catch (Exception ex)
@@ -563,6 +540,65 @@ namespace UnityMCP.Editor
             }
 
             return new List<string>();
+        }
+
+        private static IEnumerable<string> GetSourceCandidatePaths()
+        {
+            var paths = new List<string>();
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+
+            var packageInfo = PackageInfo.FindForAssembly(typeof(MCPBridgeServer).Assembly);
+            if (!string.IsNullOrEmpty(packageInfo?.resolvedPath))
+                paths.Add(Path.Combine(packageInfo.resolvedPath, "Editor", "MCPBridgeServer.cs"));
+
+            paths.Add(Path.Combine(projectRoot, "Packages", "com.anklebreaker.unity-mcp", "Editor", "MCPBridgeServer.cs"));
+
+            string packageCacheRoot = Path.Combine(projectRoot, "Library", "PackageCache");
+            if (Directory.Exists(packageCacheRoot))
+            {
+                paths.AddRange(Directory
+                    .GetFiles(packageCacheRoot, "MCPBridgeServer.cs", SearchOption.AllDirectories)
+                    .Where(path => path.Replace('\\', '/').Contains("com.anklebreaker.unity-mcp")));
+            }
+
+            foreach (string guid in AssetDatabase.FindAssets("MCPBridgeServer t:MonoScript"))
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guid);
+                if (!path.EndsWith("MCPBridgeServer.cs", StringComparison.Ordinal))
+                    continue;
+
+                paths.Add(Path.IsPathRooted(path)
+                    ? path
+                    : Path.Combine(projectRoot, path));
+            }
+
+            return paths
+                .Where(path => !string.IsNullOrEmpty(path))
+                .Distinct();
+        }
+
+        private static List<string> ExtractRouteCases(string source)
+        {
+            int methodIndex = source.IndexOf("private static object RouteRequest", StringComparison.Ordinal);
+            if (methodIndex < 0)
+                return new List<string>();
+
+            int switchIndex = source.IndexOf("switch (path)", methodIndex, StringComparison.Ordinal);
+            if (switchIndex < 0)
+                return new List<string>();
+
+            int defaultIndex = source.IndexOf("default:", switchIndex, StringComparison.Ordinal);
+            if (defaultIndex < 0)
+                defaultIndex = source.Length;
+
+            string switchBlock = source.Substring(switchIndex, defaultIndex - switchIndex);
+            var routes = new List<string>();
+            foreach (Match match in Regex.Matches(switchBlock, "case\\s+\"([^\"]+)\"\\s*:"))
+            {
+                routes.Add(match.Groups[1].Value);
+            }
+
+            return routes;
         }
 
         private static Dictionary<string, object> BuildToolMetadata(string route)
