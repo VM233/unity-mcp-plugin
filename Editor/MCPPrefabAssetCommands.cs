@@ -493,6 +493,80 @@ namespace UnityMCP.Editor
         }
 
         /// <summary>
+        /// Instantiate a prefab asset as a child inside another prefab asset.
+        /// </summary>
+        public static object InstantiatePrefab(Dictionary<string, object> args)
+        {
+            string assetPath = GetString(args, "assetPath");
+            if (string.IsNullOrEmpty(assetPath))
+                return new { error = "assetPath is required" };
+
+            string sourcePrefabPath = GetString(args, "sourcePrefabPath");
+            if (string.IsNullOrEmpty(sourcePrefabPath))
+                return new { error = "sourcePrefabPath is required" };
+
+            string parentPrefabPath = GetString(args, "parentPrefabPath");
+            string name = GetString(args, "name");
+            int siblingIndex = GetInt(args, "siblingIndex", -1);
+
+            var sourcePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(sourcePrefabPath);
+            if (sourcePrefab == null)
+                return new { error = $"Source prefab not found at '{sourcePrefabPath}'" };
+
+            var root = PrefabUtility.LoadPrefabContents(assetPath);
+            if (root == null)
+                return new { error = $"Failed to load prefab at '{assetPath}'" };
+
+            try
+            {
+                var parent = FindInPrefab(root, parentPrefabPath);
+                if (parent == null)
+                    return new { error = $"Parent '{parentPrefabPath}' not found in prefab" };
+
+                var instance = PrefabUtility.InstantiatePrefab(sourcePrefab, root.scene) as GameObject;
+                if (instance == null)
+                    return new { error = $"Failed to instantiate prefab '{sourcePrefabPath}'" };
+
+                instance.transform.SetParent(parent.transform, false);
+
+                if (string.IsNullOrEmpty(name) == false)
+                    instance.name = name;
+
+                if (args.ContainsKey("position"))
+                    instance.transform.localPosition = ParseVector3(args["position"]);
+                if (args.ContainsKey("rotation"))
+                    instance.transform.localEulerAngles = ParseVector3(args["rotation"]);
+                if (args.ContainsKey("scale"))
+                    instance.transform.localScale = ParseVector3(args["scale"]);
+
+                if (siblingIndex >= 0)
+                    instance.transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, parent.transform.childCount - 1));
+
+                PrefabUtility.SaveAsPrefabAsset(root, assetPath);
+
+                return new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "prefab", root.name },
+                    { "assetPath", assetPath },
+                    { "sourcePrefabPath", sourcePrefabPath },
+                    { "createdGameObject", instance.name },
+                    { "prefabPath", GetPrefabPath(root, instance) },
+                    { "parent", string.IsNullOrEmpty(parentPrefabPath) ? "root" : parentPrefabPath },
+                    { "siblingIndex", instance.transform.GetSiblingIndex() },
+                };
+            }
+            catch (Exception ex)
+            {
+                return new { error = $"Failed to instantiate prefab: {ex.Message}" };
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        /// <summary>
         /// Delete a child GameObject from a prefab asset.
         /// Cannot delete the root GameObject.
         /// </summary>
@@ -534,6 +608,170 @@ namespace UnityMCP.Editor
             catch (Exception ex)
             {
                 return new { error = $"Failed to remove GameObject: {ex.Message}" };
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        /// <summary>
+        /// Move or reorder a child GameObject inside a prefab asset.
+        /// </summary>
+        public static object MoveGameObject(Dictionary<string, object> args)
+        {
+            string assetPath = GetString(args, "assetPath");
+            if (string.IsNullOrEmpty(assetPath))
+                return new { error = "assetPath is required" };
+
+            string prefabPath = GetString(args, "prefabPath");
+            if (string.IsNullOrEmpty(prefabPath))
+                return new { error = "prefabPath is required (cannot move root)" };
+
+            string newParentPrefabPath = GetString(args, "newParentPrefabPath");
+            int siblingIndex = GetInt(args, "siblingIndex", -1);
+            bool worldPositionStays = GetBool(args, "worldPositionStays", false);
+
+            var root = PrefabUtility.LoadPrefabContents(assetPath);
+            if (root == null)
+                return new { error = $"Failed to load prefab at '{assetPath}'" };
+
+            try
+            {
+                var go = FindInPrefab(root, prefabPath);
+                if (go == null)
+                    return new { error = $"GameObject '{prefabPath}' not found in prefab" };
+
+                if (go == root)
+                    return new { error = "Cannot move the root GameObject of a prefab" };
+
+                var newParent = FindInPrefab(root, newParentPrefabPath);
+                if (newParent == null)
+                    return new { error = $"New parent '{newParentPrefabPath}' not found in prefab" };
+
+                string oldPath = GetPrefabPath(root, go);
+                string oldParentPath = go.transform.parent != null
+                    ? GetPrefabPath(root, go.transform.parent.gameObject)
+                    : "";
+                int oldSiblingIndex = go.transform.GetSiblingIndex();
+
+                go.transform.SetParent(newParent.transform, worldPositionStays);
+                if (siblingIndex >= 0)
+                    go.transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, newParent.transform.childCount - 1));
+
+                PrefabUtility.SaveAsPrefabAsset(root, assetPath);
+
+                return new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "prefab", root.name },
+                    { "assetPath", assetPath },
+                    { "oldPath", oldPath },
+                    { "newPath", GetPrefabPath(root, go) },
+                    { "oldParent", oldParentPath },
+                    { "newParent", string.IsNullOrEmpty(newParentPrefabPath) ? "root" : newParentPrefabPath },
+                    { "oldSiblingIndex", oldSiblingIndex },
+                    { "newSiblingIndex", go.transform.GetSiblingIndex() },
+                };
+            }
+            catch (Exception ex)
+            {
+                return new { error = $"Failed to move GameObject: {ex.Message}" };
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        /// <summary>
+        /// Find GameObjects in a prefab asset by name/path, component type, and optional serialized property value.
+        /// </summary>
+        public static object Find(Dictionary<string, object> args)
+        {
+            string assetPath = GetString(args, "assetPath");
+            if (string.IsNullOrEmpty(assetPath))
+                return new { error = "assetPath is required" };
+
+            string name = GetString(args, "name");
+            string nameContains = GetString(args, "nameContains");
+            string pathContains = GetString(args, "pathContains");
+            string componentType = GetString(args, "componentType");
+            string propertyName = GetString(args, "propertyName");
+            bool hasPropertyValue = args != null && args.ContainsKey("propertyValue");
+            object propertyValue = hasPropertyValue ? args["propertyValue"] : null;
+            int maxResults = GetInt(args, "maxResults", 50);
+
+            Type type = null;
+            if (string.IsNullOrEmpty(componentType) == false)
+            {
+                type = MCPComponentCommands.FindType(componentType);
+                if (type == null)
+                    return new { error = $"Type '{componentType}' not found" };
+            }
+
+            var root = PrefabUtility.LoadPrefabContents(assetPath);
+            if (root == null)
+                return new { error = $"Failed to load prefab at '{assetPath}'" };
+
+            try
+            {
+                var results = new List<Dictionary<string, object>>();
+                bool truncated = false;
+
+                foreach (var transform in root.GetComponentsInChildren<Transform>(true))
+                {
+                    var go = transform.gameObject;
+                    string prefabPath = GetPrefabPath(root, go);
+
+                    if (string.IsNullOrEmpty(name) == false && go.name != name)
+                        continue;
+                    if (string.IsNullOrEmpty(nameContains) == false &&
+                        go.name.IndexOf(nameContains, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+                    if (string.IsNullOrEmpty(pathContains) == false &&
+                        prefabPath.IndexOf(pathContains, StringComparison.OrdinalIgnoreCase) < 0)
+                        continue;
+
+                    var components = type != null ? go.GetComponents(type) : go.GetComponents<Component>();
+                    bool requiresComponentMatch = type != null || string.IsNullOrEmpty(propertyName) == false;
+
+                    if (requiresComponentMatch == false)
+                    {
+                        if (TryAddFindResult(results, maxResults, ref truncated, root, go, null, null, null))
+                            continue;
+                        break;
+                    }
+
+                    foreach (var component in components)
+                    {
+                        if (component == null)
+                            continue;
+
+                        SerializedProperty matchedProperty = null;
+                        object matchedValue = null;
+
+                        if (string.IsNullOrEmpty(propertyName) == false)
+                        {
+                            var serialized = new SerializedObject(component);
+                            matchedProperty = serialized.FindProperty(propertyName);
+                            if (matchedProperty == null)
+                                continue;
+
+                            matchedValue = MCPComponentCommands.GetSerializedValue(matchedProperty);
+                            if (hasPropertyValue && SerializedValueMatches(matchedValue, propertyValue) == false)
+                                continue;
+                        }
+
+                        if (TryAddFindResult(results, maxResults, ref truncated, root, go, component,
+                                propertyName, matchedValue))
+                            continue;
+
+                        return BuildFindResponse(root, assetPath, results, truncated);
+                    }
+                }
+
+                return BuildFindResponse(root, assetPath, results, truncated);
             }
             finally
             {
@@ -1126,6 +1364,110 @@ namespace UnityMCP.Editor
         private static string GetString(Dictionary<string, object> args, string key)
         {
             return args != null && args.ContainsKey(key) ? args[key]?.ToString() : "";
+        }
+
+        private static bool GetBool(Dictionary<string, object> args, string key, bool defaultValue)
+        {
+            if (args == null || args.ContainsKey(key) == false || args[key] == null)
+                return defaultValue;
+
+            if (args[key] is bool value)
+                return value;
+
+            return bool.TryParse(args[key].ToString(), out bool parsed) ? parsed : defaultValue;
+        }
+
+        private static int GetInt(Dictionary<string, object> args, string key, int defaultValue)
+        {
+            if (args == null || args.ContainsKey(key) == false || args[key] == null)
+                return defaultValue;
+
+            return int.TryParse(args[key].ToString(), out int value) ? value : defaultValue;
+        }
+
+        private static string GetPrefabPath(GameObject root, GameObject go)
+        {
+            if (root == go)
+                return "";
+
+            var names = new Stack<string>();
+            Transform current = go.transform;
+            while (current != null && current.gameObject != root)
+            {
+                names.Push(current.name);
+                current = current.parent;
+            }
+
+            return current == null ? go.name : string.Join("/", names);
+        }
+
+        private static bool TryAddFindResult(List<Dictionary<string, object>> results, int maxResults,
+            ref bool truncated, GameObject root, GameObject go, Component component, string propertyName,
+            object propertyValue)
+        {
+            if (results.Count >= maxResults)
+            {
+                truncated = true;
+                return false;
+            }
+
+            var result = new Dictionary<string, object>
+            {
+                { "name", go.name },
+                { "prefabPath", GetPrefabPath(root, go) },
+                { "active", go.activeSelf },
+                { "layer", LayerMask.LayerToName(go.layer) },
+                { "localPosition", VectorToDict(go.transform.localPosition) },
+                { "localRotation", VectorToDict(go.transform.localEulerAngles) },
+                { "localScale", VectorToDict(go.transform.localScale) },
+            };
+
+            if (component != null)
+            {
+                result["component"] = component.GetType().Name;
+                result["componentFullType"] = component.GetType().FullName;
+            }
+
+            if (string.IsNullOrEmpty(propertyName) == false)
+            {
+                result["propertyName"] = propertyName;
+                result["propertyValue"] = propertyValue;
+            }
+
+            results.Add(result);
+            return true;
+        }
+
+        private static Dictionary<string, object> BuildFindResponse(GameObject root, string assetPath,
+            List<Dictionary<string, object>> results, bool truncated)
+        {
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "prefab", root.name },
+                { "assetPath", assetPath },
+                { "count", results.Count },
+                { "truncated", truncated },
+                { "results", results },
+            };
+        }
+
+        private static bool SerializedValueMatches(object actual, object expected)
+        {
+            if (expected == null)
+                return actual == null;
+            if (actual == null)
+                return string.Equals(expected.ToString(), "null", StringComparison.OrdinalIgnoreCase);
+
+            if (actual is Dictionary<string, object> || expected is Dictionary<string, object>)
+                return string.Equals(MiniJson.Serialize(actual), MiniJson.Serialize(expected),
+                    StringComparison.OrdinalIgnoreCase);
+
+            if (actual is System.Collections.IList || expected is System.Collections.IList)
+                return string.Equals(MiniJson.Serialize(actual), MiniJson.Serialize(expected),
+                    StringComparison.OrdinalIgnoreCase);
+
+            return string.Equals(actual.ToString(), expected.ToString(), StringComparison.OrdinalIgnoreCase);
         }
 
         private static Dictionary<string, object> VectorToDict(Vector3 v)

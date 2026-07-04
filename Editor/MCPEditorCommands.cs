@@ -27,6 +27,57 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static void WaitForIdle(Dictionary<string, object> args, Action<object> resolve)
+        {
+            int timeoutMs = GetInt(args, "timeoutMs", 30000);
+            int stableFrames = Math.Max(1, GetInt(args, "stableFrames", 3));
+            double startTime = EditorApplication.timeSinceStartup;
+            int currentStableFrames = 0;
+            bool resolved = false;
+
+            void Resolve(object result)
+            {
+                if (resolved)
+                    return;
+
+                resolved = true;
+                resolve(result);
+            }
+
+            void Tick()
+            {
+                bool isIdle = IsEditorIdle();
+                if (isIdle)
+                {
+                    currentStableFrames++;
+                }
+                else
+                {
+                    currentStableFrames = 0;
+                }
+
+                if (currentStableFrames >= stableFrames)
+                {
+                    EditorApplication.update -= Tick;
+                    Resolve(BuildIdleResult(true, false, timeoutMs, stableFrames, startTime));
+                    return;
+                }
+
+                double elapsedMs = (EditorApplication.timeSinceStartup - startTime) * 1000d;
+                if (elapsedMs >= timeoutMs)
+                {
+                    EditorApplication.update -= Tick;
+                    Resolve(BuildIdleResult(false, true, timeoutMs, stableFrames, startTime));
+                }
+            }
+
+            Tick();
+            if (!resolved)
+            {
+                EditorApplication.update += Tick;
+            }
+        }
+
         public static object SetPlayMode(Dictionary<string, object> args)
         {
             string action = args.ContainsKey("action") ? args["action"].ToString() : "play";
@@ -510,6 +561,42 @@ public static class MCPDynamicCode
                 { "result", result.ToString() },
                 { "type", type.Name },
             };
+        }
+
+        private static bool IsEditorIdle()
+        {
+            return EditorApplication.isCompiling == false &&
+                   EditorApplication.isUpdating == false &&
+                   EditorApplication.isPlayingOrWillChangePlaymode == false;
+        }
+
+        private static Dictionary<string, object> BuildIdleResult(bool success, bool timedOut, int timeoutMs,
+            int stableFrames, double startTime)
+        {
+            var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+            return new Dictionary<string, object>
+            {
+                { "success", success },
+                { "timedOut", timedOut },
+                { "isIdle", IsEditorIdle() },
+                { "isCompiling", EditorApplication.isCompiling },
+                { "isUpdating", EditorApplication.isUpdating },
+                { "isPlaying", EditorApplication.isPlaying },
+                { "isPlayingOrWillChangePlaymode", EditorApplication.isPlayingOrWillChangePlaymode },
+                { "activeScene", scene.name },
+                { "activeScenePath", scene.path },
+                { "timeoutMs", timeoutMs },
+                { "stableFrames", stableFrames },
+                { "elapsedMs", (long)((EditorApplication.timeSinceStartup - startTime) * 1000d) },
+            };
+        }
+
+        private static int GetInt(Dictionary<string, object> args, string key, int defaultValue)
+        {
+            if (args == null || args.ContainsKey(key) == false || args[key] == null)
+                return defaultValue;
+
+            return int.TryParse(args[key].ToString(), out int value) ? value : defaultValue;
         }
     }
 }

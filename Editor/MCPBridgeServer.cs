@@ -46,6 +46,7 @@ namespace UnityMCP.Editor
             _deferredRoutes = new Dictionary<string, Action<Dictionary<string, object>, Action<object>>>
         {
             { "testing/list-tests", MCPTestRunnerCommands.ListTests },
+            { "wait/editor-idle", MCPEditorCommands.WaitForIdle },
         };
 
         // SessionState key to persist running state across domain reloads (Play Mode, recompile)
@@ -625,6 +626,14 @@ namespace UnityMCP.Editor
                     return "Update a Git-based Unity package and return the resolved packages-lock hash.";
                 case "packages/lint-metas":
                     return "Lint a Unity package root for missing .meta files.";
+                case "wait/editor-idle":
+                    return "Wait until the Unity Editor is idle after compilation, domain reload, package refresh, or asset import.";
+                case "prefab-asset/instantiate-prefab":
+                    return "Instantiate a prefab asset as a child inside another prefab asset.";
+                case "prefab-asset/move-gameobject":
+                    return "Move or reorder a GameObject inside a prefab asset.";
+                case "prefab-asset/find":
+                    return "Find GameObjects inside a prefab asset by name/path, component type, and serialized property value.";
                 case "uitoolkit/windows":
                     return "List open Unity Editor windows with UI Toolkit root metadata.";
                 case "uitoolkit/tree":
@@ -662,6 +671,41 @@ namespace UnityMCP.Editor
                         Prop("checkDirectories", "boolean", "Also require directory .meta files. Defaults to true."),
                         Prop("maxResults", "number", "Maximum missing entries returned per package.")
                     ));
+                case "wait/editor-idle":
+                    return Schema(Props(
+                        Prop("timeoutMs", "number", "Maximum wait time in milliseconds. Defaults to 30000."),
+                        Prop("stableFrames", "number", "Number of consecutive idle editor frames required. Defaults to 3.")
+                    ));
+                case "prefab-asset/instantiate-prefab":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Target prefab asset path to edit."),
+                        Prop("sourcePrefabPath", "string", "Prefab asset path to instantiate into the target prefab."),
+                        Prop("parentPrefabPath", "string", "Parent path inside the target prefab. Empty means root."),
+                        Prop("name", "string", "Optional name override for the created GameObject."),
+                        Prop("siblingIndex", "number", "Optional sibling index under the parent."),
+                        Prop("position", "object", "Optional local position object with x/y/z."),
+                        Prop("rotation", "object", "Optional local Euler rotation object with x/y/z."),
+                        Prop("scale", "object", "Optional local scale object with x/y/z.")
+                    ), "assetPath", "sourcePrefabPath");
+                case "prefab-asset/move-gameobject":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("prefabPath", "string", "Path of the GameObject to move inside the prefab."),
+                        Prop("newParentPrefabPath", "string", "New parent path inside the prefab. Empty means root."),
+                        Prop("siblingIndex", "number", "Optional sibling index under the new parent."),
+                        Prop("worldPositionStays", "boolean", "Preserve world transform while reparenting. Defaults to false.")
+                    ), "assetPath", "prefabPath");
+                case "prefab-asset/find":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to search."),
+                        Prop("name", "string", "Exact GameObject name filter."),
+                        Prop("nameContains", "string", "Case-insensitive GameObject name contains filter."),
+                        Prop("pathContains", "string", "Case-insensitive prefab path contains filter."),
+                        Prop("componentType", "string", "Optional component type name or full name filter."),
+                        Prop("propertyName", "string", "Optional serialized property name/path to require on the component."),
+                        Prop("propertyValue", "string", "Optional serialized property value to match."),
+                        Prop("maxResults", "number", "Maximum returned matches. Defaults to 50.")
+                    ), "assetPath");
                 case "uitoolkit/windows":
                     return Schema(Props());
                 case "uitoolkit/tree":
@@ -791,6 +835,8 @@ namespace UnityMCP.Editor
                 // ─── Editor State ───
                 case "editor/state":
                     return MCPEditorCommands.GetEditorState();
+                case "wait/editor-idle":
+                    return new { error = "wait/editor-idle must be executed through the deferred route." };
                 case "editor/play-mode":
                     return MCPEditorCommands.SetPlayMode(ParseJson(body));
                 case "editor/execute-menu-item":
@@ -967,8 +1013,14 @@ namespace UnityMCP.Editor
                     return MCPPrefabAssetCommands.SetReference(ParseJson(body));
                 case "prefab-asset/add-gameobject":
                     return MCPPrefabAssetCommands.AddGameObject(ParseJson(body));
+                case "prefab-asset/instantiate-prefab":
+                    return MCPPrefabAssetCommands.InstantiatePrefab(ParseJson(body));
                 case "prefab-asset/remove-gameobject":
                     return MCPPrefabAssetCommands.RemoveGameObject(ParseJson(body));
+                case "prefab-asset/move-gameobject":
+                    return MCPPrefabAssetCommands.MoveGameObject(ParseJson(body));
+                case "prefab-asset/find":
+                    return MCPPrefabAssetCommands.Find(ParseJson(body));
 
                 // ─── Prefab Variant Management ───
                 case "prefab-asset/variant-info":
