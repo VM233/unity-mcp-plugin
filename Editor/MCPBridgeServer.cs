@@ -487,6 +487,7 @@ namespace UnityMCP.Editor
                 "screenshot/game", "screenshot/scene",
                 "prefab/info", "prefab/set-object-reference",
                 "packages/list", "packages/add", "packages/remove", "packages/search", "packages/info",
+                "packages/update-git", "packages/lint-metas",
                 "project/info",
                 // Animation
                 "animation/create-controller", "animation/get-controller", "animation/add-state",
@@ -1246,6 +1247,10 @@ namespace UnityMCP.Editor
                     return MCPPackageManagerCommands.SearchPackage(ParseJson(body));
                 case "packages/info":
                     return MCPPackageManagerCommands.GetPackageInfo(ParseJson(body));
+                case "packages/update-git":
+                    return MCPPackageManagerCommands.UpdateGitPackage(ParseJson(body));
+                case "packages/lint-metas":
+                    return MCPPackageManagerCommands.LintPackageMetas(ParseJson(body));
 
                 // ─── Constraints & LOD ───
                 case "constraint/add":
