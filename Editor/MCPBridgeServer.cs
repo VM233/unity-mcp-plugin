@@ -634,6 +634,12 @@ namespace UnityMCP.Editor
                     return "Move or reorder a GameObject inside a prefab asset.";
                 case "prefab-asset/find":
                     return "Find GameObjects inside a prefab asset by name/path, component type, and serialized property value.";
+                case "asset/rename":
+                    return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
+                case "asset/move":
+                    return "Safely move a Unity asset using AssetDatabase while preserving its .meta GUID.";
+                case "console/query":
+                    return "Query recent Unity Console entries with time, source, message, stack, and last-Play filters.";
                 case "uitoolkit/windows":
                     return "List open Unity Editor windows with UI Toolkit root metadata.";
                 case "uitoolkit/tree":
@@ -706,6 +712,30 @@ namespace UnityMCP.Editor
                         Prop("propertyValue", "string", "Optional serialized property value to match."),
                         Prop("maxResults", "number", "Maximum returned matches. Defaults to 50.")
                     ), "assetPath");
+                case "asset/rename":
+                    return Schema(Props(
+                        Prop("path", "string", "Current asset path, e.g. Assets/Art/Old Name.png."),
+                        Prop("newName", "string", "New file or folder name. Do not include a directory path.")
+                    ), "path", "newName");
+                case "asset/move":
+                    return Schema(Props(
+                        Prop("path", "string", "Current asset path."),
+                        Prop("destinationPath", "string", "Destination asset path, or an existing folder path to keep the same file name.")
+                    ), "path", "destinationPath");
+                case "console/query":
+                    return Schema(Props(
+                        Prop("count", "number", "Maximum returned entries. Defaults to 50."),
+                        Prop("type", "string", "Filter by all, error, warning, info, exception, or assert. Defaults to all."),
+                        Prop("messageContains", "string", "Case-insensitive message substring filter."),
+                        Prop("sourceContains", "string", "Case-insensitive source stack frame/path substring filter."),
+                        Prop("stackContains", "string", "Case-insensitive full stack substring filter."),
+                        Prop("since", "string", "Start time filter. Accepts ISO/local time, Unix seconds, or Unix milliseconds."),
+                        Prop("until", "string", "End time filter. Accepts ISO/local time, Unix seconds, or Unix milliseconds."),
+                        Prop("sinceSecondsAgo", "number", "Start time filter relative to now."),
+                        Prop("sinceLastPlay", "boolean", "Only include entries recorded after the latest Play transition."),
+                        Prop("includeStack", "boolean", "Include full stack traces. Defaults to true."),
+                        Prop("newestFirst", "boolean", "Return newest entries first. Defaults to false.")
+                    ));
                 case "uitoolkit/windows":
                     return Schema(Props());
                 case "uitoolkit/tree":
@@ -889,6 +919,10 @@ namespace UnityMCP.Editor
                     return MCPAssetCommands.Import(ParseJson(body));
                 case "asset/delete":
                     return MCPAssetCommands.Delete(ParseJson(body));
+                case "asset/rename":
+                    return MCPAssetCommands.Rename(ParseJson(body));
+                case "asset/move":
+                    return MCPAssetCommands.Move(ParseJson(body));
                 case "asset/create-prefab":
                     return MCPAssetCommands.CreatePrefab(ParseJson(body));
                 case "asset/instantiate-prefab":
@@ -915,6 +949,8 @@ namespace UnityMCP.Editor
                 // ─── Console ───
                 case "console/log":
                     return MCPConsoleCommands.GetLog(ParseJson(body));
+                case "console/query":
+                    return MCPConsoleCommands.Query(ParseJson(body));
                 case "console/clear":
                     return MCPConsoleCommands.Clear();
 

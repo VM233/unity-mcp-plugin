@@ -92,6 +92,123 @@ namespace UnityMCP.Editor
             return new { success = deleted, path };
         }
 
+        public static object Rename(Dictionary<string, object> args)
+        {
+            string path = GetString(args, "path");
+            string newName = GetString(args, "newName");
+
+            if (string.IsNullOrEmpty(path))
+                return new { error = "path is required" };
+            if (string.IsNullOrEmpty(newName))
+                return new { error = "newName is required" };
+            if (newName.Contains("/") || newName.Contains("\\"))
+                return new { error = "newName must be a file or folder name, not a path" };
+            if (!AssetExists(path))
+                return new { error = $"Asset not found at '{path}'" };
+
+            string oldGuid = AssetDatabase.AssetPathToGUID(path);
+            bool isFolder = AssetDatabase.IsValidFolder(path);
+            string directory = Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "";
+            string extension = isFolder ? "" : Path.GetExtension(path);
+            string newExtension = isFolder ? "" : Path.GetExtension(newName);
+
+            if (!isFolder && !string.IsNullOrEmpty(newExtension) &&
+                !string.Equals(newExtension, extension, StringComparison.OrdinalIgnoreCase))
+            {
+                return new { error = $"Changing file extension is not supported: '{extension}' to '{newExtension}'" };
+            }
+
+            string renameName = isFolder ? newName : Path.GetFileNameWithoutExtension(newName);
+            string expectedPath = string.IsNullOrEmpty(directory)
+                ? renameName + extension
+                : directory + "/" + renameName + extension;
+
+            if (!string.Equals(path, expectedPath, StringComparison.OrdinalIgnoreCase) &&
+                AssetExists(expectedPath))
+            {
+                return new { error = $"Target asset already exists at '{expectedPath}'" };
+            }
+
+            string error = AssetDatabase.RenameAsset(path, renameName);
+            if (!string.IsNullOrEmpty(error))
+                return new { error };
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            string newPath = AssetDatabase.GUIDToAssetPath(oldGuid);
+            string newGuid = string.IsNullOrEmpty(newPath) ? "" : AssetDatabase.AssetPathToGUID(newPath);
+            bool guidChanged = !string.Equals(oldGuid, newGuid, StringComparison.Ordinal);
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "oldPath", path },
+                { "newPath", newPath },
+                { "expectedPath", expectedPath },
+                { "oldGuid", oldGuid },
+                { "newGuid", newGuid },
+                { "guidChanged", guidChanged },
+                { "metaPreserved", !guidChanged },
+            };
+        }
+
+        public static object Move(Dictionary<string, object> args)
+        {
+            string path = GetString(args, "path");
+            string destinationPath = GetString(args, "destinationPath");
+
+            if (string.IsNullOrEmpty(path))
+                return new { error = "path is required" };
+            if (string.IsNullOrEmpty(destinationPath))
+                return new { error = "destinationPath is required" };
+            if (!AssetExists(path))
+                return new { error = $"Asset not found at '{path}'" };
+
+            string oldGuid = AssetDatabase.AssetPathToGUID(path);
+            string targetPath = NormalizeMoveTargetPath(path, destinationPath);
+            string targetDirectory = Path.GetDirectoryName(targetPath)?.Replace('\\', '/') ?? "";
+            bool sourceIsFolder = AssetDatabase.IsValidFolder(path);
+
+            if (!sourceIsFolder && !AssetDatabase.IsValidFolder(destinationPath))
+            {
+                string sourceExtension = Path.GetExtension(path);
+                string targetExtension = Path.GetExtension(targetPath);
+                if (string.IsNullOrEmpty(targetExtension))
+                    return new { error = "destinationPath must be an existing folder or include the asset file extension" };
+                if (!string.Equals(sourceExtension, targetExtension, StringComparison.OrdinalIgnoreCase))
+                    return new { error = $"Changing file extension is not supported: '{sourceExtension}' to '{targetExtension}'" };
+            }
+
+            if (!string.IsNullOrEmpty(targetDirectory) && !AssetDatabase.IsValidFolder(targetDirectory))
+                return new { error = $"Target directory does not exist: '{targetDirectory}'" };
+            if (!string.Equals(path, targetPath, StringComparison.OrdinalIgnoreCase) && AssetExists(targetPath))
+                return new { error = $"Target asset already exists at '{targetPath}'" };
+
+            string error = AssetDatabase.MoveAsset(path, targetPath);
+            if (!string.IsNullOrEmpty(error))
+                return new { error };
+
+            AssetDatabase.SaveAssets();
+            AssetDatabase.Refresh();
+
+            string newPath = AssetDatabase.GUIDToAssetPath(oldGuid);
+            string newGuid = string.IsNullOrEmpty(newPath) ? "" : AssetDatabase.AssetPathToGUID(newPath);
+            bool guidChanged = !string.Equals(oldGuid, newGuid, StringComparison.Ordinal);
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "oldPath", path },
+                { "requestedDestinationPath", destinationPath },
+                { "newPath", newPath },
+                { "oldGuid", oldGuid },
+                { "newGuid", newGuid },
+                { "guidChanged", guidChanged },
+                { "metaPreserved", !guidChanged },
+            };
+        }
+
         public static object CreatePrefab(Dictionary<string, object> args)
         {
             string goPath = args.ContainsKey("gameObjectPath") ? args["gameObjectPath"].ToString() : "";
@@ -211,6 +328,25 @@ namespace UnityMCP.Editor
             AssetDatabase.SaveAssets();
 
             return new { success = true, path, shader = shaderName };
+        }
+
+        private static string GetString(Dictionary<string, object> args, string key)
+        {
+            return args != null && args.ContainsKey(key) ? args[key]?.ToString() : "";
+        }
+
+        private static bool AssetExists(string path)
+        {
+            return AssetDatabase.IsValidFolder(path) || AssetDatabase.LoadMainAssetAtPath(path) != null;
+        }
+
+        private static string NormalizeMoveTargetPath(string sourcePath, string destinationPath)
+        {
+            destinationPath = destinationPath.Replace('\\', '/');
+            if (AssetDatabase.IsValidFolder(destinationPath))
+                return destinationPath.TrimEnd('/') + "/" + Path.GetFileName(sourcePath);
+
+            return destinationPath;
         }
     }
 }
