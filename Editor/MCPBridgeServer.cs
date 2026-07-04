@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using UnityEditor;
 using UnityEngine;
@@ -463,87 +465,7 @@ namespace UnityMCP.Editor
         /// </summary>
         private static object GetRegisteredRoutes()
         {
-            // We collect routes by reflecting on the switch cases in RouteRequest.
-            // Since C# doesn't easily let us introspect switch cases at runtime,
-            // we maintain a static list of all registered route prefixes/categories.
-            var routes = new List<string>
-            {
-                "ping",
-                "editor/state", "editor/play-mode", "editor/execute-menu-item", "editor/undo", "editor/redo", "editor/undo-history",
-                "scene/info", "scene/open", "scene/save", "scene/new", "scene/hierarchy", "scene/stats",
-                "gameobject/create", "gameobject/delete", "gameobject/info", "gameobject/set-transform",
-                "gameobject/duplicate", "gameobject/set-active", "gameobject/reparent",
-                "component/add", "component/remove", "component/get-properties", "component/set-property",
-                "component/set-reference", "component/batch-wire", "component/get-referenceable",
-                "asset/list", "asset/import", "asset/delete", "asset/create-prefab", "asset/instantiate-prefab",
-                "script/create", "script/read", "script/update", "script/execute-code",
-                "material/create", "material/set-material",
-                "build/build", "build/play-mode",
-                "console/log", "console/clear",
-                "compilation/errors",
-                "selection/get", "selection/set", "selection/focus-scene-view", "selection/find-by-type",
-                "search/by-component", "search/by-tag", "search/by-layer", "search/by-name",
-                "search/assets", "search/missing-references",
-                "screenshot/game", "screenshot/scene",
-                "prefab/info", "prefab/set-object-reference",
-                "packages/list", "packages/add", "packages/remove", "packages/search", "packages/info",
-                "packages/update-git", "packages/lint-metas",
-                "project/info",
-                // Animation
-                "animation/create-controller", "animation/get-controller", "animation/add-state",
-                "animation/remove-state", "animation/add-transition", "animation/remove-transition",
-                "animation/set-parameter", "animation/remove-parameter", "animation/get-parameters",
-                "animation/create-clip", "animation/set-clip-curve", "animation/set-object-reference-curve", "animation/get-clip-info",
-                "animation/set-state-motion", "animation/add-layer", "animation/remove-layer",
-                "animation/get-layers", "animation/set-default-state", "animation/add-blend-tree",
-                // Physics
-                "physics/raycast", "physics/overlap-sphere", "physics/settings",
-                "physics/add-joint", "physics/get-joint", "physics/set-joint",
-                // Audio
-                "audio/play", "audio/stop", "audio/get-info", "audio/set-property",
-                // UI
-                "ui/create-canvas", "ui/add-element", "ui/set-rect", "ui/set-text",
-                "ui/set-image", "ui/set-button", "ui/get-hierarchy",
-                // UI Toolkit editor windows
-                "uitoolkit/windows", "uitoolkit/tree", "uitoolkit/query",
-                "uitoolkit/style", "uitoolkit/repaint",
-                // Lighting
-                "lighting/create", "lighting/set-property", "lighting/bake", "lighting/get-settings",
-                "lighting/set-settings", "lighting/get-probes",
-                // NavMesh
-                "navmesh/bake", "navmesh/add-agent", "navmesh/set-area", "navmesh/get-info",
-                "navmesh/add-obstacle", "navmesh/add-link",
-                // ShaderGraph
-                "shadergraph/create", "shadergraph/get-info", "shadergraph/add-node",
-                "shadergraph/remove-node", "shadergraph/connect", "shadergraph/disconnect",
-                "shadergraph/set-property", "shadergraph/list-nodes", "shadergraph/get-connections",
-                // Amplify
-                "amplify/list", "amplify/info", "amplify/open", "amplify/list-functions",
-                "amplify/get-node-types", "amplify/get-nodes", "amplify/get-connections",
-                "amplify/create-shader", "amplify/add-node", "amplify/remove-node",
-                "amplify/connect", "amplify/disconnect", "amplify/node-info",
-                "amplify/set-node-property", "amplify/move-node",
-                // Graphics
-                "graphics/camera-info", "graphics/render-settings", "graphics/set-render-settings",
-                "graphics/texture-info", "graphics/renderer-info", "graphics/lighting-summary",
-                // Terrain
-                "terrain/create", "terrain/info", "terrain/set-height", "terrain/flatten",
-                "terrain/add-layer", "terrain/get-height", "terrain/list",
-                "terrain/raise-lower", "terrain/smooth", "terrain/noise",
-                "terrain/set-heights-region", "terrain/get-heights-region",
-                "terrain/remove-layer", "terrain/paint-layer", "terrain/fill-layer",
-                "terrain/add-tree-prototype", "terrain/remove-tree-prototype",
-                "terrain/place-trees", "terrain/clear-trees", "terrain/get-tree-instances",
-                "terrain/add-detail-prototype", "terrain/paint-detail",
-                "terrain/scatter-detail", "terrain/clear-detail",
-                "terrain/set-holes", "terrain/set-settings", "terrain/resize",
-                "terrain/create-grid", "terrain/set-neighbors",
-                "terrain/import-heightmap", "terrain/export-heightmap", "terrain/get-steepness",
-                // Particle System
-                "particle/create", "particle/info", "particle/set-main", "particle/set-emission",
-                "particle/set-shape", "particle/set-velocity", "particle/set-color",
-                "particle/set-size", "particle/set-renderer",
-            };
+            var routes = GetRegisteredRouteList();
 
             // Group by category
             var grouped = new Dictionary<string, List<string>>();
@@ -562,6 +484,234 @@ namespace UnityMCP.Editor
             };
         }
 
+        private static object GetRegisteredTools()
+        {
+            var routes = GetRegisteredRouteList();
+            var tools = routes.Select(BuildToolMetadata).ToList();
+
+            var grouped = new Dictionary<string, List<string>>();
+            foreach (var tool in tools)
+            {
+                string category = tool["category"].ToString();
+                if (!grouped.ContainsKey(category))
+                    grouped[category] = new List<string>();
+                grouped[category].Add(tool["toolName"].ToString());
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "routes", routes },
+                { "tools", tools },
+                { "categories", grouped },
+                { "totalTools", tools.Count }
+            };
+        }
+
+        private static List<string> GetRegisteredRouteList()
+        {
+            var routes = ExtractRouteCasesFromSource();
+            return routes
+                .Where(route => !string.IsNullOrEmpty(route))
+                .Distinct()
+                .OrderBy(route => route)
+                .ToList();
+        }
+
+        private static List<string> ExtractRouteCasesFromSource()
+        {
+            try
+            {
+                foreach (string guid in AssetDatabase.FindAssets("MCPBridgeServer t:MonoScript"))
+                {
+                    string path = AssetDatabase.GUIDToAssetPath(guid);
+                    if (!path.EndsWith("MCPBridgeServer.cs", StringComparison.Ordinal))
+                        continue;
+
+                    string absolutePath = Path.IsPathRooted(path)
+                        ? path
+                        : Path.Combine(Directory.GetParent(Application.dataPath).FullName, path);
+
+                    if (!File.Exists(absolutePath))
+                        continue;
+
+                    string source = File.ReadAllText(absolutePath);
+                    int methodIndex = source.IndexOf("private static object RouteRequest", StringComparison.Ordinal);
+                    if (methodIndex < 0)
+                        continue;
+
+                    int switchIndex = source.IndexOf("switch (path)", methodIndex, StringComparison.Ordinal);
+                    if (switchIndex < 0)
+                        continue;
+
+                    int defaultIndex = source.IndexOf("default:", switchIndex, StringComparison.Ordinal);
+                    if (defaultIndex < 0)
+                        defaultIndex = source.Length;
+
+                    string switchBlock = source.Substring(switchIndex, defaultIndex - switchIndex);
+                    var routes = new List<string>();
+                    foreach (Match match in Regex.Matches(switchBlock, "case\\s+\"([^\"]+)\"\\s*:"))
+                    {
+                        routes.Add(match.Groups[1].Value);
+                    }
+
+                    return routes;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Unity MCP] Failed to extract routes from source: {ex.Message}");
+            }
+
+            return new List<string>();
+        }
+
+        private static Dictionary<string, object> BuildToolMetadata(string route)
+        {
+            return new Dictionary<string, object>
+            {
+                { "route", route },
+                { "toolName", RouteToToolName(route) },
+                { "category", ExtractCategory(route) },
+                { "description", GetToolDescription(route) },
+                { "inputSchema", GetToolInputSchema(route) },
+            };
+        }
+
+        private static string RouteToToolName(string route)
+        {
+            return "unity_" + route.Replace("/", "_").Replace("-", "_");
+        }
+
+        private static string GetToolDescription(string route)
+        {
+            switch (route)
+            {
+                case "packages/update-git":
+                    return "Update a Git-based Unity package and return the resolved packages-lock hash.";
+                case "packages/lint-metas":
+                    return "Lint a Unity package root for missing .meta files.";
+                case "uitoolkit/windows":
+                    return "List open Unity Editor windows with UI Toolkit root metadata.";
+                case "uitoolkit/tree":
+                    return "Read a UI Toolkit visual tree from an EditorWindow.";
+                case "uitoolkit/query":
+                    return "Query UI Toolkit elements by name, className, typeName, or text.";
+                case "uitoolkit/style":
+                    return "Read inline and resolved style for a UI Toolkit element.";
+                case "uitoolkit/repaint":
+                    return "Trigger repaint on a UI Toolkit EditorWindow or element.";
+                case "animation/set-object-reference-curve":
+                    return "Set AnimationClip ObjectReference keyframes, such as SpriteRenderer.m_Sprite.";
+                default:
+                    return $"Lazy Unity route: {route}";
+            }
+        }
+
+        private static Dictionary<string, object> GetToolInputSchema(string route)
+        {
+            switch (route)
+            {
+                case "packages/update-git":
+                    return Schema(Props(
+                        Prop("name", "string", "Package name, e.g. com.example.package"),
+                        Prop("gitUrl", "string", "Optional Git URL. Defaults to the current manifest Git URL."),
+                        Prop("ref", "string", "Optional branch, tag, or commit. Defaults to main."),
+                        Prop("commit", "string", "Optional commit hash alias for ref."),
+                        Prop("branch", "string", "Optional branch alias for ref.")
+                    ), "name");
+                case "packages/lint-metas":
+                    return Schema(Props(
+                        Prop("name", "string", "Installed package name to lint."),
+                        Prop("path", "string", "Absolute or project-relative package path to lint."),
+                        Prop("all", "boolean", "Lint all resolved package roots."),
+                        Prop("checkDirectories", "boolean", "Also require directory .meta files. Defaults to true."),
+                        Prop("maxResults", "number", "Maximum missing entries returned per package.")
+                    ));
+                case "uitoolkit/windows":
+                    return Schema(Props());
+                case "uitoolkit/tree":
+                    return EditorWindowSchema(Props(
+                        Prop("maxDepth", "number", "Maximum tree depth. Defaults to 8."),
+                        Prop("maxNodes", "number", "Maximum returned nodes. Defaults to 300."),
+                        Prop("includeStyle", "boolean", "Include inline and resolved style summaries.")
+                    ));
+                case "uitoolkit/query":
+                    return EditorWindowSchema(Props(
+                        Prop("name", "string", "VisualElement.name exact match."),
+                        Prop("className", "string", "USS class name exact match."),
+                        Prop("typeName", "string", "VisualElement type name contains match."),
+                        Prop("text", "string", "TextElement text contains match."),
+                        Prop("maxResults", "number", "Maximum returned elements. Defaults to 50."),
+                        Prop("includeStyle", "boolean", "Include inline and resolved style summaries.")
+                    ));
+                case "uitoolkit/style":
+                    return EditorWindowSchema(Props(
+                        Prop("path", "string", "Element path from uitoolkit/tree or uitoolkit/query."),
+                        Prop("name", "string", "VisualElement.name exact match if path is omitted."),
+                        Prop("className", "string", "USS class name exact match if path is omitted."),
+                        Prop("typeName", "string", "VisualElement type name contains match if path is omitted."),
+                        Prop("text", "string", "TextElement text contains match if path is omitted.")
+                    ));
+                case "uitoolkit/repaint":
+                    return EditorWindowSchema(Props(
+                        Prop("path", "string", "Optional element path from uitoolkit/tree or uitoolkit/query.")
+                    ));
+                default:
+                    return new Dictionary<string, object>
+                    {
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>() },
+                        { "additionalProperties", true }
+                    };
+            }
+        }
+
+        private static Dictionary<string, object> EditorWindowSchema(Dictionary<string, object> extraProps)
+        {
+            var props = Props(
+                Prop("instanceId", "number", "EditorWindow instance id from uitoolkit/windows."),
+                Prop("window", "string", "Window title, type name, full type name, or instance id."),
+                Prop("windowType", "string", "EditorWindow type name or full type name."),
+                Prop("title", "string", "EditorWindow title text.")
+            );
+
+            foreach (var pair in extraProps)
+                props[pair.Key] = pair.Value;
+
+            return Schema(props);
+        }
+
+        private static Dictionary<string, object> Schema(Dictionary<string, object> properties, params string[] required)
+        {
+            var schema = new Dictionary<string, object>
+            {
+                { "type", "object" },
+                { "properties", properties },
+            };
+
+            if (required != null && required.Length > 0)
+                schema["required"] = required.ToList();
+
+            return schema;
+        }
+
+        private static Dictionary<string, object> Props(params KeyValuePair<string, object>[] properties)
+        {
+            var result = new Dictionary<string, object>();
+            foreach (var pair in properties)
+                result[pair.Key] = pair.Value;
+            return result;
+        }
+
+        private static KeyValuePair<string, object> Prop(string name, string type, string description)
+        {
+            return new KeyValuePair<string, object>(name, new Dictionary<string, object>
+            {
+                { "type", type },
+                { "description", description },
+            });
+        }
+
         /// <summary>
         /// Route API requests to the appropriate handler.
         /// NOTE: This entire method runs on the main thread (dispatched by HandleRequest
@@ -573,6 +723,10 @@ namespace UnityMCP.Editor
             if (path == "_meta/routes")
             {
                 return GetRegisteredRoutes();
+            }
+            if (path == "_meta/tools")
+            {
+                return GetRegisteredTools();
             }
 
             // Check if category is enabled
