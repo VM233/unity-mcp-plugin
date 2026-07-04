@@ -1443,7 +1443,16 @@ namespace UnityMCP.Editor
                 return new { error = "operations must contain at least one operation" };
 
             var beforeSnapshot = CaptureAssetText(assetPath);
-            var root = PrefabUtility.LoadPrefabContents(assetPath);
+            GameObject root;
+            try
+            {
+                root = PrefabUtility.LoadPrefabContents(assetPath);
+            }
+            catch (Exception ex)
+            {
+                return new { error = $"Failed to load prefab at '{assetPath}': {ex.Message}" };
+            }
+
             if (root == null)
                 return new { error = $"Failed to load prefab at '{assetPath}'" };
 
