@@ -1428,6 +1428,158 @@ namespace UnityMCP.Editor
             }
         }
 
+        /// <summary>
+        /// Apply multiple prefab asset edits in one load/save transaction.
+        /// If any operation fails, no prefab asset save is performed.
+        /// </summary>
+        public static object BatchEdit(Dictionary<string, object> args)
+        {
+            string assetPath = GetString(args, "assetPath");
+            if (string.IsNullOrEmpty(assetPath))
+                return new { error = "assetPath is required" };
+
+            var operations = GetDictionaryList(args, "operations");
+            if (operations.Count == 0)
+                return new { error = "operations must contain at least one operation" };
+
+            var beforeSnapshot = CaptureAssetText(assetPath);
+            var root = PrefabUtility.LoadPrefabContents(assetPath);
+            if (root == null)
+                return new { error = $"Failed to load prefab at '{assetPath}'" };
+
+            try
+            {
+                var summaries = new List<Dictionary<string, object>>();
+                for (int i = 0; i < operations.Count; i++)
+                {
+                    if (!TryApplyBatchOperation(root, operations[i], i, out var summary, out string error))
+                    {
+                        return new Dictionary<string, object>
+                        {
+                            { "error", error },
+                            { "success", false },
+                            { "saved", false },
+                            { "failedOperationIndex", i },
+                            { "failedOperation", operations[i] },
+                            { "appliedOperationCount", summaries.Count },
+                            { "operationSummaries", summaries },
+                        };
+                    }
+
+                    summaries.Add(summary);
+                }
+
+                PrefabUtility.SaveAsPrefabAsset(root, assetPath);
+
+                var result = new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "saved", true },
+                    { "prefab", root.name },
+                    { "assetPath", assetPath },
+                    { "operationCount", operations.Count },
+                    { "operationSummaries", summaries },
+                };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return new { error = $"Failed to batch edit prefab: {ex.Message}", stackTrace = ex.StackTrace };
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        public static void BatchEditDeferred(Dictionary<string, object> args, Action<object> resolve)
+        {
+            var componentTypes = CollectBatchEditComponentTypes(args);
+            if (GetBool(args, "waitForTypes", true) == false || componentTypes.Count == 0)
+            {
+                resolve(BatchEdit(args));
+                return;
+            }
+
+            int timeoutMs = Math.Max(1, GetInt(args, "typeResolveTimeoutMs", 30000));
+            int stableMs = Math.Max(0, GetInt(args, "typeResolveStableMs", 500));
+            bool refreshAssets = GetBool(args, "refreshAssets", true);
+            double startTime = EditorApplication.timeSinceStartup;
+            double stableStartTime = -1;
+            bool refreshRequested = false;
+
+            EditorApplication.CallbackFunction tick = null;
+            Action<object> complete = result =>
+            {
+                if (tick != null)
+                    EditorApplication.update -= tick;
+                resolve(result);
+            };
+
+            tick = () =>
+            {
+                try
+                {
+                    if (refreshAssets && refreshRequested == false)
+                    {
+                        refreshRequested = true;
+                        AssetDatabase.Refresh();
+                    }
+
+                    bool editorBusy = EditorApplication.isCompiling || EditorApplication.isUpdating;
+                    var missingTypes = componentTypes
+                        .Where(componentType => MCPComponentCommands.FindType(componentType) == null)
+                        .ToList();
+
+                    if (missingTypes.Count == 0 && editorBusy == false)
+                    {
+                        if (stableStartTime < 0)
+                            stableStartTime = EditorApplication.timeSinceStartup;
+
+                        double stableElapsedMs = (EditorApplication.timeSinceStartup - stableStartTime) * 1000d;
+                        if (stableElapsedMs >= stableMs)
+                        {
+                            complete(BatchEdit(args));
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        stableStartTime = -1;
+                    }
+
+                    double elapsedMs = (EditorApplication.timeSinceStartup - startTime) * 1000d;
+                    if (elapsedMs >= timeoutMs)
+                    {
+                        complete(new Dictionary<string, object>
+                        {
+                            { "error", $"Component types not found after waiting {timeoutMs} ms" },
+                            { "typeResolution", new Dictionary<string, object>
+                                {
+                                    { "componentTypes", componentTypes },
+                                    { "missingTypes", missingTypes },
+                                    { "elapsedMs", (int)elapsedMs },
+                                    { "timeoutMs", timeoutMs },
+                                    { "refreshedAssets", refreshRequested },
+                                    { "isCompiling", EditorApplication.isCompiling },
+                                    { "isUpdating", EditorApplication.isUpdating },
+                                    { "likelyReason", EditorApplication.isCompiling || EditorApplication.isUpdating ? "unity_busy" : "type_not_found" },
+                                }
+                            },
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    complete(new { error = $"Failed while waiting for component types: {ex.Message}", stackTrace = ex.StackTrace });
+                }
+            };
+
+            EditorApplication.update += tick;
+            tick();
+        }
+
         // ─── Helpers ───
 
         private static GameObject FindInPrefab(GameObject root, string prefabPath)
@@ -1485,9 +1637,656 @@ namespace UnityMCP.Editor
             return node;
         }
 
+        private static bool TryApplyBatchOperation(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            error = "";
+
+            string operationType = GetOperationType(operation);
+            if (string.IsNullOrEmpty(operationType))
+            {
+                error = $"Operation {operationIndex} is missing type/op/action";
+                return false;
+            }
+
+            switch (operationType)
+            {
+                case "addcomponent":
+                    return TryBatchAddComponent(root, operation, operationIndex, out summary, out error);
+                case "setproperty":
+                    return TryBatchSetProperty(root, operation, operationIndex, out summary, out error);
+                case "setreference":
+                    return TryBatchSetReference(root, operation, operationIndex, out summary, out error);
+                case "addgameobject":
+                    return TryBatchAddGameObject(root, operation, operationIndex, out summary, out error);
+                case "instantiateprefab":
+                    return TryBatchInstantiatePrefab(root, operation, operationIndex, out summary, out error);
+                case "removecomponent":
+                    return TryBatchRemoveComponent(root, operation, operationIndex, out summary, out error);
+                case "removegameobject":
+                    return TryBatchRemoveGameObject(root, operation, operationIndex, out summary, out error);
+                case "movegameobject":
+                    return TryBatchMoveGameObject(root, operation, operationIndex, out summary, out error);
+                default:
+                    error = $"Unsupported prefab batch operation '{operationType}' at index {operationIndex}";
+                    return false;
+            }
+        }
+
+        private static bool TryBatchAddComponent(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            error = "";
+            string prefabPath = GetString(operation, "prefabPath");
+            string componentType = GetString(operation, "componentType");
+            if (string.IsNullOrEmpty(componentType))
+            {
+                error = $"Operation {operationIndex}: componentType is required";
+                return false;
+            }
+
+            var go = FindInPrefab(root, prefabPath);
+            if (go == null)
+            {
+                error = $"Operation {operationIndex}: GameObject '{prefabPath}' not found in prefab";
+                return false;
+            }
+
+            Type type = MCPComponentCommands.FindType(componentType);
+            if (type == null)
+            {
+                error = $"Operation {operationIndex}: Type '{componentType}' not found";
+                return false;
+            }
+
+            var component = go.AddComponent(type);
+            var changedProperties = new List<string>();
+            var properties = GetDictionary(operation, "properties");
+            if (properties != null &&
+                !TryApplySerializedProperties(component, properties, changedProperties, out error))
+            {
+                error = $"Operation {operationIndex}: {error}";
+                return false;
+            }
+
+            summary = BuildBatchSummary(operationIndex, "addComponent", go, component);
+            summary["prefabPath"] = GetPrefabPath(root, go);
+            summary["properties"] = changedProperties;
+            return true;
+        }
+
+        private static bool TryBatchSetProperty(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            if (!TryGetBatchComponent(root, operation, operationIndex, out var go, out var component, out error))
+                return false;
+
+            var changedProperties = new List<string>();
+            var properties = GetDictionary(operation, "properties");
+            if (properties != null)
+            {
+                if (!TryApplySerializedProperties(component, properties, changedProperties, out error))
+                {
+                    error = $"Operation {operationIndex}: {error}";
+                    return false;
+                }
+            }
+            else
+            {
+                string propertyName = GetString(operation, "propertyName");
+                if (string.IsNullOrEmpty(propertyName))
+                {
+                    error = $"Operation {operationIndex}: propertyName or properties is required";
+                    return false;
+                }
+
+                if (!operation.ContainsKey("value"))
+                {
+                    error = $"Operation {operationIndex}: value is required";
+                    return false;
+                }
+
+                if (!TryApplySerializedProperty(component, propertyName, operation["value"], out error))
+                {
+                    error = $"Operation {operationIndex}: {error}";
+                    return false;
+                }
+
+                changedProperties.Add(propertyName);
+            }
+
+            summary = BuildBatchSummary(operationIndex, "setProperty", go, component);
+            summary["prefabPath"] = GetPrefabPath(root, go);
+            summary["properties"] = changedProperties;
+            return true;
+        }
+
+        private static bool TryBatchSetReference(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            error = "";
+            string prefabPath = GetString(operation, "prefabPath");
+            string propertyName = GetString(operation, "propertyName");
+            if (string.IsNullOrEmpty(propertyName))
+            {
+                error = $"Operation {operationIndex}: propertyName is required";
+                return false;
+            }
+
+            var go = FindInPrefab(root, prefabPath);
+            if (go == null)
+            {
+                error = $"Operation {operationIndex}: GameObject '{prefabPath}' not found in prefab";
+                return false;
+            }
+
+            Component component = null;
+            string componentType = GetString(operation, "componentType");
+            if (string.IsNullOrEmpty(componentType) == false)
+            {
+                if (!TryGetBatchComponent(root, operation, operationIndex, out _, out component, out error))
+                    return false;
+            }
+            else
+            {
+                foreach (var candidate in go.GetComponents<Component>())
+                {
+                    if (candidate == null)
+                        continue;
+
+                    var serializedCandidate = new SerializedObject(candidate);
+                    if (serializedCandidate.FindProperty(propertyName) != null)
+                    {
+                        component = candidate;
+                        break;
+                    }
+                }
+            }
+
+            if (component == null)
+            {
+                error = $"Operation {operationIndex}: Component '{componentType}' not found on '{go.name}', or no component has property '{propertyName}'";
+                return false;
+            }
+
+            var serialized = new SerializedObject(component);
+            var prop = serialized.FindProperty(propertyName);
+            if (prop == null)
+            {
+                error = $"Operation {operationIndex}: Property '{propertyName}' not found";
+                return false;
+            }
+
+            if (prop.propertyType != SerializedPropertyType.ObjectReference)
+            {
+                error = $"Operation {operationIndex}: Property '{propertyName}' is not an ObjectReference";
+                return false;
+            }
+
+            if (!TryResolveBatchReference(root, operation, out UnityEngine.Object targetRef,
+                    out string refDescription, out error))
+            {
+                error = $"Operation {operationIndex}: {error}";
+                return false;
+            }
+
+            prop.objectReferenceValue = targetRef;
+            serialized.ApplyModifiedProperties();
+
+            summary = BuildBatchSummary(operationIndex, "setReference", go, component);
+            summary["prefabPath"] = GetPrefabPath(root, go);
+            summary["property"] = propertyName;
+            summary["reference"] = refDescription;
+            return true;
+        }
+
+        private static bool TryBatchAddGameObject(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            error = "";
+            string parentPrefabPath = GetString(operation, "parentPrefabPath");
+            string name = GetString(operation, "name");
+            if (string.IsNullOrEmpty(name))
+            {
+                error = $"Operation {operationIndex}: name is required";
+                return false;
+            }
+
+            var parent = FindInPrefab(root, parentPrefabPath);
+            if (parent == null)
+            {
+                error = $"Operation {operationIndex}: Parent '{parentPrefabPath}' not found in prefab";
+                return false;
+            }
+
+            string primitiveType = GetString(operation, "primitiveType");
+            GameObject newGo;
+            if (!string.IsNullOrEmpty(primitiveType) && Enum.TryParse<PrimitiveType>(primitiveType, true, out var pt))
+            {
+                newGo = GameObject.CreatePrimitive(pt);
+                newGo.name = name;
+            }
+            else
+            {
+                newGo = new GameObject(name);
+            }
+
+            newGo.transform.SetParent(parent.transform, false);
+            ApplyTransformArguments(newGo.transform, operation);
+
+            summary = BuildBatchSummary(operationIndex, "addGameObject", newGo, null);
+            summary["parent"] = string.IsNullOrEmpty(parentPrefabPath) ? "root" : parentPrefabPath;
+            summary["prefabPath"] = GetPrefabPath(root, newGo);
+            return true;
+        }
+
+        private static bool TryBatchInstantiatePrefab(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            string sourcePrefabPath = GetString(operation, "sourcePrefabPath");
+            if (string.IsNullOrEmpty(sourcePrefabPath))
+            {
+                error = $"Operation {operationIndex}: sourcePrefabPath is required";
+                return false;
+            }
+
+            string parentPrefabPath = GetString(operation, "parentPrefabPath");
+            var parent = FindInPrefab(root, parentPrefabPath);
+            if (parent == null)
+            {
+                error = $"Operation {operationIndex}: Parent '{parentPrefabPath}' not found in prefab";
+                return false;
+            }
+
+            var sourcePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(sourcePrefabPath);
+            if (sourcePrefab == null)
+            {
+                error = $"Operation {operationIndex}: Source prefab not found at '{sourcePrefabPath}'";
+                return false;
+            }
+
+            var instance = PrefabUtility.InstantiatePrefab(sourcePrefab, root.scene) as GameObject;
+            if (instance == null)
+            {
+                error = $"Operation {operationIndex}: Failed to instantiate prefab '{sourcePrefabPath}'";
+                return false;
+            }
+
+            instance.transform.SetParent(parent.transform, false);
+
+            string name = GetString(operation, "name");
+            if (string.IsNullOrEmpty(name) == false)
+                instance.name = name;
+
+            ApplyTransformArguments(instance.transform, operation);
+
+            int siblingIndex = GetInt(operation, "siblingIndex", -1);
+            if (siblingIndex >= 0)
+                instance.transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, parent.transform.childCount - 1));
+
+            summary = BuildBatchSummary(operationIndex, "instantiatePrefab", instance, null);
+            summary["sourcePrefabPath"] = sourcePrefabPath;
+            summary["parent"] = string.IsNullOrEmpty(parentPrefabPath) ? "root" : parentPrefabPath;
+            summary["prefabPath"] = GetPrefabPath(root, instance);
+            summary["siblingIndex"] = instance.transform.GetSiblingIndex();
+            error = "";
+            return true;
+        }
+
+        private static bool TryBatchRemoveComponent(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            if (!TryGetBatchComponent(root, operation, operationIndex, out var go, out var component, out error))
+                return false;
+
+            string componentName = component.GetType().Name;
+            int index = GetInt(operation, "index", GetInt(operation, "componentIndex", 0));
+            UnityEngine.Object.DestroyImmediate(component);
+
+            summary = new Dictionary<string, object>
+            {
+                { "index", operationIndex },
+                { "type", "removeComponent" },
+                { "gameObject", go.name },
+                { "prefabPath", GetPrefabPath(root, go) },
+                { "component", componentName },
+                { "componentIndex", index },
+            };
+            return true;
+        }
+
+        private static bool TryBatchRemoveGameObject(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            error = "";
+            string prefabPath = GetString(operation, "prefabPath");
+            if (string.IsNullOrEmpty(prefabPath))
+            {
+                error = $"Operation {operationIndex}: prefabPath is required";
+                return false;
+            }
+
+            var go = FindInPrefab(root, prefabPath);
+            if (go == null)
+            {
+                error = $"Operation {operationIndex}: GameObject '{prefabPath}' not found in prefab";
+                return false;
+            }
+
+            if (go == root)
+            {
+                error = $"Operation {operationIndex}: Cannot delete the root GameObject of a prefab";
+                return false;
+            }
+
+            string deletedName = go.name;
+            UnityEngine.Object.DestroyImmediate(go);
+
+            summary = new Dictionary<string, object>
+            {
+                { "index", operationIndex },
+                { "type", "removeGameObject" },
+                { "deletedGameObject", deletedName },
+                { "prefabPath", prefabPath },
+            };
+            return true;
+        }
+
+        private static bool TryBatchMoveGameObject(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            string prefabPath = GetString(operation, "prefabPath");
+            if (string.IsNullOrEmpty(prefabPath))
+            {
+                error = $"Operation {operationIndex}: prefabPath is required";
+                return false;
+            }
+
+            var go = FindInPrefab(root, prefabPath);
+            if (go == null)
+            {
+                error = $"Operation {operationIndex}: GameObject '{prefabPath}' not found in prefab";
+                return false;
+            }
+
+            if (go == root)
+            {
+                error = $"Operation {operationIndex}: Cannot move the root GameObject of a prefab";
+                return false;
+            }
+
+            string newParentPrefabPath = GetString(operation, "newParentPrefabPath");
+            var newParent = FindInPrefab(root, newParentPrefabPath);
+            if (newParent == null)
+            {
+                error = $"Operation {operationIndex}: New parent '{newParentPrefabPath}' not found in prefab";
+                return false;
+            }
+
+            string oldPath = GetPrefabPath(root, go);
+            string oldParentPath = go.transform.parent != null ? GetPrefabPath(root, go.transform.parent.gameObject) : "";
+            int oldSiblingIndex = go.transform.GetSiblingIndex();
+            bool worldPositionStays = GetBool(operation, "worldPositionStays", false);
+            int siblingIndex = GetInt(operation, "siblingIndex", -1);
+
+            go.transform.SetParent(newParent.transform, worldPositionStays);
+            if (siblingIndex >= 0)
+                go.transform.SetSiblingIndex(Mathf.Clamp(siblingIndex, 0, newParent.transform.childCount - 1));
+
+            summary = new Dictionary<string, object>
+            {
+                { "index", operationIndex },
+                { "type", "moveGameObject" },
+                { "gameObject", go.name },
+                { "oldPath", oldPath },
+                { "newPath", GetPrefabPath(root, go) },
+                { "oldParent", oldParentPath },
+                { "newParent", string.IsNullOrEmpty(newParentPrefabPath) ? "root" : newParentPrefabPath },
+                { "oldSiblingIndex", oldSiblingIndex },
+                { "newSiblingIndex", go.transform.GetSiblingIndex() },
+            };
+            error = "";
+            return true;
+        }
+
+        private static bool TryGetBatchComponent(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out GameObject go, out Component component, out string error)
+        {
+            go = null;
+            component = null;
+            error = "";
+
+            string prefabPath = GetString(operation, "prefabPath");
+            string componentType = GetString(operation, "componentType");
+            if (string.IsNullOrEmpty(componentType))
+            {
+                error = $"Operation {operationIndex}: componentType is required";
+                return false;
+            }
+
+            go = FindInPrefab(root, prefabPath);
+            if (go == null)
+            {
+                error = $"Operation {operationIndex}: GameObject '{prefabPath}' not found in prefab";
+                return false;
+            }
+
+            Type type = MCPComponentCommands.FindType(componentType);
+            if (type == null)
+            {
+                error = $"Operation {operationIndex}: Type '{componentType}' not found";
+                return false;
+            }
+
+            int index = GetInt(operation, "componentIndex", GetInt(operation, "index", 0));
+            var components = go.GetComponents(type);
+            if (components == null || index < 0 || index >= components.Length)
+            {
+                error = $"Operation {operationIndex}: Component '{componentType}' at index {index} not found on '{go.name}'";
+                return false;
+            }
+
+            component = components[index];
+            return true;
+        }
+
+        private static bool TryApplySerializedProperties(Component component, Dictionary<string, object> properties,
+            List<string> changedProperties, out string error)
+        {
+            error = "";
+            foreach (var pair in properties)
+            {
+                if (!TryApplySerializedProperty(component, pair.Key, pair.Value, out error))
+                    return false;
+
+                changedProperties.Add(pair.Key);
+            }
+
+            return true;
+        }
+
+        private static bool TryApplySerializedProperty(Component component, string propertyName, object value,
+            out string error)
+        {
+            error = "";
+            var serialized = new SerializedObject(component);
+            var prop = serialized.FindProperty(propertyName);
+            if (prop == null)
+            {
+                error = $"Property '{propertyName}' not found on '{component.GetType().Name}'";
+                return false;
+            }
+
+            MCPComponentCommands.SetSerializedValue(prop, value);
+            serialized.ApplyModifiedProperties();
+            return true;
+        }
+
+        private static bool TryResolveBatchReference(GameObject root, Dictionary<string, object> operation,
+            out UnityEngine.Object targetRef, out string refDescription, out string error)
+        {
+            targetRef = null;
+            refDescription = "null (cleared)";
+            error = "";
+
+            bool clearRef = GetBool(operation, "clear", false);
+            if (clearRef)
+                return true;
+
+            string referenceAssetPath = GetString(operation, "referenceAssetPath");
+            if (string.IsNullOrEmpty(referenceAssetPath) == false)
+            {
+                targetRef = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(referenceAssetPath);
+                if (targetRef == null)
+                {
+                    error = $"Asset not found at '{referenceAssetPath}'";
+                    return false;
+                }
+
+                refDescription = $"{targetRef.name} ({targetRef.GetType().Name})";
+                return true;
+            }
+
+            string referencePrefabPath = GetString(operation, "referencePrefabPath");
+            if (string.IsNullOrEmpty(referencePrefabPath) == false)
+            {
+                var refGo = FindInPrefab(root, referencePrefabPath);
+                if (refGo == null)
+                {
+                    error = $"GameObject '{referencePrefabPath}' not found in prefab";
+                    return false;
+                }
+
+                string referenceComponentType = GetString(operation, "referenceComponentType");
+                if (string.IsNullOrEmpty(referenceComponentType) == false)
+                {
+                    Type refType = MCPComponentCommands.FindType(referenceComponentType);
+                    if (refType == null)
+                    {
+                        error = $"Type '{referenceComponentType}' not found";
+                        return false;
+                    }
+
+                    targetRef = refGo.GetComponent(refType);
+                    if (targetRef == null)
+                    {
+                        error = $"Component '{referenceComponentType}' not found on '{refGo.name}'";
+                        return false;
+                    }
+                }
+                else
+                {
+                    targetRef = refGo;
+                }
+
+                refDescription = $"{targetRef.name} ({targetRef.GetType().Name})";
+                return true;
+            }
+
+            error = "Provide referenceAssetPath, referencePrefabPath, or clear=true";
+            return false;
+        }
+
+        private static void ApplyTransformArguments(Transform transform, Dictionary<string, object> operation)
+        {
+            if (operation.ContainsKey("position"))
+                transform.localPosition = ParseVector3(operation["position"]);
+            if (operation.ContainsKey("rotation"))
+                transform.localEulerAngles = ParseVector3(operation["rotation"]);
+            if (operation.ContainsKey("scale"))
+                transform.localScale = ParseVector3(operation["scale"]);
+        }
+
+        private static Dictionary<string, object> BuildBatchSummary(int operationIndex, string operationType,
+            GameObject go, Component component)
+        {
+            var summary = new Dictionary<string, object>
+            {
+                { "index", operationIndex },
+                { "type", operationType },
+                { "gameObject", go != null ? go.name : "" },
+            };
+
+            if (component != null)
+            {
+                summary["component"] = component.GetType().Name;
+                summary["fullType"] = component.GetType().FullName;
+            }
+
+            return summary;
+        }
+
+        private static List<string> CollectBatchEditComponentTypes(Dictionary<string, object> args)
+        {
+            var types = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var operation in GetDictionaryList(args, "operations"))
+            {
+                AddComponentType(types, GetString(operation, "componentType"));
+                AddComponentType(types, GetString(operation, "referenceComponentType"));
+            }
+
+            return types.OrderBy(type => type, StringComparer.OrdinalIgnoreCase).ToList();
+        }
+
+        private static void AddComponentType(HashSet<string> types, string componentType)
+        {
+            if (string.IsNullOrEmpty(componentType) == false)
+                types.Add(componentType);
+        }
+
+        private static string GetOperationType(Dictionary<string, object> operation)
+        {
+            string operationType = GetString(operation, "type");
+            if (string.IsNullOrEmpty(operationType))
+                operationType = GetString(operation, "op");
+            if (string.IsNullOrEmpty(operationType))
+                operationType = GetString(operation, "action");
+
+            return operationType
+                .Replace("-", "")
+                .Replace("_", "")
+                .Replace(" ", "")
+                .ToLowerInvariant();
+        }
+
         private static string GetString(Dictionary<string, object> args, string key)
         {
             return args != null && args.ContainsKey(key) ? args[key]?.ToString() : "";
+        }
+
+        private static Dictionary<string, object> GetDictionary(Dictionary<string, object> args, string key)
+        {
+            if (args == null || !args.TryGetValue(key, out object value) || value == null)
+                return null;
+
+            return value as Dictionary<string, object>;
+        }
+
+        private static List<Dictionary<string, object>> GetDictionaryList(Dictionary<string, object> args, string key)
+        {
+            var results = new List<Dictionary<string, object>>();
+            if (args == null || !args.TryGetValue(key, out object value) || value == null)
+                return results;
+
+            if (value is List<object> list)
+            {
+                foreach (object item in list)
+                {
+                    if (item is Dictionary<string, object> dict)
+                        results.Add(dict);
+                }
+            }
+
+            return results;
         }
 
         private static void AddPrefabFileDiff(Dictionary<string, object> result,

@@ -50,6 +50,7 @@ namespace UnityMCP.Editor
             { "wait/editor-idle", MCPEditorCommands.WaitForIdle },
             { "packages/update-git", MCPPackageManagerCommands.UpdateGitPackageDeferred },
             { "prefab-asset/add-component", MCPPrefabAssetCommands.AddComponentDeferred },
+            { "prefab-asset/batch-edit", MCPPrefabAssetCommands.BatchEditDeferred },
         };
 
         // SessionState key to persist running state across domain reloads (Play Mode, recompile)
@@ -637,6 +638,8 @@ namespace UnityMCP.Editor
                     return "Move or reorder a GameObject inside a prefab asset.";
                 case "prefab-asset/find":
                     return "Find GameObjects inside a prefab asset by name/path, component type, and serialized property value.";
+                case "prefab-asset/batch-edit":
+                    return "Apply multiple prefab asset edits in one transaction, save once, and return operation summaries plus prefab YAML diff.";
                 case "asset/rename":
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
@@ -743,6 +746,18 @@ namespace UnityMCP.Editor
                         Prop("propertyValue", "string", "Optional serialized property value to match."),
                         Prop("maxResults", "number", "Maximum returned matches. Defaults to 50.")
                     ), "assetPath");
+                case "prefab-asset/batch-edit":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("operations", "array", "Ordered operations. Supported type values: addComponent, setProperty, setReference, addGameObject, instantiatePrefab, removeComponent, removeGameObject, moveGameObject."),
+                        Prop("waitForTypes", "boolean", "Wait for all referenced component types before editing. Defaults to true."),
+                        Prop("typeResolveTimeoutMs", "number", "Maximum type wait time in milliseconds. Defaults to 30000."),
+                        Prop("typeResolveStableMs", "number", "Continuous idle time after type resolution before editing. Defaults to 500."),
+                        Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh once before waiting. Defaults to true."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                        Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
+                        Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200.")
+                    ), "assetPath", "operations");
                 case "asset/rename":
                     return Schema(Props(
                         Prop("path", "string", "Current asset path, e.g. Assets/Art/Old Name.png."),
@@ -1183,6 +1198,8 @@ namespace UnityMCP.Editor
                     return MCPPrefabAssetCommands.MoveGameObject(ParseJson(body));
                 case "prefab-asset/find":
                     return MCPPrefabAssetCommands.Find(ParseJson(body));
+                case "prefab-asset/batch-edit":
+                    return MCPPrefabAssetCommands.BatchEdit(ParseJson(body));
 
                 // ─── Prefab Variant Management ───
                 case "prefab-asset/variant-info":
