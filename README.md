@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="icon.png" alt="AnkleBreaker MCP" width="180" />
-</p>
-
 # Unity MCP Plugin — AI-Powered Unity Editor Bridge (UPM Package)
 
 > **The Unity Editor side of a comprehensive [MCP (Model Context Protocol)](https://modelcontextprotocol.io) integration for Unity game development.** Install via Unity Package Manager to let Claude, Cursor, Windsurf, Codex, or any MCP-compatible AI assistant control your Unity Editor with **290+ tools** across **30+ categories**. This fork is based on [AnkleBreaker Studio's Unity MCP Plugin](https://github.com/AnkleBreaker-Studio/unity-mcp-plugin) and adds workflow-oriented tools for safer package refreshes, prefab asset editing, asset renames/moves, and stronger console inspection.
@@ -13,30 +9,14 @@ This package runs a lightweight HTTP bridge inside the Unity Editor on `localhos
 ### Neon Brick Breaker — Built from scratch by AI in under 5 minutes
 > Claude creates the entire game: scene setup, neon materials with bloom post-processing, brick grid layout, game scripts, VFX, and UI — all through Unity MCP commands.
 
-<p align="center">
-  <img src="docs/unity-mcp-showcase-brickbreaker.gif" alt="Unity MCP — AI building a neon brick breaker game in Unity Editor" width="800" />
-</p>
-
 ### 3D Medieval Village — AI-generated terrain, houses, and environment
 > From an empty scene to a fully decorated village: terrain sculpting, material creation, procedural house building via C# editor scripts, trees, fences, and pathways.
-
-<p align="center">
-  <img src="docs/unity-mcp-showcase-village.gif" alt="Unity MCP — AI building a 3D medieval village with houses, trees, and terrain" width="800" />
-</p>
 
 ### 3D Castle — Complete level with FPS walkthrough
 > AI builds a multi-room castle with courtyard, throne room, armory, and guard room. Adjusts lighting, spawns the player, and runs an FPS walkthrough to verify the result.
 
-<p align="center">
-  <img src="docs/unity-mcp-showcase-castle.gif" alt="Unity MCP — AI building a 3D castle with FPS walkthrough in Unity Editor" width="800" />
-</p>
-
 ### How It Works — AI → MCP Server → Unity Plugin → Unity Editor
 > The Model Context Protocol connects your AI assistant to Unity through a lightweight bridge. Commands flow from your AI chat directly into the editor in real-time.
-
-<p align="center">
-  <img src="docs/unity-mcp-architecture.gif" alt="Unity MCP Architecture — AI Assistant → MCP Server → Unity Plugin → Unity Editor" width="800" />
-</p>
 
 **Core Capabilities:**
 
@@ -273,10 +253,6 @@ Settings are stored in `EditorPrefs` and persist across sessions.
 ### 290+ Tools Across 30+ Categories
 > Scene management, GameObjects, components, physics, terrain, Shader Graph, Amplify Shader Editor, profiling, animation, NavMesh, builds, multiplayer, and more.
 
-<p align="center">
-  <img src="docs/unity-mcp-features.gif" alt="Unity MCP Features — 290+ tools across 30+ categories for AI-powered game development" width="800" />
-</p>
-
 ## Why AnkleBreaker Unity MCP?
 
 AnkleBreaker Unity MCP is the most comprehensive MCP integration for Unity, purpose-built to leverage the full power of **Claude Cowork** and other AI assistants. Here's how it compares to alternatives:
@@ -337,12 +313,7 @@ Unity AI (successor to Muse) is built into Unity 6.2+ but limited to Unity's own
 
 If Unity MCP helps your workflow, consider supporting its development! Your support helps fund new features, bug fixes, documentation, and more open-source game dev tools.
 
-<a href="https://github.com/sponsors/AnkleBreaker-Studio">
-  <img src="https://img.shields.io/badge/Sponsor-GitHub%20Sponsors-ea4aaa?logo=github&style=for-the-badge" alt="GitHub Sponsors" />
-</a>
-<a href="https://www.patreon.com/AnkleBreakerStudio">
-  <img src="https://img.shields.io/badge/Support-Patreon-f96854?logo=patreon&style=for-the-badge" alt="Patreon" />
-</a>
+[GitHub Sponsors](https://github.com/sponsors/AnkleBreaker-Studio) | [Patreon](https://www.patreon.com/AnkleBreakerStudio)
 
 **Sponsor tiers include priority feature requests** — your ideas get bumped up the roadmap! Check out the tiers on [GitHub Sponsors](https://github.com/sponsors/AnkleBreaker-Studio) or [Patreon](https://www.patreon.com/AnkleBreakerStudio).
 
