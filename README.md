@@ -4,11 +4,11 @@
 
 # Unity MCP Plugin — AI-Powered Unity Editor Bridge (UPM Package)
 
-> **The Unity Editor side of the most comprehensive [MCP (Model Context Protocol)](https://modelcontextprotocol.io) integration for Unity game development.** Install via Unity Package Manager to let Claude, Cursor, Windsurf, or any MCP-compatible AI assistant control your Unity Editor with **288 tools** across **30+ categories**. Built and maintained by [AnkleBreaker Studio](https://github.com/AnkleBreaker-Studio).
+> **The Unity Editor side of a comprehensive [MCP (Model Context Protocol)](https://modelcontextprotocol.io) integration for Unity game development.** Install via Unity Package Manager to let Claude, Cursor, Windsurf, Codex, or any MCP-compatible AI assistant control your Unity Editor with **290+ tools** across **30+ categories**. This fork is based on [AnkleBreaker Studio's Unity MCP Plugin](https://github.com/AnkleBreaker-Studio/unity-mcp-plugin) and adds workflow-oriented tools for safer package refreshes, prefab asset editing, asset renames/moves, and stronger console inspection.
 
 ## What It Does
 
-This package runs a lightweight HTTP bridge inside the Unity Editor on `localhost:7890`. The companion [Unity MCP Server](https://github.com/AnkleBreaker-Studio/unity-mcp-server) connects to it, exposing **288 tools** to AI assistants across **30+ feature categories** — scenes, GameObjects, components, builds, profiling, Shader Graph, Amplify Shader Editor, terrain, physics, NavMesh, animation, multiplayer, and much more.
+This package runs a lightweight HTTP bridge inside the Unity Editor on `localhost:7890`. The companion [Unity MCP Server](https://github.com/AnkleBreaker-Studio/unity-mcp-server) connects to it, exposing **290+ tools** to AI assistants across **30+ feature categories** — scenes, GameObjects, components, builds, profiling, Shader Graph, Amplify Shader Editor, terrain, physics, NavMesh, animation, multiplayer, and much more.
 
 ### Neon Brick Breaker — Built from scratch by AI in under 5 minutes
 > Claude creates the entire game: scene setup, neon materials with bloom post-processing, brick grid layout, game scripts, VFX, and UI — all through Unity MCP commands.
@@ -43,18 +43,18 @@ This package runs a lightweight HTTP bridge inside the Unity Editor on `localhos
 - **Scene Management** — Open, save, create scenes; browse full hierarchy tree
 - **GameObjects** — Create (primitives or empty), delete, inspect, set transforms (world/local)
 - **Components** — Add/remove components, get/set any serialized property
-- **Assets** — List, import, delete assets; create prefabs and materials; assign materials
+- **Assets** — List, import, delete, safely rename, and safely move assets; create prefabs and materials; assign materials
 - **Scripts** — Create, read, update C# scripts
 - **Builds** — Trigger multi-platform builds (Windows, macOS, Linux, Android, iOS, WebGL)
-- **Console & Compilation** — Read errors/warnings/logs, clear console; get C# compilation errors via CompilationPipeline (independent of console buffer)
+- **Console & Compilation** — Read errors/warnings/logs, filter console entries by time/source/stack, clear console; get C# compilation errors via CompilationPipeline (independent of console buffer)
 - **Testing** — Run EditMode/PlayMode tests, poll results, list available tests via Unity Test Runner API
 - **Play Mode** — Play, pause, stop
-- **Editor** — Execute menu items, run arbitrary C# code, check editor state, get project info
+- **Editor** — Execute menu items, run arbitrary C# code, check editor state, wait for editor idle, get project info
 
 **Extended Capabilities:**
 
 - **Animation** — List clips, get clip info, list Animator controllers and parameters, set Animator properties, play animations
-- **Prefab (Advanced)** — Open/close prefab editing mode, check prefab status, get overrides, apply/revert changes
+- **Prefab (Advanced)** — Open/close prefab editing mode, check prefab status, get overrides, apply/revert changes, and directly edit prefab assets
 - **Physics** — Raycasts, sphere/box casts, overlap tests, get/set physics settings (gravity, layers, collision matrix)
 - **Lighting** — Manage lights, configure environment lighting/skybox, bake lightmaps, list/manage reflection probes
 - **Audio** — Manage AudioSources, AudioListeners, AudioMixers, play/stop clips, adjust mixer parameters
@@ -98,13 +98,111 @@ This package runs a lightweight HTTP bridge inside the Unity Editor on `localhos
 - **Settings** — Configurable port, auto-start, and per-category enable/disable via EditorPrefs
 - **Update Checker** — Automatic GitHub release checking with in-dashboard notification
 
+## Fork Additions
+
+This fork keeps the upstream bridge architecture and adds a small set of tools that make AI-driven Unity edits less brittle in real projects:
+
+| Area | MCP tool name | HTTP route | What it is for |
+|------|---------------|------------|----------------|
+| Editor stability | `unity_wait_editor_idle` | `wait/editor-idle` | Wait for compilation, package refresh, domain reload, and asset import to settle before issuing the next command. |
+| Prefab asset editing | `unity_prefab_asset_instantiate_prefab` | `prefab-asset/instantiate-prefab` | Instantiate one prefab asset inside another prefab asset under a selected child path. |
+| Prefab asset editing | `unity_prefab_asset_move_gameobject` | `prefab-asset/move-gameobject` | Move or reorder a GameObject inside a prefab asset without opening Prefab Mode manually. |
+| Prefab asset search | `unity_prefab_asset_find` | `prefab-asset/find` | Find prefab children by name/path, component type, and serialized property value. |
+| Safe assets | `unity_asset_rename` | `asset/rename` | Rename an asset through `AssetDatabase.RenameAsset`, preserving `.meta`, GUID, and references. |
+| Safe assets | `unity_asset_move` | `asset/move` | Move an asset through `AssetDatabase.MoveAsset`, preserving `.meta`, GUID, and references. |
+| Console inspection | `unity_console_query` | `console/query` | Filter recent console entries by time, log type, message, source stack frame, full stack text, or only entries after the last Play transition. |
+
+### Safe Asset Rename / Move
+
+Use these instead of filesystem-level rename/move operations. Unity's `AssetDatabase` keeps the `.meta` file and updates references correctly.
+
+`asset/rename` expects:
+
+```json
+{
+  "path": "Assets/GameResources/Images/Old Name.png",
+  "newName": "New Name.png"
+}
+```
+
+`asset/move` accepts either a full destination asset path or an existing folder path:
+
+```json
+{
+  "path": "Assets/GameResources/Images/New Name.png",
+  "destinationPath": "Assets/GameResources/Images/Monsters"
+}
+```
+
+Both return the old and new GUIDs:
+
+```json
+{
+  "success": true,
+  "oldGuid": "...",
+  "newGuid": "...",
+  "guidChanged": false,
+  "metaPreserved": true
+}
+```
+
+### Stronger Console Query
+
+`console/query` is useful when normal console reads are too noisy. It can return full stacks for recent errors and filter down to a specific source file or stack keyword:
+
+```json
+{
+  "type": "error",
+  "count": 10,
+  "sourceContains": "MapEndManager",
+  "stackContains": "BattleManager",
+  "includeStack": true
+}
+```
+
+To inspect only errors after the latest Play transition:
+
+```json
+{
+  "type": "error",
+  "sinceLastPlay": true,
+  "includeStack": true
+}
+```
+
+### Prefab Asset Editing
+
+The prefab asset tools operate directly on prefab assets via `PrefabUtility.LoadPrefabContents`, which is safer for scripted edits than driving the editor UI.
+
+Example: find a child by serialized component property before editing it:
+
+```json
+{
+  "assetPath": "Assets/GameResources/Game Prefabs/Entity/Player.prefab",
+  "componentType": "ImpartZoo.Properties.IntPropertyProvider",
+  "propertyName": "propertyName",
+  "propertyValue": "gold_amount_property"
+}
+```
+
+### Editor Idle Wait
+
+Use `unity_wait_editor_idle` after package updates, asset imports, or script edits. It waits for multiple consecutive idle editor frames and returns the current editor state:
+
+```json
+{
+  "timeoutMs": 30000,
+  "stableFrames": 3
+}
+```
+
 ## Installation via Unity Package Manager
 
 1. Open Unity > **Window** > **Package Manager**
 2. Click the **+** button > **Add package from git URL...**
 3. Enter:
    ```
-   https://github.com/AnkleBreaker-Studio/unity-mcp-plugin.git
+   https://github.com/VM233/unity-mcp-plugin.git
    ```
 4. Click **Add**
 
@@ -171,11 +269,11 @@ Settings are stored in `EditorPrefs` and persist across sessions.
 - All operations support Unity's Undo system
 - Multi-agent requests are queued to prevent conflicts
 
-### 288 Tools Across 30+ Categories
+### 290+ Tools Across 30+ Categories
 > Scene management, GameObjects, components, physics, terrain, Shader Graph, Amplify Shader Editor, profiling, animation, NavMesh, builds, multiplayer, and more.
 
 <p align="center">
-  <img src="docs/unity-mcp-features.gif" alt="Unity MCP Features — 268 tools across 30+ categories for AI-powered game development" width="800" />
+  <img src="docs/unity-mcp-features.gif" alt="Unity MCP Features — 290+ tools across 30+ categories for AI-powered game development" width="800" />
 </p>
 
 ## Why AnkleBreaker Unity MCP?
@@ -186,7 +284,7 @@ AnkleBreaker Unity MCP is the most comprehensive MCP integration for Unity, purp
 
 | Feature | **AnkleBreaker MCP** | **Bezi** | **Coplay MCP** | **Unity AI** |
 |---------|:-------------------:|:--------:|:--------------:|:------------:|
-| **Total Tools** | **288** | ~30 | 34 | Limited (built-in) |
+| **Total Tools** | **290+** | ~30 | 34 | Limited (built-in) |
 | **Feature Categories** | **30+** | ~5 | ~5 | N/A |
 | **Non-Blocking Editor** | ✅ Full background operation | ❌ Freezes Unity during tasks | ✅ | ✅ |
 | **Open Source** | ✅ AnkleBreaker Open License | ❌ Proprietary | ✅ MIT License | ❌ Proprietary |
@@ -214,7 +312,7 @@ AnkleBreaker Unity MCP is the most comprehensive MCP integration for Unity, purp
 
 | Solution | Monthly Cost | What You Get |
 |----------|:----------:|--------------| 
-| **AnkleBreaker MCP (free) + Claude Pro** | **$20/mo** | 288 tools, full Unity control, open source — MCP is free, price is Claude only |
+| **AnkleBreaker MCP (free) + Claude Pro** | **$20/mo** | 290+ tools, full Unity control, open source — MCP is free, price is Claude only |
 | **AnkleBreaker MCP (free) + Claude Max 5x** | **$100/mo** | Same + 5x usage for heavy workflows — MCP is free, price is Claude only |
 | **AnkleBreaker MCP (free) + Claude Max 20x** | **$200/mo** | Same + 20x usage for teams/studios — MCP is free, price is Claude only |
 | **Bezi Pro** | $20/mo | ~30 tools, 800 credits/mo, freezes Unity |
@@ -229,7 +327,7 @@ AnkleBreaker Unity MCP is the most comprehensive MCP integration for Unity, purp
 Bezi runs as a proprietary Unity plugin with its own credit-based billing — $20–$200/mo on top of your AI subscription. It has historically suffered from freezing the Unity Editor during AI tasks, blocking your workflow. AnkleBreaker MCP is completely free and open source, runs entirely in the background with zero editor impact, and offers 8x more tools — the only cost is your existing Claude subscription.
 
 **vs. Coplay MCP:**
-Coplay MCP provides 34 tools across ~5 categories. AnkleBreaker MCP delivers 288 tools across 30+ categories including advanced features like physics raycasts, terrain editing, shader graph management, profiling, NavMesh, particle systems, and MPPM multiplayer — none of which exist in Coplay. Our two-tier lazy loading system is specifically optimized for Claude Cowork's tool limits.
+Coplay MCP provides 34 tools across ~5 categories. AnkleBreaker MCP delivers 290+ tools across 30+ categories including advanced features like physics raycasts, terrain editing, shader graph management, profiling, NavMesh, particle systems, and MPPM multiplayer — none of which exist in Coplay. Our two-tier lazy loading system is specifically optimized for Claude Cowork's tool limits.
 
 **vs. Unity AI:**
 Unity AI (successor to Muse) is built into Unity 6.2+ but limited to Unity's own AI models and a credit-based "Unity Points" system. It cannot be used with Claude or any external AI assistant, has no MCP support, and offers a fraction of the automation capabilities. AnkleBreaker MCP works with any MCP-compatible AI while giving you full control over which AI models you use.
@@ -246,6 +344,13 @@ If Unity MCP helps your workflow, consider supporting its development! Your supp
 </a>
 
 **Sponsor tiers include priority feature requests** — your ideas get bumped up the roadmap! Check out the tiers on [GitHub Sponsors](https://github.com/sponsors/AnkleBreaker-Studio) or [Patreon](https://www.patreon.com/AnkleBreakerStudio).
+
+## What's New in This Fork
+
+- **Editor idle wait (`wait/editor-idle`)** — waits for compilation, package refresh, domain reload, and AssetDatabase import to finish before the next AI command.
+- **Prefab asset tools (`prefab-asset/instantiate-prefab`, `prefab-asset/move-gameobject`, `prefab-asset/find`)** — edit prefab assets directly without driving the Prefab Mode UI.
+- **Safe asset rename/move (`asset/rename`, `asset/move`)** — use Unity's `AssetDatabase` path so `.meta` files, GUIDs, and references are preserved; responses report whether the GUID changed.
+- **Stronger console query (`console/query`)** — filter by time, log type, message text, source stack frame, full stack text, or entries after the latest Play transition.
 
 ## What's New in v2.32.0
 
@@ -281,8 +386,8 @@ If Unity MCP helps your workflow, consider supporting its development! Your supp
 **What is Unity MCP Plugin?**
 The Unity MCP Plugin is a Unity Package Manager (UPM) package that runs an HTTP bridge inside the Unity Editor, enabling AI assistants like Claude, Cursor, and Windsurf to control Unity through the Model Context Protocol (MCP). It's the editor-side component of the AnkleBreaker Unity MCP system.
 
-**How do I install the Unity MCP Plugin?**
-Open Unity > Window > Package Manager > click + > Add package from git URL > paste `https://github.com/AnkleBreaker-Studio/unity-mcp-plugin.git` > click Add. The bridge starts automatically.
+**How do I install this fork?**
+Open Unity > Window > Package Manager > click + > Add package from git URL > paste `https://github.com/VM233/unity-mcp-plugin.git` > click Add. The bridge starts automatically.
 
 **Does it work with Claude Desktop and Claude Cowork?**
 Yes. AnkleBreaker Unity MCP is purpose-built for Claude Desktop and Claude Cowork, with a two-tier lazy loading architecture optimized for MCP client tool limits.
