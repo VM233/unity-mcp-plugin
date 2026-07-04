@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -122,6 +123,7 @@ namespace UnityMCP.Editor
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
+            var beforeSnapshot = CaptureAssetText(assetPath);
 
             string prefabPath = GetString(args, "prefabPath");
             string componentType = GetString(args, "componentType");
@@ -162,7 +164,7 @@ namespace UnityMCP.Editor
 
                 PrefabUtility.SaveAsPrefabAsset(root, assetPath);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "prefab", root.name },
@@ -170,6 +172,8 @@ namespace UnityMCP.Editor
                     { "component", componentType },
                     { "property", propertyName },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -191,6 +195,7 @@ namespace UnityMCP.Editor
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
+            var beforeSnapshot = CaptureAssetText(assetPath);
 
             string prefabPath = GetString(args, "prefabPath");
             string componentType = GetString(args, "componentType");
@@ -214,7 +219,7 @@ namespace UnityMCP.Editor
                 var component = go.AddComponent(type);
                 PrefabUtility.SaveAsPrefabAsset(root, assetPath);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "prefab", root.name },
@@ -222,6 +227,8 @@ namespace UnityMCP.Editor
                     { "component", component.GetType().Name },
                     { "fullType", component.GetType().FullName },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -233,6 +240,96 @@ namespace UnityMCP.Editor
             }
         }
 
+        public static void AddComponentDeferred(Dictionary<string, object> args, Action<object> resolve)
+        {
+            string componentType = GetString(args, "componentType");
+            if (string.IsNullOrEmpty(componentType))
+            {
+                resolve(new { error = "componentType is required" });
+                return;
+            }
+
+            if (GetBool(args, "waitForType", true) == false)
+            {
+                resolve(AddComponent(args));
+                return;
+            }
+
+            int timeoutMs = Math.Max(1, GetInt(args, "typeResolveTimeoutMs", 30000));
+            int stableMs = Math.Max(0, GetInt(args, "typeResolveStableMs", 500));
+            bool refreshAssets = GetBool(args, "refreshAssets", true);
+            double startTime = EditorApplication.timeSinceStartup;
+            double stableStartTime = -1;
+            bool refreshRequested = false;
+
+            Action tick = null;
+            Action<object> complete = result =>
+            {
+                if (tick != null)
+                    EditorApplication.update -= tick;
+                resolve(result);
+            };
+
+            tick = () =>
+            {
+                try
+                {
+                    if (refreshAssets && refreshRequested == false)
+                    {
+                        refreshRequested = true;
+                        AssetDatabase.Refresh();
+                    }
+
+                    bool editorBusy = EditorApplication.isCompiling || EditorApplication.isUpdating;
+                    Type resolvedType = MCPComponentCommands.FindType(componentType);
+
+                    if (resolvedType != null && editorBusy == false)
+                    {
+                        if (stableStartTime < 0)
+                            stableStartTime = EditorApplication.timeSinceStartup;
+
+                        double stableElapsedMs = (EditorApplication.timeSinceStartup - stableStartTime) * 1000d;
+                        if (stableElapsedMs >= stableMs)
+                        {
+                            complete(AddComponent(args));
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        stableStartTime = -1;
+                    }
+
+                    double elapsedMs = (EditorApplication.timeSinceStartup - startTime) * 1000d;
+                    if (elapsedMs >= timeoutMs)
+                    {
+                        complete(new Dictionary<string, object>
+                        {
+                            { "error", $"Type '{componentType}' not found after waiting {timeoutMs} ms" },
+                            { "typeResolution", new Dictionary<string, object>
+                                {
+                                    { "componentType", componentType },
+                                    { "elapsedMs", (int)elapsedMs },
+                                    { "timeoutMs", timeoutMs },
+                                    { "refreshedAssets", refreshRequested },
+                                    { "isCompiling", EditorApplication.isCompiling },
+                                    { "isUpdating", EditorApplication.isUpdating },
+                                    { "likelyReason", EditorApplication.isCompiling || EditorApplication.isUpdating ? "unity_busy" : "type_not_found" },
+                                }
+                            },
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    complete(new { error = $"Failed while waiting for component type: {ex.Message}", stackTrace = ex.StackTrace });
+                }
+            };
+
+            EditorApplication.update += tick;
+            tick();
+        }
+
         /// <summary>
         /// Remove a component from a GameObject inside a prefab asset.
         /// </summary>
@@ -241,6 +338,7 @@ namespace UnityMCP.Editor
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
+            var beforeSnapshot = CaptureAssetText(assetPath);
 
             string prefabPath = GetString(args, "prefabPath");
             string componentType = GetString(args, "componentType");
@@ -270,7 +368,7 @@ namespace UnityMCP.Editor
                 UnityEngine.Object.DestroyImmediate(components[index]);
                 PrefabUtility.SaveAsPrefabAsset(root, assetPath);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "prefab", root.name },
@@ -278,6 +376,8 @@ namespace UnityMCP.Editor
                     { "removedComponent", componentType },
                     { "index", index },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -300,6 +400,7 @@ namespace UnityMCP.Editor
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
+            var beforeSnapshot = CaptureAssetText(assetPath);
 
             string prefabPath = GetString(args, "prefabPath");
             string componentType = GetString(args, "componentType");
@@ -403,7 +504,7 @@ namespace UnityMCP.Editor
                 serialized.ApplyModifiedProperties();
                 PrefabUtility.SaveAsPrefabAsset(root, assetPath);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "prefab", root.name },
@@ -412,6 +513,8 @@ namespace UnityMCP.Editor
                     { "property", propertyName },
                     { "reference", refDescription },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -433,6 +536,7 @@ namespace UnityMCP.Editor
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
+            var beforeSnapshot = CaptureAssetText(assetPath);
 
             string parentPrefabPath = GetString(args, "parentPrefabPath");
             string name = GetString(args, "name");
@@ -474,13 +578,15 @@ namespace UnityMCP.Editor
 
                 PrefabUtility.SaveAsPrefabAsset(root, assetPath);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "prefab", root.name },
                     { "createdGameObject", name },
                     { "parent", string.IsNullOrEmpty(parentPrefabPath) ? "root" : parentPrefabPath },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -500,6 +606,7 @@ namespace UnityMCP.Editor
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
+            var beforeSnapshot = CaptureAssetText(assetPath);
 
             string sourcePrefabPath = GetString(args, "sourcePrefabPath");
             if (string.IsNullOrEmpty(sourcePrefabPath))
@@ -544,7 +651,7 @@ namespace UnityMCP.Editor
 
                 PrefabUtility.SaveAsPrefabAsset(root, assetPath);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "prefab", root.name },
@@ -555,6 +662,8 @@ namespace UnityMCP.Editor
                     { "parent", string.IsNullOrEmpty(parentPrefabPath) ? "root" : parentPrefabPath },
                     { "siblingIndex", instance.transform.GetSiblingIndex() },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -575,6 +684,7 @@ namespace UnityMCP.Editor
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
+            var beforeSnapshot = CaptureAssetText(assetPath);
 
             string prefabPath = GetString(args, "prefabPath");
             if (string.IsNullOrEmpty(prefabPath))
@@ -597,13 +707,15 @@ namespace UnityMCP.Editor
                 UnityEngine.Object.DestroyImmediate(go);
                 PrefabUtility.SaveAsPrefabAsset(root, assetPath);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "prefab", root.name },
                     { "deletedGameObject", deletedName },
                     { "prefabPath", prefabPath },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -623,6 +735,7 @@ namespace UnityMCP.Editor
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
+            var beforeSnapshot = CaptureAssetText(assetPath);
 
             string prefabPath = GetString(args, "prefabPath");
             if (string.IsNullOrEmpty(prefabPath))
@@ -661,7 +774,7 @@ namespace UnityMCP.Editor
 
                 PrefabUtility.SaveAsPrefabAsset(root, assetPath);
 
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", true },
                     { "prefab", root.name },
@@ -673,6 +786,8 @@ namespace UnityMCP.Editor
                     { "oldSiblingIndex", oldSiblingIndex },
                     { "newSiblingIndex", go.transform.GetSiblingIndex() },
                 };
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+                return result;
             }
             catch (Exception ex)
             {
@@ -1364,6 +1479,171 @@ namespace UnityMCP.Editor
         private static string GetString(Dictionary<string, object> args, string key)
         {
             return args != null && args.ContainsKey(key) ? args[key]?.ToString() : "";
+        }
+
+        private static void AddPrefabFileDiff(Dictionary<string, object> result,
+            AssetTextSnapshot beforeSnapshot, string assetPath, Dictionary<string, object> args)
+        {
+            if (result == null || GetBool(args, "includePrefabFileDiff", true) == false)
+                return;
+
+            result["prefabFileDiff"] = BuildAssetTextDiff(beforeSnapshot, assetPath, args);
+        }
+
+        private static Dictionary<string, object> BuildAssetTextDiff(AssetTextSnapshot beforeSnapshot,
+            string assetPath, Dictionary<string, object> args)
+        {
+            var afterSnapshot = CaptureAssetText(assetPath);
+            int contextLines = Math.Max(0, GetInt(args, "prefabFileDiffContextLines", 2));
+            int maxLines = Math.Max(1, GetInt(args, "prefabFileDiffMaxLines", 200));
+
+            var result = new Dictionary<string, object>
+            {
+                { "assetPath", assetPath },
+                { "absolutePath", afterSnapshot.AbsolutePath },
+                { "existsBefore", beforeSnapshot.Exists },
+                { "existsAfter", afterSnapshot.Exists },
+                { "readErrorBefore", beforeSnapshot.ReadError ?? "" },
+                { "readErrorAfter", afterSnapshot.ReadError ?? "" },
+            };
+
+            if (!string.IsNullOrEmpty(beforeSnapshot.ReadError) || !string.IsNullOrEmpty(afterSnapshot.ReadError))
+            {
+                result["changed"] = true;
+                result["lines"] = new List<Dictionary<string, object>>();
+                result["truncated"] = false;
+                return result;
+            }
+
+            var beforeLines = SplitLines(beforeSnapshot.Text);
+            var afterLines = SplitLines(afterSnapshot.Text);
+
+            result["beforeLineCount"] = beforeLines.Length;
+            result["afterLineCount"] = afterLines.Length;
+            result["changed"] = beforeSnapshot.Text != afterSnapshot.Text;
+
+            var lines = BuildChangedLineBlock(beforeLines, afterLines, contextLines, maxLines, out int changedLineCount,
+                out bool truncated);
+            result["changedLineCount"] = changedLineCount;
+            result["returnedLineCount"] = lines.Count;
+            result["truncated"] = truncated;
+            result["lines"] = lines;
+            return result;
+        }
+
+        private static List<Dictionary<string, object>> BuildChangedLineBlock(string[] beforeLines, string[] afterLines,
+            int contextLines, int maxLines, out int changedLineCount, out bool truncated)
+        {
+            var lines = new List<Dictionary<string, object>>();
+            truncated = false;
+
+            int prefix = 0;
+            int minCount = Math.Min(beforeLines.Length, afterLines.Length);
+            while (prefix < minCount && beforeLines[prefix] == afterLines[prefix])
+                prefix++;
+
+            if (prefix == beforeLines.Length && prefix == afterLines.Length)
+            {
+                changedLineCount = 0;
+                return lines;
+            }
+
+            int beforeEnd = beforeLines.Length - 1;
+            int afterEnd = afterLines.Length - 1;
+            while (beforeEnd >= prefix && afterEnd >= prefix && beforeLines[beforeEnd] == afterLines[afterEnd])
+            {
+                beforeEnd--;
+                afterEnd--;
+            }
+
+            int contextBeforeStart = Math.Max(0, prefix - contextLines);
+            for (int i = contextBeforeStart; i < prefix; i++)
+                AddDiffLine(lines, maxLines, ref truncated, "context", i + 1, i + 1, beforeLines[i]);
+
+            int removedCount = Math.Max(0, beforeEnd - prefix + 1);
+            int addedCount = Math.Max(0, afterEnd - prefix + 1);
+            changedLineCount = removedCount + addedCount;
+
+            for (int i = prefix; i <= beforeEnd; i++)
+                AddDiffLine(lines, maxLines, ref truncated, "removed", i + 1, null, beforeLines[i]);
+
+            for (int i = prefix; i <= afterEnd; i++)
+                AddDiffLine(lines, maxLines, ref truncated, "added", null, i + 1, afterLines[i]);
+
+            int contextAfterEnd = Math.Min(afterLines.Length - 1, afterEnd + contextLines);
+            for (int i = afterEnd + 1; i <= contextAfterEnd; i++)
+                AddDiffLine(lines, maxLines, ref truncated, "context", null, i + 1, afterLines[i]);
+
+            return lines;
+        }
+
+        private static void AddDiffLine(List<Dictionary<string, object>> lines, int maxLines, ref bool truncated,
+            string type, int? beforeLine, int? afterLine, string text)
+        {
+            if (lines.Count >= maxLines)
+            {
+                truncated = true;
+                return;
+            }
+
+            lines.Add(new Dictionary<string, object>
+            {
+                { "type", type },
+                { "beforeLine", beforeLine.HasValue ? beforeLine.Value : (object)null },
+                { "afterLine", afterLine.HasValue ? afterLine.Value : (object)null },
+                { "text", text },
+            });
+        }
+
+        private static AssetTextSnapshot CaptureAssetText(string assetPath)
+        {
+            var snapshot = new AssetTextSnapshot
+            {
+                AssetPath = assetPath,
+                AbsolutePath = GetAbsoluteAssetPath(assetPath),
+            };
+
+            try
+            {
+                snapshot.Exists = File.Exists(snapshot.AbsolutePath);
+                snapshot.Text = snapshot.Exists ? File.ReadAllText(snapshot.AbsolutePath) : "";
+            }
+            catch (Exception ex)
+            {
+                snapshot.ReadError = ex.Message;
+                snapshot.Text = "";
+            }
+
+            return snapshot;
+        }
+
+        private static string GetAbsoluteAssetPath(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath))
+                return "";
+
+            if (Path.IsPathRooted(assetPath))
+                return Path.GetFullPath(assetPath);
+
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
+        }
+
+        private static string[] SplitLines(string text)
+        {
+            if (string.IsNullOrEmpty(text))
+                return Array.Empty<string>();
+
+            return text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
+        }
+
+        private sealed class AssetTextSnapshot
+        {
+            public string AssetPath;
+            public string AbsolutePath;
+            public bool Exists;
+            public string Text;
+            public string ReadError;
         }
 
         private static bool GetBool(Dictionary<string, object> args, string key, bool defaultValue)

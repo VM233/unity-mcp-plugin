@@ -49,6 +49,7 @@ namespace UnityMCP.Editor
             { "testing/list-tests", MCPTestRunnerCommands.ListTests },
             { "wait/editor-idle", MCPEditorCommands.WaitForIdle },
             { "packages/update-git", MCPPackageManagerCommands.UpdateGitPackageDeferred },
+            { "prefab-asset/add-component", MCPPrefabAssetCommands.AddComponentDeferred },
         };
 
         // SessionState key to persist running state across domain reloads (Play Mode, recompile)
@@ -660,6 +661,8 @@ namespace UnityMCP.Editor
                     return "Read inline and resolved style for a UI Toolkit element.";
                 case "uitoolkit/repaint":
                     return "Trigger repaint on a UI Toolkit EditorWindow or element.";
+                case "uitoolkit/asset-inspect":
+                    return "Inspect UXML and USS assets for VisualElement names, types, and default USS dimensions.";
                 case "animation/set-object-reference-curve":
                     return "Set AnimationClip ObjectReference keyframes, such as SpriteRenderer.m_Sprite.";
                 case "project-tools/list":
@@ -708,6 +711,19 @@ namespace UnityMCP.Editor
                         Prop("rotation", "object", "Optional local Euler rotation object with x/y/z."),
                         Prop("scale", "object", "Optional local scale object with x/y/z.")
                     ), "assetPath", "sourcePrefabPath");
+                case "prefab-asset/add-component":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("prefabPath", "string", "Path of the GameObject inside the prefab. Empty means root."),
+                        Prop("componentType", "string", "Component type name or full name."),
+                        Prop("waitForType", "boolean", "Wait for compilation/import until the component type is available. Defaults to true."),
+                        Prop("typeResolveTimeoutMs", "number", "Maximum type wait time in milliseconds. Defaults to 30000."),
+                        Prop("typeResolveStableMs", "number", "Continuous idle time after type resolution before editing. Defaults to 500."),
+                        Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh once before waiting. Defaults to true."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                        Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
+                        Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200.")
+                    ), "assetPath", "componentType");
                 case "prefab-asset/move-gameobject":
                     return Schema(Props(
                         Prop("assetPath", "string", "Prefab asset path to edit."),
@@ -848,6 +864,20 @@ namespace UnityMCP.Editor
                 case "uitoolkit/repaint":
                     return EditorWindowSchema(Props(
                         Prop("path", "string", "Optional element path from uitoolkit/tree or uitoolkit/query.")
+                    ));
+                case "uitoolkit/asset-inspect":
+                    return Schema(Props(
+                        Prop("uxmlPath", "string", "UXML asset path, e.g. Assets/UI/HUD.uxml."),
+                        Prop("assetPath", "string", "Alias for uxmlPath."),
+                        Prop("path", "string", "Alias for uxmlPath."),
+                        Prop("ussPath", "string", "Optional USS asset path. UXML Style src entries are also auto-resolved."),
+                        Prop("ussPaths", "array", "Optional USS asset paths. UXML Style src entries are also auto-resolved."),
+                        Prop("name", "string", "VisualElement.name exact match."),
+                        Prop("names", "array", "VisualElement.name values to validate."),
+                        Prop("className", "string", "USS class exact match."),
+                        Prop("typeName", "string", "Expected or filtered VisualElement type name."),
+                        Prop("maxResults", "number", "Maximum returned elements per query. Defaults to 100."),
+                        Prop("includeUss", "boolean", "Parse USS files and attach default size declarations. Defaults to true.")
                     ));
                 default:
                     return new Dictionary<string, object>
@@ -1621,6 +1651,8 @@ namespace UnityMCP.Editor
                     return MCPUICommands.GetEditorUIStyle(ParseJson(body));
                 case "uitoolkit/repaint":
                     return MCPUICommands.RepaintEditorUI(ParseJson(body));
+                case "uitoolkit/asset-inspect":
+                    return MCPUICommands.InspectUIToolkitAsset(ParseJson(body));
 
                 // ─── Package Manager ───
                 case "packages/list":

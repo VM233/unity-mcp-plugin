@@ -1,6 +1,10 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
+using System.Xml;
+using System.Xml.Linq;
 using UnityEditor;
 using UnityEngine;
 using UnityEngine.UI;
@@ -415,6 +419,113 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object InspectUIToolkitAsset(Dictionary<string, object> args)
+        {
+            string uxmlPath = NormalizeAssetPath(GetString(args, "uxmlPath"), "");
+            if (string.IsNullOrEmpty(uxmlPath))
+                uxmlPath = NormalizeAssetPath(GetString(args, "assetPath"), "");
+            if (string.IsNullOrEmpty(uxmlPath))
+                uxmlPath = NormalizeAssetPath(GetString(args, "path"), "");
+
+            var ussPaths = GetStringList(args, "ussPaths", "ussPath")
+                .Select(path => NormalizeAssetPath(path, uxmlPath))
+                .Where(path => string.IsNullOrEmpty(path) == false)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            string requestedName = GetString(args, "name");
+            var requestedNames = GetStringList(args, "names", "name")
+                .Where(name => string.IsNullOrEmpty(name) == false)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            string className = GetString(args, "className");
+            string typeName = GetString(args, "typeName");
+            int maxResults = Math.Max(1, GetInt(args, "maxResults", 100));
+            bool includeUss = GetBool(args, "includeUss", true);
+
+            var elements = new List<UxmlElementInfo>();
+            var styleReferences = new List<string>();
+            string uxmlReadError = "";
+
+            if (string.IsNullOrEmpty(uxmlPath) == false)
+            {
+                string absoluteUxmlPath = GetAbsoluteAssetPath(uxmlPath);
+                if (!File.Exists(absoluteUxmlPath))
+                    return new { error = $"UXML asset not found at '{uxmlPath}'" };
+
+                try
+                {
+                    var document = XDocument.Load(absoluteUxmlPath, LoadOptions.SetLineInfo);
+                    if (document.Root != null)
+                        CollectUxmlElements(document.Root, "root", elements, styleReferences);
+                }
+                catch (Exception ex)
+                {
+                    uxmlReadError = ex.Message;
+                }
+            }
+
+            foreach (string styleReference in styleReferences)
+            {
+                string resolvedPath = NormalizeAssetPath(styleReference, uxmlPath);
+                if (string.IsNullOrEmpty(resolvedPath) == false &&
+                    ussPaths.Contains(resolvedPath, StringComparer.OrdinalIgnoreCase) == false)
+                {
+                    ussPaths.Add(resolvedPath);
+                }
+            }
+
+            var ussClassStyles = includeUss ? ReadUssClassStyles(ussPaths) : new Dictionary<string, UssClassStyle>();
+
+            var filteredElements = elements
+                .Where(element => ElementMatches(element, requestedName, className, typeName))
+                .Take(maxResults)
+                .Select(element => BuildUxmlElementDictionary(element, ussClassStyles))
+                .ToList();
+
+            var nameChecks = new List<Dictionary<string, object>>();
+            foreach (string name in requestedNames)
+            {
+                var matches = elements.Where(element => string.Equals(element.Name, name, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+                bool typeMatches = string.IsNullOrEmpty(typeName) ||
+                    matches.Any(element => TypeMatches(element.TypeName, typeName));
+                nameChecks.Add(new Dictionary<string, object>
+                {
+                    { "name", name },
+                    { "exists", matches.Count > 0 },
+                    { "matchCount", matches.Count },
+                    { "typeMatches", typeMatches },
+                    { "matches", matches.Take(maxResults).Select(element => BuildUxmlElementDictionary(element, ussClassStyles)).ToList() },
+                });
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "success", string.IsNullOrEmpty(uxmlReadError) },
+                { "uxmlPath", uxmlPath },
+                { "uxmlReadError", uxmlReadError },
+                { "ussPaths", ussPaths },
+                { "elementCount", elements.Count },
+                { "query", new Dictionary<string, object>
+                    {
+                        { "name", requestedName },
+                        { "names", requestedNames },
+                        { "className", className },
+                        { "typeName", typeName },
+                    }
+                },
+                { "valid", string.IsNullOrEmpty(uxmlReadError) &&
+                    (requestedNames.Count == 0 || nameChecks.All(check =>
+                        Convert.ToBoolean(check["exists"]) && Convert.ToBoolean(check["typeMatches"]))) },
+                { "nameChecks", nameChecks },
+                { "matchedCount", filteredElements.Count },
+                { "elements", filteredElements },
+                { "ussClasses", ussClassStyles.ToDictionary(pair => pair.Key, pair => pair.Value.ToDictionary()) },
+            };
+        }
+
         // ─── Helpers ───
 
         private static GameObject CreateTextElement(string name)
@@ -720,6 +831,239 @@ namespace UnityMCP.Editor
             return true;
         }
 
+        private static void CollectUxmlElements(XElement element, string path, List<UxmlElementInfo> elements,
+            List<string> styleReferences)
+        {
+            string typeName = element.Name.LocalName;
+            if (string.Equals(typeName, "Style", StringComparison.OrdinalIgnoreCase))
+            {
+                string styleSource = GetAttributeValue(element, "src");
+                if (string.IsNullOrEmpty(styleSource) == false)
+                    styleReferences.Add(styleSource);
+            }
+
+            var info = new UxmlElementInfo
+            {
+                Path = path,
+                TypeName = typeName,
+                FullTypeName = element.Name.ToString(),
+                Name = GetAttributeValue(element, "name"),
+                Classes = SplitClasses(GetAttributeValue(element, "class")),
+                InlineStyle = GetAttributeValue(element, "style"),
+                LineNumber = element is IXmlLineInfo lineInfo && lineInfo.HasLineInfo() ? lineInfo.LineNumber : 0,
+            };
+            elements.Add(info);
+
+            int childIndex = 0;
+            foreach (var child in element.Elements())
+            {
+                CollectUxmlElements(child, $"{path}/{childIndex}", elements, styleReferences);
+                childIndex++;
+            }
+        }
+
+        private static bool ElementMatches(UxmlElementInfo element, string name, string className, string typeName)
+        {
+            if (string.IsNullOrEmpty(name) == false &&
+                !string.Equals(element.Name, name, StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            if (string.IsNullOrEmpty(className) == false &&
+                !element.Classes.Any(item => string.Equals(item, className, StringComparison.OrdinalIgnoreCase)))
+                return false;
+
+            if (string.IsNullOrEmpty(typeName) == false && !TypeMatches(element.TypeName, typeName) &&
+                !TypeMatches(element.FullTypeName, typeName))
+                return false;
+
+            return true;
+        }
+
+        private static bool TypeMatches(string actualType, string expectedType)
+        {
+            return string.IsNullOrEmpty(expectedType) ||
+                (!string.IsNullOrEmpty(actualType) &&
+                 actualType.IndexOf(expectedType, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static Dictionary<string, object> BuildUxmlElementDictionary(UxmlElementInfo element,
+            Dictionary<string, UssClassStyle> ussClassStyles)
+        {
+            var resolvedDeclarations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            var matchedClasses = new List<string>();
+
+            foreach (string className in element.Classes)
+            {
+                if (!ussClassStyles.TryGetValue(className, out var style))
+                    continue;
+
+                matchedClasses.Add(className);
+                foreach (var pair in style.Declarations)
+                    resolvedDeclarations[pair.Key] = pair.Value;
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "path", element.Path },
+                { "type", element.TypeName },
+                { "fullType", element.FullTypeName },
+                { "name", element.Name },
+                { "classes", element.Classes },
+                { "inlineStyle", element.InlineStyle },
+                { "line", element.LineNumber },
+                { "ussMatchedClasses", matchedClasses },
+                { "ussDefaultSize", BuildDefaultSizeDictionary(resolvedDeclarations) },
+                { "ussResolvedDeclarations", resolvedDeclarations },
+            };
+        }
+
+        private static Dictionary<string, object> BuildDefaultSizeDictionary(Dictionary<string, string> declarations)
+        {
+            string[] keys =
+            {
+                "width", "height", "min-width", "min-height", "max-width", "max-height",
+                "left", "top", "right", "bottom"
+            };
+
+            var result = new Dictionary<string, object>();
+            foreach (string key in keys)
+            {
+                if (declarations.TryGetValue(key, out string value))
+                    result[key] = value;
+            }
+
+            return result;
+        }
+
+        private static Dictionary<string, UssClassStyle> ReadUssClassStyles(List<string> ussPaths)
+        {
+            var styles = new Dictionary<string, UssClassStyle>(StringComparer.OrdinalIgnoreCase);
+            foreach (string ussPath in ussPaths)
+            {
+                string absolutePath = GetAbsoluteAssetPath(ussPath);
+                if (!File.Exists(absolutePath))
+                    continue;
+
+                string text = Regex.Replace(File.ReadAllText(absolutePath), @"/\*.*?\*/", "", RegexOptions.Singleline);
+                foreach (Match ruleMatch in Regex.Matches(text, @"(?<selector>[^{}]+)\{(?<body>[^{}]*)\}",
+                             RegexOptions.Singleline))
+                {
+                    string selector = ruleMatch.Groups["selector"].Value;
+                    string body = ruleMatch.Groups["body"].Value;
+                    var declarations = ParseUssDeclarations(body);
+                    if (declarations.Count == 0)
+                        continue;
+
+                    foreach (Match classMatch in Regex.Matches(selector, @"\.([A-Za-z_][A-Za-z0-9_-]*)"))
+                    {
+                        string className = classMatch.Groups[1].Value;
+                        if (!styles.TryGetValue(className, out var style))
+                        {
+                            style = new UssClassStyle { ClassName = className };
+                            styles[className] = style;
+                        }
+
+                        if (!style.SourcePaths.Contains(ussPath, StringComparer.OrdinalIgnoreCase))
+                            style.SourcePaths.Add(ussPath);
+
+                        foreach (var pair in declarations)
+                            style.Declarations[pair.Key] = pair.Value;
+                    }
+                }
+            }
+
+            return styles;
+        }
+
+        private static Dictionary<string, string> ParseUssDeclarations(string body)
+        {
+            var declarations = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string rawDeclaration in body.Split(';'))
+            {
+                int separatorIndex = rawDeclaration.IndexOf(':');
+                if (separatorIndex <= 0)
+                    continue;
+
+                string key = rawDeclaration.Substring(0, separatorIndex).Trim();
+                string value = rawDeclaration.Substring(separatorIndex + 1).Trim();
+                if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(value))
+                    continue;
+
+                declarations[key] = value;
+            }
+
+            return declarations;
+        }
+
+        private static string GetAttributeValue(XElement element, string attributeName)
+        {
+            foreach (var attribute in element.Attributes())
+            {
+                if (string.Equals(attribute.Name.LocalName, attributeName, StringComparison.OrdinalIgnoreCase))
+                    return attribute.Value;
+            }
+
+            return "";
+        }
+
+        private static List<string> SplitClasses(string classValue)
+        {
+            if (string.IsNullOrWhiteSpace(classValue))
+                return new List<string>();
+
+            return classValue.Split(new[] { ' ', '\t', '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries)
+                .ToList();
+        }
+
+        private static string NormalizeAssetPath(string rawPath, string relativeToAssetPath)
+        {
+            if (string.IsNullOrWhiteSpace(rawPath))
+                return "";
+
+            string path = rawPath.Trim().Replace('\\', '/');
+            int queryIndex = path.IndexOf('?');
+            if (queryIndex >= 0)
+                path = path.Substring(0, queryIndex);
+
+            int fragmentIndex = path.IndexOf('#');
+            if (fragmentIndex >= 0)
+                path = path.Substring(0, fragmentIndex);
+
+            const string projectPrefix = "project://database/";
+            if (path.StartsWith(projectPrefix, StringComparison.OrdinalIgnoreCase))
+                path = path.Substring(projectPrefix.Length);
+
+            path = Uri.UnescapeDataString(path);
+
+            if (path.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) ||
+                path.StartsWith("Packages/", StringComparison.OrdinalIgnoreCase) ||
+                Path.IsPathRooted(path))
+            {
+                return path;
+            }
+
+            if (string.IsNullOrEmpty(relativeToAssetPath) == false)
+            {
+                string directory = Path.GetDirectoryName(relativeToAssetPath)?.Replace('\\', '/');
+                if (string.IsNullOrEmpty(directory) == false)
+                    return $"{directory}/{path}";
+            }
+
+            return path;
+        }
+
+        private static string GetAbsoluteAssetPath(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath))
+                return "";
+
+            if (Path.IsPathRooted(assetPath))
+                return Path.GetFullPath(assetPath);
+
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
+        }
+
         private static UnityEngine.UIElements.VisualElement FindElement(
             Dictionary<string, object> args, EditorWindow window, out string error)
         {
@@ -916,6 +1260,61 @@ namespace UnityMCP.Editor
                 return defaultValue;
 
             return int.TryParse(args[key].ToString(), out int parsed) ? parsed : defaultValue;
+        }
+
+        private static List<string> GetStringList(Dictionary<string, object> args, string arrayKey, string singleKey)
+        {
+            var results = new List<string>();
+            if (args == null)
+                return results;
+
+            if (args.TryGetValue(arrayKey, out object arrayValue) && arrayValue is List<object> list)
+            {
+                foreach (object item in list)
+                {
+                    if (item != null)
+                        results.Add(item.ToString());
+                }
+            }
+
+            string singleValue = GetString(args, singleKey);
+            if (string.IsNullOrEmpty(singleValue) == false &&
+                results.Contains(singleValue, StringComparer.OrdinalIgnoreCase) == false)
+            {
+                results.Add(singleValue);
+            }
+
+            return results;
+        }
+
+        private sealed class UxmlElementInfo
+        {
+            public string Path;
+            public string TypeName;
+            public string FullTypeName;
+            public string Name;
+            public List<string> Classes = new List<string>();
+            public string InlineStyle;
+            public int LineNumber;
+        }
+
+        private sealed class UssClassStyle
+        {
+            public string ClassName;
+            public readonly List<string> SourcePaths = new List<string>();
+            public readonly Dictionary<string, string> Declarations =
+                new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+            public Dictionary<string, object> ToDictionary()
+            {
+                return new Dictionary<string, object>
+                {
+                    { "className", ClassName },
+                    { "sourcePaths", SourcePaths },
+                    { "declarations", Declarations },
+                    { "defaultSize", BuildDefaultSizeDictionary(Declarations) },
+                };
+            }
         }
     }
 }
