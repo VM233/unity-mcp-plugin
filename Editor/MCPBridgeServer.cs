@@ -578,7 +578,7 @@ namespace UnityMCP.Editor
 
         private static List<string> ExtractRouteCases(string source)
         {
-            int methodIndex = source.IndexOf("private static object RouteRequest(string path", StringComparison.Ordinal);
+            int methodIndex = source.LastIndexOf("private static object RouteRequest(string path", StringComparison.Ordinal);
             if (methodIndex < 0)
                 return new List<string>();
 
