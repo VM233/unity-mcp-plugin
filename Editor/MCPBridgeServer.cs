@@ -640,6 +640,14 @@ namespace UnityMCP.Editor
                     return "Safely move a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "console/query":
                     return "Query recent Unity Console entries with time, source, message, stack, and last-Play filters.";
+                case "animation/transition-info":
+                    return "Read full Animator transition details including conditions, exit time, duration, and offset.";
+                case "animation/update-state":
+                    return "Modify an existing Animator state, including motion, speed, tag, graph position, and default state.";
+                case "animation/update-transition":
+                    return "Modify an existing Animator transition, including settings and condition edits.";
+                case "animation/connect-states":
+                    return "Create transitions between every pair of the provided Animator states.";
                 case "uitoolkit/windows":
                     return "List open Unity Editor windows with UI Toolkit root metadata.";
                 case "uitoolkit/tree":
@@ -736,6 +744,68 @@ namespace UnityMCP.Editor
                         Prop("includeStack", "boolean", "Include full stack traces. Defaults to true."),
                         Prop("newestFirst", "boolean", "Return newest entries first. Defaults to false.")
                     ));
+                case "animation/transition-info":
+                    return Schema(Props(
+                        Prop("controllerPath", "string", "AnimatorController asset path."),
+                        Prop("layerIndex", "number", "Layer index. Defaults to 0."),
+                        Prop("sourceState", "string", "Optional source state name filter."),
+                        Prop("destinationState", "string", "Optional destination state, state machine, or Exit filter."),
+                        Prop("fromAnyState", "boolean", "When true, only inspect Any State transitions. When false, only inspect state transitions."),
+                        Prop("transitionIndex", "number", "Optional transition index under the source.")
+                    ), "controllerPath");
+                case "animation/update-state":
+                    return Schema(Props(
+                        Prop("controllerPath", "string", "AnimatorController asset path."),
+                        Prop("layerIndex", "number", "Layer index. Defaults to 0."),
+                        Prop("stateName", "string", "State name to modify."),
+                        Prop("newStateName", "string", "Optional new state name."),
+                        Prop("motionPath", "string", "AnimationClip or Motion asset path to assign."),
+                        Prop("clipPath", "string", "Alias for motionPath."),
+                        Prop("clearMotion", "boolean", "Clear the state's motion."),
+                        Prop("speed", "number", "State speed."),
+                        Prop("tag", "string", "State tag."),
+                        Prop("position", "object", "State graph position object with x/y."),
+                        Prop("isDefault", "boolean", "Set this state as the layer default state."),
+                        Prop("writeDefaultValues", "boolean", "State write default values flag."),
+                        Prop("mirror", "boolean", "State mirror flag."),
+                        Prop("iKOnFeet", "boolean", "State IK on feet flag."),
+                        Prop("cycleOffset", "number", "State cycle offset.")
+                    ), "controllerPath", "stateName");
+                case "animation/update-transition":
+                    return Schema(Props(
+                        Prop("controllerPath", "string", "AnimatorController asset path."),
+                        Prop("layerIndex", "number", "Layer index. Defaults to 0."),
+                        Prop("sourceState", "string", "Source state name. Required unless fromAnyState is true."),
+                        Prop("destinationState", "string", "Destination state, state machine, or Exit filter."),
+                        Prop("fromAnyState", "boolean", "Modify an Any State transition."),
+                        Prop("transitionIndex", "number", "Optional transition index under the source."),
+                        Prop("hasExitTime", "boolean", "Transition has exit time."),
+                        Prop("exitTime", "number", "Transition exit time."),
+                        Prop("duration", "number", "Transition duration."),
+                        Prop("offset", "number", "Transition offset."),
+                        Prop("hasFixedDuration", "boolean", "Use fixed duration."),
+                        Prop("interruptionSource", "string", "TransitionInterruptionSource value."),
+                        Prop("orderedInterruption", "boolean", "Ordered interruption flag."),
+                        Prop("canTransitionToSelf", "boolean", "Any State can transition to self flag."),
+                        Prop("conditions", "array", "Replace all conditions with this array."),
+                        Prop("addConditions", "array", "Append conditions."),
+                        Prop("updateConditions", "array", "Update conditions by index."),
+                        Prop("removeConditionIndexes", "array", "Remove conditions by index.")
+                    ), "controllerPath");
+                case "animation/connect-states":
+                    return Schema(Props(
+                        Prop("controllerPath", "string", "AnimatorController asset path."),
+                        Prop("layerIndex", "number", "Layer index. Defaults to 0."),
+                        Prop("stateNames", "array", "State names to connect pairwise."),
+                        Prop("skipExisting", "boolean", "Skip existing transitions. Defaults to true."),
+                        Prop("replaceExisting", "boolean", "Remove existing matching transitions before creating new ones."),
+                        Prop("hasExitTime", "boolean", "Transition has exit time applied to created transitions."),
+                        Prop("exitTime", "number", "Transition exit time applied to created transitions."),
+                        Prop("duration", "number", "Transition duration applied to created transitions."),
+                        Prop("offset", "number", "Transition offset applied to created transitions."),
+                        Prop("hasFixedDuration", "boolean", "Fixed duration flag applied to created transitions."),
+                        Prop("conditions", "array", "Conditions applied to every created transition.")
+                    ), "controllerPath", "stateNames");
                 case "uitoolkit/windows":
                     return Schema(Props());
                 case "uitoolkit/tree":
@@ -977,6 +1047,14 @@ namespace UnityMCP.Editor
                     return MCPAnimationCommands.RemoveState(ParseJson(body));
                 case "animation/add-transition":
                     return MCPAnimationCommands.AddTransition(ParseJson(body));
+                case "animation/transition-info":
+                    return MCPAnimationCommands.GetTransitionInfo(ParseJson(body));
+                case "animation/update-state":
+                    return MCPAnimationCommands.UpdateState(ParseJson(body));
+                case "animation/update-transition":
+                    return MCPAnimationCommands.UpdateTransition(ParseJson(body));
+                case "animation/connect-states":
+                    return MCPAnimationCommands.ConnectStates(ParseJson(body));
                 case "animation/create-clip":
                     return MCPAnimationCommands.CreateClip(ParseJson(body));
                 case "animation/clip-info":

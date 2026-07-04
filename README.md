@@ -111,6 +111,7 @@ This fork keeps the upstream bridge architecture and adds a small set of tools t
 | Safe assets | `unity_asset_rename` | `asset/rename` | Rename an asset through `AssetDatabase.RenameAsset`, preserving `.meta`, GUID, and references. |
 | Safe assets | `unity_asset_move` | `asset/move` | Move an asset through `AssetDatabase.MoveAsset`, preserving `.meta`, GUID, and references. |
 | Console inspection | `unity_console_query` | `console/query` | Filter recent console entries by time, log type, message, source stack frame, full stack text, or only entries after the last Play transition. |
+| Animator editing | `unity_animation_transition_info`, `unity_animation_update_state`, `unity_animation_update_transition`, `unity_animation_connect_states` | `animation/*` | Inspect full transition settings, edit existing states/transitions, and connect state sets pairwise. |
 
 ### Safe Asset Rename / Move
 
@@ -351,6 +352,7 @@ If Unity MCP helps your workflow, consider supporting its development! Your supp
 - **Prefab asset tools (`prefab-asset/instantiate-prefab`, `prefab-asset/move-gameobject`, `prefab-asset/find`)** — edit prefab assets directly without driving the Prefab Mode UI.
 - **Safe asset rename/move (`asset/rename`, `asset/move`)** — use Unity's `AssetDatabase` path so `.meta` files, GUIDs, and references are preserved; responses report whether the GUID changed.
 - **Stronger console query (`console/query`)** — filter by time, log type, message text, source stack frame, full stack text, or entries after the latest Play transition.
+- **Animator controller editing (`animation/transition-info`, `animation/update-state`, `animation/update-transition`, `animation/connect-states`)** — inspect complete transition data, modify existing states and transitions, and create pairwise links between selected states.
 
 ## What's New in v2.32.0
 

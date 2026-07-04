@@ -272,6 +272,82 @@ namespace UnityMCP.Editor
             return new { success = true, removed = stateName, layerIndex };
         }
 
+        public static object UpdateState(Dictionary<string, object> args)
+        {
+            string path = args.ContainsKey("controllerPath") ? args["controllerPath"].ToString() : "";
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(path);
+            if (controller == null)
+                return new { error = $"Animator controller not found at '{path}'" };
+
+            string stateName = args.ContainsKey("stateName") ? args["stateName"].ToString() : "";
+            if (string.IsNullOrEmpty(stateName))
+                return new { error = "stateName is required" };
+
+            int layerIndex = args.ContainsKey("layerIndex") ? Convert.ToInt32(args["layerIndex"]) : 0;
+            if (!TryGetLayerStateMachine(controller, layerIndex, out var stateMachine, out var error))
+                return new { error };
+
+            var states = stateMachine.states;
+            int stateIndex = Array.FindIndex(states, s => s.state != null && s.state.name == stateName);
+            if (stateIndex < 0)
+                return new { error = $"State '{stateName}' not found in layer {layerIndex}" };
+
+            var childState = states[stateIndex];
+            var state = childState.state;
+
+            if (args.ContainsKey("newStateName"))
+                state.name = args["newStateName"].ToString();
+            if (args.ContainsKey("speed"))
+                state.speed = Convert.ToSingle(args["speed"]);
+            if (args.ContainsKey("tag"))
+                state.tag = args["tag"].ToString();
+            if (args.ContainsKey("writeDefaultValues"))
+                state.writeDefaultValues = Convert.ToBoolean(args["writeDefaultValues"]);
+            if (args.ContainsKey("mirror"))
+                state.mirror = Convert.ToBoolean(args["mirror"]);
+            if (args.ContainsKey("iKOnFeet"))
+                state.iKOnFeet = Convert.ToBoolean(args["iKOnFeet"]);
+            if (args.ContainsKey("cycleOffset"))
+                state.cycleOffset = Convert.ToSingle(args["cycleOffset"]);
+
+            if (args.ContainsKey("position"))
+            {
+                childState.position = ParseVector2(args["position"]);
+                states[stateIndex] = childState;
+                stateMachine.states = states;
+            }
+
+            if (args.ContainsKey("clearMotion") && Convert.ToBoolean(args["clearMotion"]))
+            {
+                state.motion = null;
+            }
+            else
+            {
+                string motionPath = args.ContainsKey("motionPath")
+                    ? args["motionPath"].ToString()
+                    : args.ContainsKey("clipPath")
+                        ? args["clipPath"].ToString()
+                        : "";
+
+                if (!string.IsNullOrEmpty(motionPath))
+                {
+                    var motion = AssetDatabase.LoadAssetAtPath<Motion>(motionPath);
+                    if (motion == null)
+                        return new { error = $"Motion not found at '{motionPath}'" };
+
+                    state.motion = motion;
+                }
+            }
+
+            if (args.ContainsKey("isDefault") && Convert.ToBoolean(args["isDefault"]))
+                stateMachine.defaultState = state;
+
+            EditorUtility.SetDirty(controller);
+            AssetDatabase.SaveAssets();
+
+            return BuildStateInfo(stateMachine, state, childState.position, layerIndex);
+        }
+
         // ─── Transitions ───
 
         public static object AddTransition(Dictionary<string, object> args)
@@ -297,6 +373,7 @@ namespace UnityMCP.Editor
                     return new { error = $"Destination state '{destName}' not found" };
             }
 
+            AnimatorState sourceState = null;
             AnimatorStateTransition transition;
 
             if (fromAnyState)
@@ -312,42 +389,184 @@ namespace UnityMCP.Editor
                 if (sourceEntry.state == null)
                     return new { error = $"Source state '{sourceName}' not found" };
 
-                transition = sourceEntry.state.AddTransition(destState);
+                sourceState = sourceEntry.state;
+                transition = sourceState.AddTransition(destState);
             }
 
-            // Configure transition
-            if (args.ContainsKey("hasExitTime"))
-                transition.hasExitTime = Convert.ToBoolean(args["hasExitTime"]);
-            if (args.ContainsKey("exitTime"))
-                transition.exitTime = Convert.ToSingle(args["exitTime"]);
-            if (args.ContainsKey("duration"))
-                transition.duration = Convert.ToSingle(args["duration"]);
-            if (args.ContainsKey("offset"))
-                transition.offset = Convert.ToSingle(args["offset"]);
-            if (args.ContainsKey("hasFixedDuration"))
-                transition.hasFixedDuration = Convert.ToBoolean(args["hasFixedDuration"]);
+            ApplyTransitionSettings(transition, args, true);
 
-            // Add conditions
-            if (args.ContainsKey("conditions"))
+            EditorUtility.SetDirty(controller);
+            AssetDatabase.SaveAssets();
+
+            int index = fromAnyState
+                ? Array.IndexOf(stateMachine.anyStateTransitions, transition)
+                : Array.IndexOf(sourceState.transitions, transition);
+
+            return BuildTransitionInfo(transition, fromAnyState ? "AnyState" : sourceName,
+                fromAnyState ? "AnyState" : "State", index);
+        }
+
+        public static object GetTransitionInfo(Dictionary<string, object> args)
+        {
+            string path = args.ContainsKey("controllerPath") ? args["controllerPath"].ToString() : "";
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(path);
+            if (controller == null)
+                return new { error = $"Animator controller not found at '{path}'" };
+
+            int layerIndex = args.ContainsKey("layerIndex") ? Convert.ToInt32(args["layerIndex"]) : 0;
+            if (!TryGetLayerStateMachine(controller, layerIndex, out var stateMachine, out var error))
+                return new { error };
+
+            string sourceName = args.ContainsKey("sourceState") ? args["sourceState"].ToString() : "";
+            string destName = args.ContainsKey("destinationState") ? args["destinationState"].ToString() : "";
+            bool hasFromAnyState = args.ContainsKey("fromAnyState");
+            bool fromAnyState = hasFromAnyState && Convert.ToBoolean(args["fromAnyState"]);
+            int transitionIndex = args.ContainsKey("transitionIndex") ? Convert.ToInt32(args["transitionIndex"]) : -1;
+
+            var transitions = new List<Dictionary<string, object>>();
+
+            if (!hasFromAnyState || fromAnyState)
             {
-                var conditions = args["conditions"] as List<object>;
-                if (conditions != null)
+                var anyTransitions = stateMachine.anyStateTransitions;
+                for (int i = 0; i < anyTransitions.Length; i++)
                 {
-                    foreach (var condObj in conditions)
+                    if (transitionIndex >= 0 && i != transitionIndex)
+                        continue;
+                    if (!string.IsNullOrEmpty(destName) && !TransitionDestinationMatches(anyTransitions[i], destName))
+                        continue;
+
+                    transitions.Add(BuildTransitionInfo(anyTransitions[i], "AnyState", "AnyState", i));
+                }
+            }
+
+            if (!hasFromAnyState || !fromAnyState)
+            {
+                foreach (var childState in stateMachine.states)
+                {
+                    if (childState.state == null)
+                        continue;
+                    if (!string.IsNullOrEmpty(sourceName) && childState.state.name != sourceName)
+                        continue;
+
+                    var stateTransitions = childState.state.transitions;
+                    for (int i = 0; i < stateTransitions.Length; i++)
                     {
-                        var cond = condObj as Dictionary<string, object>;
-                        if (cond == null) continue;
+                        if (transitionIndex >= 0 && i != transitionIndex)
+                            continue;
+                        if (!string.IsNullOrEmpty(destName) && !TransitionDestinationMatches(stateTransitions[i], destName))
+                            continue;
 
-                        string paramName = cond.ContainsKey("parameter") ? cond["parameter"].ToString() : "";
-                        string modeStr = cond.ContainsKey("mode") ? cond["mode"].ToString() : "If";
-                        float threshold = cond.ContainsKey("threshold") ? Convert.ToSingle(cond["threshold"]) : 0f;
-
-                        AnimatorConditionMode mode;
-                        if (!Enum.TryParse(modeStr, true, out mode))
-                            mode = AnimatorConditionMode.If;
-
-                        transition.AddCondition(mode, threshold, paramName);
+                        transitions.Add(BuildTransitionInfo(stateTransitions[i], childState.state.name, "State", i));
                     }
+                }
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "controllerPath", path },
+                { "layerIndex", layerIndex },
+                { "count", transitions.Count },
+                { "transitions", transitions },
+            };
+        }
+
+        public static object UpdateTransition(Dictionary<string, object> args)
+        {
+            string path = args.ContainsKey("controllerPath") ? args["controllerPath"].ToString() : "";
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(path);
+            if (controller == null)
+                return new { error = $"Animator controller not found at '{path}'" };
+
+            int layerIndex = args.ContainsKey("layerIndex") ? Convert.ToInt32(args["layerIndex"]) : 0;
+            string sourceName = args.ContainsKey("sourceState") ? args["sourceState"].ToString() : "";
+            string destName = args.ContainsKey("destinationState") ? args["destinationState"].ToString() : "";
+            bool fromAnyState = args.ContainsKey("fromAnyState") && Convert.ToBoolean(args["fromAnyState"]);
+            int transitionIndex = args.ContainsKey("transitionIndex") ? Convert.ToInt32(args["transitionIndex"]) : -1;
+
+            if (!TryFindTransition(controller, layerIndex, sourceName, destName, fromAnyState, transitionIndex,
+                    out var transition, out var resolvedSource, out var resolvedSourceType, out var resolvedIndex,
+                    out var error))
+            {
+                return new { error };
+            }
+
+            ApplyTransitionSettings(transition, args, false);
+            ApplyTransitionConditionEdits(transition, args);
+
+            EditorUtility.SetDirty(controller);
+            AssetDatabase.SaveAssets();
+
+            return BuildTransitionInfo(transition, resolvedSource, resolvedSourceType, resolvedIndex);
+        }
+
+        public static object ConnectStates(Dictionary<string, object> args)
+        {
+            string path = args.ContainsKey("controllerPath") ? args["controllerPath"].ToString() : "";
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(path);
+            if (controller == null)
+                return new { error = $"Animator controller not found at '{path}'" };
+
+            int layerIndex = args.ContainsKey("layerIndex") ? Convert.ToInt32(args["layerIndex"]) : 0;
+            if (!TryGetLayerStateMachine(controller, layerIndex, out var stateMachine, out var error))
+                return new { error };
+
+            var stateNames = GetStringList(args, "stateNames");
+            if (stateNames.Count < 2)
+                return new { error = "stateNames must contain at least two states" };
+
+            bool skipExisting = !args.ContainsKey("skipExisting") || Convert.ToBoolean(args["skipExisting"]);
+            bool replaceExisting = args.ContainsKey("replaceExisting") && Convert.ToBoolean(args["replaceExisting"]);
+
+            var states = new Dictionary<string, AnimatorState>();
+            foreach (string stateName in stateNames)
+            {
+                var stateEntry = stateMachine.states.FirstOrDefault(s => s.state != null && s.state.name == stateName);
+                if (stateEntry.state == null)
+                    return new { error = $"State '{stateName}' not found in layer {layerIndex}" };
+
+                states[stateName] = stateEntry.state;
+            }
+
+            var created = new List<Dictionary<string, object>>();
+            var skipped = new List<Dictionary<string, object>>();
+
+            foreach (string sourceName in stateNames)
+            {
+                foreach (string destName in stateNames)
+                {
+                    if (sourceName == destName)
+                        continue;
+
+                    var source = states[sourceName];
+                    var destination = states[destName];
+                    var existing = source.transitions
+                        .Where(t => t.destinationState == destination)
+                        .ToArray();
+
+                    if (existing.Length > 0)
+                    {
+                        if (replaceExisting)
+                        {
+                            foreach (var transition in existing)
+                                source.RemoveTransition(transition);
+                        }
+                        else if (skipExisting)
+                        {
+                            skipped.Add(new Dictionary<string, object>
+                            {
+                                { "source", sourceName },
+                                { "destination", destName },
+                                { "reason", "exists" },
+                            });
+                            continue;
+                        }
+                    }
+
+                    var newTransition = source.AddTransition(destination);
+                    ApplyTransitionSettings(newTransition, args, true);
+
+                    created.Add(BuildTransitionInfo(newTransition, sourceName, "State",
+                        source.transitions.Length - 1));
                 }
             }
 
@@ -357,11 +576,13 @@ namespace UnityMCP.Editor
             return new Dictionary<string, object>
             {
                 { "success", true },
-                { "source", fromAnyState ? "AnyState" : sourceName },
-                { "destination", destName },
-                { "hasExitTime", transition.hasExitTime },
-                { "duration", transition.duration },
-                { "conditionCount", transition.conditions.Length },
+                { "controllerPath", path },
+                { "layerIndex", layerIndex },
+                { "stateNames", stateNames },
+                { "createdCount", created.Count },
+                { "skippedCount", skipped.Count },
+                { "created", created },
+                { "skipped", skipped },
             };
         }
 
@@ -1259,6 +1480,357 @@ namespace UnityMCP.Editor
                 { "childCount", blendTree.children.Length },
                 { "children", children.ToArray() },
             };
+        }
+
+        private static bool TryGetLayerStateMachine(AnimatorController controller, int layerIndex,
+            out AnimatorStateMachine stateMachine, out string error)
+        {
+            stateMachine = null;
+            error = null;
+
+            if (layerIndex < 0 || layerIndex >= controller.layers.Length)
+            {
+                error = $"Layer index {layerIndex} out of range (count: {controller.layers.Length})";
+                return false;
+            }
+
+            stateMachine = controller.layers[layerIndex].stateMachine;
+            return true;
+        }
+
+        private static Dictionary<string, object> BuildStateInfo(AnimatorStateMachine stateMachine,
+            AnimatorState state, Vector3 position, int layerIndex)
+        {
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "layerIndex", layerIndex },
+                { "stateName", state.name },
+                { "nameHash", state.nameHash },
+                { "motion", state.motion != null ? state.motion.name : null },
+                { "motionPath", state.motion != null ? AssetDatabase.GetAssetPath(state.motion) : null },
+                { "speed", state.speed },
+                { "tag", state.tag },
+                { "writeDefaultValues", state.writeDefaultValues },
+                { "mirror", state.mirror },
+                { "iKOnFeet", state.iKOnFeet },
+                { "cycleOffset", state.cycleOffset },
+                { "position", new Dictionary<string, object> { { "x", position.x }, { "y", position.y } } },
+                { "isDefault", stateMachine.defaultState == state },
+            };
+        }
+
+        private static Vector2 ParseVector2(object value)
+        {
+            if (value is Dictionary<string, object> d)
+            {
+                return new Vector2(
+                    d.ContainsKey("x") ? Convert.ToSingle(d["x"]) : 0f,
+                    d.ContainsKey("y") ? Convert.ToSingle(d["y"]) : 0f
+                );
+            }
+
+            return Vector2.zero;
+        }
+
+        private static void ApplyTransitionSettings(AnimatorStateTransition transition,
+            Dictionary<string, object> args, bool includeConditions)
+        {
+            if (args.ContainsKey("hasExitTime"))
+                transition.hasExitTime = Convert.ToBoolean(args["hasExitTime"]);
+            if (args.ContainsKey("exitTime"))
+                transition.exitTime = Convert.ToSingle(args["exitTime"]);
+            if (args.ContainsKey("duration"))
+                transition.duration = Convert.ToSingle(args["duration"]);
+            if (args.ContainsKey("offset"))
+                transition.offset = Convert.ToSingle(args["offset"]);
+            if (args.ContainsKey("hasFixedDuration"))
+                transition.hasFixedDuration = Convert.ToBoolean(args["hasFixedDuration"]);
+            if (args.ContainsKey("interruptionSource"))
+            {
+                if (Enum.TryParse(args["interruptionSource"].ToString(), true,
+                        out TransitionInterruptionSource interruptionSource))
+                    transition.interruptionSource = interruptionSource;
+            }
+            if (args.ContainsKey("orderedInterruption"))
+                transition.orderedInterruption = Convert.ToBoolean(args["orderedInterruption"]);
+            if (args.ContainsKey("canTransitionToSelf"))
+                transition.canTransitionToSelf = Convert.ToBoolean(args["canTransitionToSelf"]);
+            if (args.ContainsKey("mute"))
+                transition.mute = Convert.ToBoolean(args["mute"]);
+            if (args.ContainsKey("solo"))
+                transition.solo = Convert.ToBoolean(args["solo"]);
+
+            if (includeConditions && args.ContainsKey("conditions"))
+                ReplaceConditions(transition, ParseConditions(args["conditions"]));
+        }
+
+        private static bool TryFindTransition(AnimatorController controller, int layerIndex, string sourceName,
+            string destName, bool fromAnyState, int transitionIndex, out AnimatorStateTransition transition,
+            out string resolvedSource, out string resolvedSourceType, out int resolvedIndex, out string error)
+        {
+            transition = null;
+            resolvedSource = null;
+            resolvedSourceType = null;
+            resolvedIndex = -1;
+            error = null;
+
+            if (!TryGetLayerStateMachine(controller, layerIndex, out var stateMachine, out error))
+                return false;
+
+            if (fromAnyState)
+            {
+                var transitions = stateMachine.anyStateTransitions;
+                transition = FindTransitionInArray(transitions, destName, transitionIndex, out resolvedIndex);
+                if (transition == null)
+                {
+                    error = "AnyState transition not found";
+                    return false;
+                }
+
+                resolvedSource = "AnyState";
+                resolvedSourceType = "AnyState";
+                return true;
+            }
+
+            if (string.IsNullOrEmpty(sourceName))
+            {
+                error = "sourceState is required unless fromAnyState is true";
+                return false;
+            }
+
+            var sourceEntry = stateMachine.states.FirstOrDefault(s => s.state != null && s.state.name == sourceName);
+            if (sourceEntry.state == null)
+            {
+                error = $"Source state '{sourceName}' not found";
+                return false;
+            }
+
+            transition = FindTransitionInArray(sourceEntry.state.transitions, destName, transitionIndex,
+                out resolvedIndex);
+            if (transition == null)
+            {
+                error = "Transition not found";
+                return false;
+            }
+
+            resolvedSource = sourceName;
+            resolvedSourceType = "State";
+            return true;
+        }
+
+        private static AnimatorStateTransition FindTransitionInArray(AnimatorStateTransition[] transitions,
+            string destName, int transitionIndex, out int resolvedIndex)
+        {
+            resolvedIndex = -1;
+
+            if (transitionIndex >= 0)
+            {
+                if (transitionIndex < transitions.Length)
+                {
+                    resolvedIndex = transitionIndex;
+                    return transitions[transitionIndex];
+                }
+
+                return null;
+            }
+
+            for (int i = 0; i < transitions.Length; i++)
+            {
+                if (string.IsNullOrEmpty(destName) || TransitionDestinationMatches(transitions[i], destName))
+                {
+                    resolvedIndex = i;
+                    return transitions[i];
+                }
+            }
+
+            return null;
+        }
+
+        private static bool TransitionDestinationMatches(AnimatorStateTransition transition, string destName)
+        {
+            return transition.destinationState != null && transition.destinationState.name == destName ||
+                   transition.destinationStateMachine != null && transition.destinationStateMachine.name == destName ||
+                   transition.isExit && string.Equals(destName, "Exit", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static Dictionary<string, object> BuildTransitionInfo(AnimatorStateTransition transition,
+            string source, string sourceType, int transitionIndex)
+        {
+            var conditions = new List<Dictionary<string, object>>();
+            for (int i = 0; i < transition.conditions.Length; i++)
+            {
+                var condition = transition.conditions[i];
+                conditions.Add(new Dictionary<string, object>
+                {
+                    { "index", i },
+                    { "parameter", condition.parameter },
+                    { "mode", condition.mode.ToString() },
+                    { "threshold", condition.threshold },
+                });
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "index", transitionIndex },
+                { "name", transition.name },
+                { "source", source },
+                { "sourceType", sourceType },
+                { "destinationState", transition.destinationState != null ? transition.destinationState.name : null },
+                { "destinationStateMachine", transition.destinationStateMachine != null ? transition.destinationStateMachine.name : null },
+                { "isExit", transition.isExit },
+                { "mute", transition.mute },
+                { "solo", transition.solo },
+                { "hasExitTime", transition.hasExitTime },
+                { "exitTime", transition.exitTime },
+                { "duration", transition.duration },
+                { "offset", transition.offset },
+                { "hasFixedDuration", transition.hasFixedDuration },
+                { "interruptionSource", transition.interruptionSource.ToString() },
+                { "orderedInterruption", transition.orderedInterruption },
+                { "canTransitionToSelf", transition.canTransitionToSelf },
+                { "conditionCount", transition.conditions.Length },
+                { "conditions", conditions },
+            };
+        }
+
+        private static void ApplyTransitionConditionEdits(AnimatorStateTransition transition,
+            Dictionary<string, object> args)
+        {
+            if (args.ContainsKey("conditions"))
+            {
+                ReplaceConditions(transition, ParseConditions(args["conditions"]));
+                return;
+            }
+
+            bool changed = false;
+            var conditions = transition.conditions.ToList();
+
+            if (args.ContainsKey("removeConditionIndexes"))
+            {
+                var indexes = GetIntList(args, "removeConditionIndexes");
+                indexes.Sort();
+                indexes.Reverse();
+                foreach (int index in indexes)
+                {
+                    if (index >= 0 && index < conditions.Count)
+                    {
+                        conditions.RemoveAt(index);
+                        changed = true;
+                    }
+                }
+            }
+
+            if (args.ContainsKey("updateConditions"))
+            {
+                foreach (var conditionObj in GetObjectList(args, "updateConditions"))
+                {
+                    var conditionArgs = conditionObj as Dictionary<string, object>;
+                    if (conditionArgs == null || !conditionArgs.ContainsKey("index"))
+                        continue;
+
+                    int index = Convert.ToInt32(conditionArgs["index"]);
+                    if (index < 0 || index >= conditions.Count)
+                        continue;
+
+                    var condition = conditions[index];
+                    if (conditionArgs.ContainsKey("parameter"))
+                        condition.parameter = conditionArgs["parameter"].ToString();
+                    if (conditionArgs.ContainsKey("mode") &&
+                        Enum.TryParse(conditionArgs["mode"].ToString(), true, out AnimatorConditionMode mode))
+                        condition.mode = mode;
+                    if (conditionArgs.ContainsKey("threshold"))
+                        condition.threshold = Convert.ToSingle(conditionArgs["threshold"]);
+
+                    conditions[index] = condition;
+                    changed = true;
+                }
+            }
+
+            if (args.ContainsKey("addConditions"))
+            {
+                conditions.AddRange(ParseConditions(args["addConditions"]));
+                changed = true;
+            }
+
+            if (changed)
+                ReplaceConditions(transition, conditions);
+        }
+
+        private static List<AnimatorCondition> ParseConditions(object value)
+        {
+            var conditions = new List<AnimatorCondition>();
+            var conditionObjects = value as List<object>;
+            if (conditionObjects == null)
+                return conditions;
+
+            foreach (var conditionObj in conditionObjects)
+            {
+                var conditionArgs = conditionObj as Dictionary<string, object>;
+                if (conditionArgs == null)
+                    continue;
+
+                var condition = new AnimatorCondition
+                {
+                    parameter = conditionArgs.ContainsKey("parameter") ? conditionArgs["parameter"].ToString() : "",
+                    threshold = conditionArgs.ContainsKey("threshold")
+                        ? Convert.ToSingle(conditionArgs["threshold"])
+                        : 0f,
+                    mode = AnimatorConditionMode.If,
+                };
+
+                if (conditionArgs.ContainsKey("mode") &&
+                    Enum.TryParse(conditionArgs["mode"].ToString(), true, out AnimatorConditionMode mode))
+                    condition.mode = mode;
+
+                conditions.Add(condition);
+            }
+
+            return conditions;
+        }
+
+        private static void ReplaceConditions(AnimatorStateTransition transition,
+            IEnumerable<AnimatorCondition> conditions)
+        {
+            foreach (var condition in transition.conditions.ToArray())
+                transition.RemoveCondition(condition);
+
+            foreach (var condition in conditions)
+                transition.AddCondition(condition.mode, condition.threshold, condition.parameter);
+        }
+
+        private static List<string> GetStringList(Dictionary<string, object> args, string key)
+        {
+            var result = new List<string>();
+            foreach (var value in GetObjectList(args, key))
+            {
+                if (value != null)
+                    result.Add(value.ToString());
+            }
+
+            return result;
+        }
+
+        private static List<int> GetIntList(Dictionary<string, object> args, string key)
+        {
+            var result = new List<int>();
+            foreach (var value in GetObjectList(args, key))
+            {
+                if (value != null && int.TryParse(value.ToString(), out int parsed))
+                    result.Add(parsed);
+            }
+
+            return result;
+        }
+
+        private static List<object> GetObjectList(Dictionary<string, object> args, string key)
+        {
+            if (args == null || !args.ContainsKey(key))
+                return new List<object>();
+
+            var values = args[key] as List<object>;
+            return values ?? new List<object>();
         }
 
         private static Type ResolveUnityType(string typeName, Type fallback = null)
