@@ -262,7 +262,7 @@ namespace UnityMCP.Editor
             double stableStartTime = -1;
             bool refreshRequested = false;
 
-            Action tick = null;
+            EditorApplication.CallbackFunction tick = null;
             Action<object> complete = result =>
             {
                 if (tick != null)
