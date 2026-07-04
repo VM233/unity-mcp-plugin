@@ -7,7 +7,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using UnityEditor;
-using UnityEditor.PackageManager;
 using UnityEngine;
 
 namespace UnityMCP.Editor
@@ -547,7 +546,7 @@ namespace UnityMCP.Editor
             var paths = new List<string>();
             string projectRoot = Directory.GetParent(Application.dataPath).FullName;
 
-            var packageInfo = PackageInfo.FindForAssembly(typeof(MCPBridgeServer).Assembly);
+            var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(MCPBridgeServer).Assembly);
             if (!string.IsNullOrEmpty(packageInfo?.resolvedPath))
                 paths.Add(Path.Combine(packageInfo.resolvedPath, "Editor", "MCPBridgeServer.cs"));
 
