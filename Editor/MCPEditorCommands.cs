@@ -29,10 +29,13 @@ namespace UnityMCP.Editor
 
         public static void WaitForIdle(Dictionary<string, object> args, Action<object> resolve)
         {
-            int timeoutMs = GetInt(args, "timeoutMs", 30000);
+            int timeoutMs = Math.Max(1, GetInt(args, "timeoutMs", 30000));
             int stableFrames = Math.Max(1, GetInt(args, "stableFrames", 3));
+            int stableMs = Math.Max(0, GetInt(args, "stableMs", 500));
             double startTime = EditorApplication.timeSinceStartup;
+            double stableStartTime = -1;
             int currentStableFrames = 0;
+            List<string> lastBusyReasons = new List<string>();
             bool resolved = false;
 
             void Resolve(object result)
@@ -46,20 +49,32 @@ namespace UnityMCP.Editor
 
             void Tick()
             {
-                bool isIdle = IsEditorIdle();
-                if (isIdle)
+                var snapshot = GetEditorIdleSnapshot();
+                if (snapshot.IsIdle)
                 {
+                    if (currentStableFrames == 0)
+                    {
+                        stableStartTime = EditorApplication.timeSinceStartup;
+                    }
+
                     currentStableFrames++;
                 }
                 else
                 {
                     currentStableFrames = 0;
+                    stableStartTime = -1;
+                    lastBusyReasons = snapshot.BusyReasons;
                 }
 
-                if (currentStableFrames >= stableFrames)
+                double stableDurationMs = stableStartTime >= 0
+                    ? (EditorApplication.timeSinceStartup - stableStartTime) * 1000d
+                    : 0;
+
+                if (currentStableFrames >= stableFrames && stableDurationMs >= stableMs)
                 {
                     EditorApplication.update -= Tick;
-                    Resolve(BuildIdleResult(true, false, timeoutMs, stableFrames, startTime));
+                    Resolve(BuildIdleResult(true, false, timeoutMs, stableFrames, stableMs,
+                        currentStableFrames, stableDurationMs, startTime, snapshot, lastBusyReasons));
                     return;
                 }
 
@@ -67,7 +82,8 @@ namespace UnityMCP.Editor
                 if (elapsedMs >= timeoutMs)
                 {
                     EditorApplication.update -= Tick;
-                    Resolve(BuildIdleResult(false, true, timeoutMs, stableFrames, startTime));
+                    Resolve(BuildIdleResult(false, true, timeoutMs, stableFrames, stableMs,
+                        currentStableFrames, stableDurationMs, startTime, snapshot, lastBusyReasons));
                 }
             }
 
@@ -565,30 +581,71 @@ public static class MCPDynamicCode
 
         private static bool IsEditorIdle()
         {
-            return EditorApplication.isCompiling == false &&
-                   EditorApplication.isUpdating == false &&
-                   EditorApplication.isPlayingOrWillChangePlaymode == false;
+            return GetEditorIdleSnapshot().IsIdle;
         }
 
         private static Dictionary<string, object> BuildIdleResult(bool success, bool timedOut, int timeoutMs,
-            int stableFrames, double startTime)
+            int stableFrames, int stableMs, int currentStableFrames, double stableDurationMs, double startTime,
+            EditorIdleSnapshot snapshot, List<string> lastBusyReasons)
         {
             var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
             return new Dictionary<string, object>
             {
                 { "success", success },
                 { "timedOut", timedOut },
-                { "isIdle", IsEditorIdle() },
-                { "isCompiling", EditorApplication.isCompiling },
-                { "isUpdating", EditorApplication.isUpdating },
+                { "isIdle", snapshot.IsIdle },
+                { "busyReasons", snapshot.BusyReasons },
+                { "lastBusyReasons", lastBusyReasons },
+                { "isCompiling", snapshot.IsCompiling },
+                { "isUpdating", snapshot.IsUpdating },
                 { "isPlaying", EditorApplication.isPlaying },
-                { "isPlayingOrWillChangePlaymode", EditorApplication.isPlayingOrWillChangePlaymode },
+                { "isChangingPlayMode", snapshot.IsChangingPlayMode },
+                { "isPlayingOrWillChangePlaymode", snapshot.IsPlayingOrWillChangePlaymode },
                 { "activeScene", scene.name },
                 { "activeScenePath", scene.path },
                 { "timeoutMs", timeoutMs },
                 { "stableFrames", stableFrames },
+                { "stableMs", stableMs },
+                { "currentStableFrames", currentStableFrames },
+                { "stableDurationMs", (long)stableDurationMs },
                 { "elapsedMs", (long)((EditorApplication.timeSinceStartup - startTime) * 1000d) },
             };
+        }
+
+        private static EditorIdleSnapshot GetEditorIdleSnapshot()
+        {
+            var busyReasons = new List<string>();
+            bool isCompiling = EditorApplication.isCompiling;
+            bool isUpdating = EditorApplication.isUpdating;
+            bool isPlayingOrWillChangePlaymode = EditorApplication.isPlayingOrWillChangePlaymode;
+            bool isChangingPlayMode = isPlayingOrWillChangePlaymode != EditorApplication.isPlaying;
+
+            if (isCompiling)
+                busyReasons.Add("compiling");
+            if (isUpdating)
+                busyReasons.Add("asset_database_updating");
+            if (isChangingPlayMode)
+                busyReasons.Add("play_mode_changing");
+
+            return new EditorIdleSnapshot
+            {
+                IsIdle = busyReasons.Count == 0,
+                IsCompiling = isCompiling,
+                IsUpdating = isUpdating,
+                IsPlayingOrWillChangePlaymode = isPlayingOrWillChangePlaymode,
+                IsChangingPlayMode = isChangingPlayMode,
+                BusyReasons = busyReasons
+            };
+        }
+
+        private sealed class EditorIdleSnapshot
+        {
+            public bool IsIdle;
+            public bool IsCompiling;
+            public bool IsUpdating;
+            public bool IsPlayingOrWillChangePlaymode;
+            public bool IsChangingPlayMode;
+            public List<string> BusyReasons;
         }
 
         private static int GetInt(Dictionary<string, object> args, string key, int defaultValue)

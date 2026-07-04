@@ -694,7 +694,8 @@ namespace UnityMCP.Editor
                 case "wait/editor-idle":
                     return Schema(Props(
                         Prop("timeoutMs", "number", "Maximum wait time in milliseconds. Defaults to 30000."),
-                        Prop("stableFrames", "number", "Number of consecutive idle editor frames required. Defaults to 3.")
+                        Prop("stableFrames", "number", "Number of consecutive idle editor frames required. Defaults to 3."),
+                        Prop("stableMs", "number", "Minimum continuous idle time in milliseconds. Defaults to 500.")
                     ));
                 case "prefab-asset/instantiate-prefab":
                     return Schema(Props(

@@ -81,6 +81,7 @@ Call `project-tools/list` to discover tools, then `project-tools/execute` with:
 ## Notes
 
 - Use the upstream README for the general feature list and MCP setup flow.
+- `unity_wait_editor_idle` waits for both consecutive idle editor frames and a continuous idle time window (`stableMs`, default `500`) to avoid returning before a delayed compile or asset import starts.
 - This fork intentionally keeps the package smaller by removing local documentation images.
 - The package is still the Unity Editor side only. You need an MCP server/client setup to call the tools from an assistant.
 - Package updates can take time if Unity needs to fetch from GitHub. Pinning commits keeps project state reproducible.
