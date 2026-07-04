@@ -504,6 +504,9 @@ namespace UnityMCP.Editor
                 // UI
                 "ui/create-canvas", "ui/add-element", "ui/set-rect", "ui/set-text",
                 "ui/set-image", "ui/set-button", "ui/get-hierarchy",
+                // UI Toolkit editor windows
+                "uitoolkit/windows", "uitoolkit/tree", "uitoolkit/query",
+                "uitoolkit/style", "uitoolkit/repaint",
                 // Lighting
                 "lighting/create", "lighting/set-property", "lighting/bake", "lighting/get-settings",
                 "lighting/set-settings", "lighting/get-probes",
@@ -1235,6 +1238,16 @@ namespace UnityMCP.Editor
                     return MCPUICommands.SetUIText(ParseJson(body));
                 case "ui/set-image":
                     return MCPUICommands.SetUIImage(ParseJson(body));
+                case "uitoolkit/windows":
+                    return MCPUICommands.ListEditorUIWindows(ParseJson(body));
+                case "uitoolkit/tree":
+                    return MCPUICommands.GetEditorUITree(ParseJson(body));
+                case "uitoolkit/query":
+                    return MCPUICommands.QueryEditorUI(ParseJson(body));
+                case "uitoolkit/style":
+                    return MCPUICommands.GetEditorUIStyle(ParseJson(body));
+                case "uitoolkit/repaint":
+                    return MCPUICommands.RepaintEditorUI(ParseJson(body));
 
                 // ─── Package Manager ───
                 case "packages/list":
