@@ -492,7 +492,7 @@ namespace UnityMCP.Editor
                 "animation/create-controller", "animation/get-controller", "animation/add-state",
                 "animation/remove-state", "animation/add-transition", "animation/remove-transition",
                 "animation/set-parameter", "animation/remove-parameter", "animation/get-parameters",
-                "animation/create-clip", "animation/set-clip-curve", "animation/get-clip-info",
+                "animation/create-clip", "animation/set-clip-curve", "animation/set-object-reference-curve", "animation/get-clip-info",
                 "animation/set-state-motion", "animation/add-layer", "animation/remove-layer",
                 "animation/get-layers", "animation/set-default-state", "animation/add-blend-tree",
                 // Physics
@@ -708,6 +708,8 @@ namespace UnityMCP.Editor
                     return MCPAnimationCommands.GetClipInfo(ParseJson(body));
                 case "animation/set-clip-curve":
                     return MCPAnimationCommands.SetClipCurve(ParseJson(body));
+                case "animation/set-object-reference-curve":
+                    return MCPAnimationCommands.SetObjectReferenceCurve(ParseJson(body));
                 case "animation/add-layer":
                     return MCPAnimationCommands.AddLayer(ParseJson(body));
                 case "animation/assign-controller":

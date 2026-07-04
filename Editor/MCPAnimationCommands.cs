@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.Animations;
 using UnityEngine;
@@ -435,6 +436,28 @@ namespace UnityMCP.Editor
                 });
             }
 
+            var objectReferenceBindings = AnimationUtility.GetObjectReferenceCurveBindings(clip);
+            var objectReferenceCurves = new List<Dictionary<string, object>>();
+            foreach (var binding in objectReferenceBindings)
+            {
+                var keyframes = AnimationUtility.GetObjectReferenceCurve(clip, binding);
+                var keyframeInfos = new List<Dictionary<string, object>>();
+                for (int i = 0; i < keyframes.Length; i++)
+                {
+                    keyframeInfos.Add(GetObjectReferenceKeyframeInfo(i, keyframes[i]));
+                }
+
+                objectReferenceCurves.Add(new Dictionary<string, object>
+                {
+                    { "path", binding.path },
+                    { "propertyName", binding.propertyName },
+                    { "type", binding.type != null ? binding.type.Name : null },
+                    { "typeFullName", binding.type != null ? binding.type.FullName : null },
+                    { "keyframeCount", keyframes.Length },
+                    { "keyframes", keyframeInfos.ToArray() },
+                });
+            }
+
             var settings = AnimationUtility.GetAnimationClipSettings(clip);
 
             return new Dictionary<string, object>
@@ -447,6 +470,8 @@ namespace UnityMCP.Editor
                 { "wrapMode", clip.wrapMode.ToString() },
                 { "curveCount", curves.Count },
                 { "curves", curves },
+                { "objectReferenceCurveCount", objectReferenceCurves.Count },
+                { "objectReferenceCurves", objectReferenceCurves },
                 { "events", clip.events.Length },
                 { "isHumanMotion", clip.humanMotion },
             };
@@ -500,6 +525,78 @@ namespace UnityMCP.Editor
                 { "clipPath", path },
                 { "relativePath", relativePath },
                 { "propertyName", propertyName },
+                { "keyframeCount", keyframes.Count },
+            };
+        }
+
+        public static object SetObjectReferenceCurve(Dictionary<string, object> args)
+        {
+            string path = args.ContainsKey("clipPath") ? args["clipPath"].ToString() : "";
+            var clip = AssetDatabase.LoadAssetAtPath<AnimationClip>(path);
+            if (clip == null)
+                return new { error = $"Animation clip not found at '{path}'" };
+
+            string relativePath = args.ContainsKey("relativePath") ? args["relativePath"].ToString() : "";
+            string propertyName = args.ContainsKey("propertyName") ? args["propertyName"].ToString() : "";
+            string typeName = args.ContainsKey("type") ? args["type"].ToString() : "SpriteRenderer";
+
+            if (string.IsNullOrEmpty(propertyName))
+                return new { error = "propertyName is required" };
+
+            Type type = ResolveUnityType(typeName, typeof(SpriteRenderer));
+            if (type == null)
+                return new { error = $"Could not resolve type '{typeName}'" };
+
+            if (!args.ContainsKey("keyframes"))
+                return new { error = "keyframes is required" };
+
+            var kfList = args["keyframes"] as List<object>;
+            if (kfList == null)
+                return new { error = "keyframes must be an array" };
+
+            var keyframes = new List<ObjectReferenceKeyframe>();
+            for (int i = 0; i < kfList.Count; i++)
+            {
+                var kf = kfList[i] as Dictionary<string, object>;
+                if (kf == null)
+                    return new { error = $"keyframes[{i}] must be an object" };
+
+                if (!kf.ContainsKey("time"))
+                    return new { error = $"keyframes[{i}].time is required" };
+
+                UnityEngine.Object value;
+                try
+                {
+                    value = ResolveObjectReferenceKeyframeValue(kf, type, propertyName);
+                }
+                catch (Exception e)
+                {
+                    return new { error = $"Failed to resolve keyframes[{i}] object reference: {e.Message}" };
+                }
+
+                keyframes.Add(new ObjectReferenceKeyframe
+                {
+                    time = Convert.ToSingle(kf["time"]),
+                    value = value,
+                });
+            }
+
+            keyframes.Sort((a, b) => a.time.CompareTo(b.time));
+
+            var binding = EditorCurveBinding.PPtrCurve(relativePath, type, propertyName);
+            AnimationUtility.SetObjectReferenceCurve(clip, binding, keyframes.ToArray());
+
+            EditorUtility.SetDirty(clip);
+            AssetDatabase.SaveAssets();
+            AssetDatabase.ImportAsset(path);
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "clipPath", path },
+                { "relativePath", relativePath },
+                { "propertyName", propertyName },
+                { "type", type.Name },
                 { "keyframeCount", keyframes.Count },
             };
         }
@@ -1162,6 +1259,140 @@ namespace UnityMCP.Editor
                 { "childCount", blendTree.children.Length },
                 { "children", children.ToArray() },
             };
+        }
+
+        private static Type ResolveUnityType(string typeName, Type fallback = null)
+        {
+            if (string.IsNullOrEmpty(typeName))
+                return fallback;
+
+            Type type = Type.GetType(typeName)
+                        ?? Type.GetType($"UnityEngine.{typeName}, UnityEngine")
+                        ?? Type.GetType($"UnityEngine.{typeName}, UnityEngine.CoreModule")
+                        ?? Type.GetType($"UnityEngine.UI.{typeName}, UnityEngine.UI");
+            if (type != null)
+                return type;
+
+            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    type = assembly.GetType(typeName);
+                    if (type != null)
+                        return type;
+
+                    type = assembly.GetTypes().FirstOrDefault(t => t.Name == typeName);
+                    if (type != null)
+                        return type;
+                }
+                catch (ReflectionTypeLoadException e)
+                {
+                    type = e.Types.FirstOrDefault(t => t != null && t.Name == typeName);
+                    if (type != null)
+                        return type;
+                }
+            }
+
+            return fallback;
+        }
+
+        private static Dictionary<string, object> GetObjectReferenceKeyframeInfo(int index, ObjectReferenceKeyframe keyframe)
+        {
+            var value = keyframe.value;
+            string assetPath = value != null ? AssetDatabase.GetAssetPath(value) : null;
+            string guid = null;
+            long localFileId = 0;
+
+            if (value != null)
+                AssetDatabase.TryGetGUIDAndLocalFileIdentifier(value, out guid, out localFileId);
+
+            return new Dictionary<string, object>
+            {
+                { "index", index },
+                { "time", keyframe.time },
+                { "objectName", value != null ? value.name : null },
+                { "objectType", value != null ? value.GetType().Name : null },
+                { "assetPath", string.IsNullOrEmpty(assetPath) ? null : assetPath },
+                { "guid", guid },
+                { "localFileId", localFileId },
+            };
+        }
+
+        private static UnityEngine.Object ResolveObjectReferenceKeyframeValue(
+            Dictionary<string, object> keyframe, Type bindingType, string propertyName)
+        {
+            object value = null;
+
+            if (keyframe.ContainsKey("value"))
+                value = keyframe["value"];
+            else if (keyframe.ContainsKey("objectReference"))
+                value = keyframe["objectReference"];
+            else if (keyframe.ContainsKey("reference"))
+                value = keyframe["reference"];
+
+            if (value != null)
+                return MCPComponentCommands.ResolveObjectReference(value);
+
+            if (!keyframe.ContainsKey("assetPath") && !keyframe.ContainsKey("spritePath"))
+                return null;
+
+            string assetPath = keyframe.ContainsKey("assetPath")
+                ? keyframe["assetPath"].ToString()
+                : keyframe["spritePath"].ToString();
+            string assetName = keyframe.ContainsKey("assetName")
+                ? keyframe["assetName"].ToString()
+                : keyframe.ContainsKey("name")
+                    ? keyframe["name"].ToString()
+                    : null;
+            string objectTypeName = keyframe.ContainsKey("objectType")
+                ? keyframe["objectType"].ToString()
+                : keyframe.ContainsKey("assetType")
+                    ? keyframe["assetType"].ToString()
+                    : null;
+
+            Type objectType = ResolveUnityType(objectTypeName, GetExpectedObjectReferenceType(bindingType, propertyName));
+            return LoadObjectReferenceAsset(assetPath, assetName, objectType);
+        }
+
+        private static Type GetExpectedObjectReferenceType(Type bindingType, string propertyName)
+        {
+            if (bindingType == typeof(SpriteRenderer) && propertyName == "m_Sprite")
+                return typeof(Sprite);
+
+            return typeof(UnityEngine.Object);
+        }
+
+        private static UnityEngine.Object LoadObjectReferenceAsset(string assetPath, string assetName, Type objectType)
+        {
+            if (string.IsNullOrEmpty(assetPath))
+                return null;
+
+            objectType = objectType ?? typeof(UnityEngine.Object);
+
+            if (!string.IsNullOrEmpty(assetName))
+            {
+                foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(assetPath))
+                {
+                    if (asset != null && objectType.IsAssignableFrom(asset.GetType()) && asset.name == assetName)
+                        return asset;
+                }
+
+                throw new InvalidOperationException($"Could not find '{assetName}' of type '{objectType.Name}' at '{assetPath}'");
+            }
+
+            var mainAsset = AssetDatabase.LoadAssetAtPath(assetPath, objectType);
+            if (mainAsset != null)
+                return mainAsset;
+
+            var assets = AssetDatabase.LoadAllAssetsAtPath(assetPath)
+                .Where(asset => asset != null && objectType.IsAssignableFrom(asset.GetType()))
+                .ToArray();
+            if (assets.Length == 1)
+                return assets[0];
+            if (assets.Length > 1)
+                throw new InvalidOperationException($"Multiple assets of type '{objectType.Name}' found at '{assetPath}'. Provide assetName.");
+
+            throw new InvalidOperationException($"Could not load object reference asset at '{assetPath}'");
         }
     }
 }
