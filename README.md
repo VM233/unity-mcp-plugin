@@ -92,6 +92,8 @@ Call `project-tools/list` to discover tools, then `project-tools/execute` with:
 }
 ```
 
+If an MCP client has stale tool metadata, use the companion server's stable `unity_advanced_tool` entry with `tool` set to a raw route such as `project-tools/execute`, or to `project-tool:<toolName>` for project-defined tools.
+
 ## Notes
 
 - Use the upstream README for the general feature list and MCP setup flow.
