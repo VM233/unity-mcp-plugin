@@ -710,7 +710,9 @@ namespace UnityMCP.Editor
                         Prop("gitUrl", "string", "Optional Git URL. Defaults to the current manifest Git URL."),
                         Prop("ref", "string", "Optional branch, tag, or commit. Defaults to main."),
                         Prop("commit", "string", "Optional commit hash alias for ref."),
-                        Prop("branch", "string", "Optional branch alias for ref.")
+                        Prop("branch", "string", "Optional branch alias for ref."),
+                        Prop("skipIfResolved", "boolean", "Skip Package Manager resolve when packages-lock already matches the requested Git commit. Defaults to true."),
+                        Prop("force", "boolean", "Force Package Manager resolve even when packages-lock already matches. Defaults to false.")
                     ), "name");
                 case "packages/lint-metas":
                     return Schema(Props(

@@ -80,6 +80,25 @@ namespace UnityMCP.Editor
                 return;
             }
 
+            bool skipIfResolved = GetBool(args, "skipIfResolved", true);
+            bool force = GetBool(args, "force", false);
+            var existingLockInfo = GetPackageLockInfo(name);
+            if (!force && skipIfResolved && IsGitPackageResolvedToIdentifier(existingLockInfo, identifier))
+            {
+                resolve(new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "skipped", true },
+                    { "skipReason", "Package already resolved to the requested Git commit." },
+                    { "name", name },
+                    { "requestedIdentifier", identifier },
+                    { "lockVersion", existingLockInfo.version },
+                    { "lockSource", existingLockInfo.source },
+                    { "lockHash", existingLockInfo.hash },
+                });
+                return;
+            }
+
             AddRequest addRequest;
             try
             {
@@ -109,6 +128,7 @@ namespace UnityMCP.Editor
                 resolve(new Dictionary<string, object>
                 {
                     { "success", true },
+                    { "skipped", false },
                     { "name", pkg.name },
                     { "displayName", pkg.displayName },
                     { "requestedIdentifier", identifier },
@@ -458,6 +478,23 @@ namespace UnityMCP.Editor
             return (version, source, hash);
         }
 
+        private static bool IsGitPackageResolvedToIdentifier((string version, string source, string hash) lockInfo,
+            string identifier)
+        {
+            if (!string.Equals(lockInfo.source, "git", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            string requestedRef = GetGitRef(identifier);
+            if (!IsLikelyCommitHash(requestedRef))
+                return false;
+
+            if (!string.IsNullOrEmpty(lockInfo.hash) &&
+                lockInfo.hash.StartsWith(requestedRef, StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            return string.Equals(lockInfo.version, identifier, StringComparison.OrdinalIgnoreCase);
+        }
+
         private static bool IsGitIdentifier(string identifier)
         {
             return identifier.StartsWith("git+", StringComparison.OrdinalIgnoreCase) ||
@@ -471,6 +508,29 @@ namespace UnityMCP.Editor
         {
             int hashIndex = identifier.IndexOf('#');
             return hashIndex >= 0 ? identifier.Substring(0, hashIndex) : identifier;
+        }
+
+        private static string GetGitRef(string identifier)
+        {
+            int hashIndex = identifier.LastIndexOf('#');
+            return hashIndex >= 0 && hashIndex < identifier.Length - 1 ? identifier.Substring(hashIndex + 1) : "";
+        }
+
+        private static bool IsLikelyCommitHash(string value)
+        {
+            if (string.IsNullOrEmpty(value) || value.Length < 7 || value.Length > 40)
+                return false;
+
+            foreach (char c in value)
+            {
+                bool isDigit = c >= '0' && c <= '9';
+                bool isLowerHex = c >= 'a' && c <= 'f';
+                bool isUpperHex = c >= 'A' && c <= 'F';
+                if (!isDigit && !isLowerHex && !isUpperHex)
+                    return false;
+            }
+
+            return true;
         }
 
         private static string GetProjectRoot()

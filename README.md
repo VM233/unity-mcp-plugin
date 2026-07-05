@@ -58,7 +58,7 @@ http://127.0.0.1:7890/api/ping
 | Screenshot utilities | `unity_screenshot_crop` | `screenshot/crop` | Crop a screenshot or image file to a PNG for focused visual inspection. |
 | Graphics utilities | `unity_graphics_image_alpha_bounds` | `graphics/image-alpha-bounds` | Inspect a PNG or texture asset and return visible alpha pixel bounds plus transparent margins. |
 | Graphics utilities | `unity_graphics_rect_gap` | `graphics/rect-gap` | Measure a gap or overlap between two rectangles along selected edges. |
-| Package management | `unity_packages_update_git` | `packages/update-git` | Update a Git package through a deferred route so Unity does not block its main thread while Package Manager resolves the dependency. |
+| Package management | `unity_packages_update_git` | `packages/update-git` | Update a Git package through a deferred route; same-commit updates skip Unity Package Manager resolve by default. |
 | Project extensions | `unity_project_tools_list` | `project-tools/list` | List project-defined extension tools from loaded Unity editor assemblies. |
 | Project extensions | `unity_project_tools_execute` | `project-tools/execute` | Execute a project-defined extension tool by `toolName`. |
 
@@ -97,6 +97,7 @@ Call `project-tools/list` to discover tools, then `project-tools/execute` with:
 - Use the upstream README for the general feature list and MCP setup flow.
 - `unity_wait_editor_idle` waits for both consecutive idle editor frames and a continuous idle time window (`stableMs`, default `500`) to avoid returning before a delayed compile or asset import starts.
 - Prefab asset mutation tools return `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it or adjust `prefabFileDiffMaxLines`.
+- `unity_packages_update_git` defaults to `skipIfResolved=true`. When the requested ref is a commit hash already recorded in `packages-lock.json`, the tool returns `skipped=true` without asking Unity Package Manager to resolve again. Pass `force=true` to force a resolve.
 - This fork intentionally keeps the package smaller by removing local documentation images.
 - The package is still the Unity Editor side only. You need an MCP server/client setup to call the tools from an assistant.
 - Package updates can take time if Unity needs to fetch from GitHub. Pinning commits keeps project state reproducible.
