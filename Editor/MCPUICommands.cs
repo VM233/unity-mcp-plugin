@@ -526,6 +526,250 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object ListRuntimeUIDocuments(Dictionary<string, object> args)
+        {
+            bool includeInactive = GetBool(args, "includeInactive", true);
+            var documents = GetRuntimeUIDocuments(includeInactive)
+                .Select(BuildUIDocumentInfo)
+                .ToList();
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "count", documents.Count },
+                { "documents", documents },
+            };
+        }
+
+        public static object GetRuntimeUITree(Dictionary<string, object> args)
+        {
+            var document = FindRuntimeUIDocument(args, out string error);
+            if (document == null)
+                return new { error };
+
+            var root = document.rootVisualElement;
+            if (root == null)
+                return new { error = $"UIDocument '{document.name}' has no rootVisualElement" };
+
+            int maxDepth = GetInt(args, "maxDepth", 8);
+            int maxNodes = GetInt(args, "maxNodes", 300);
+            bool includeStyle = GetBool(args, "includeStyle", false);
+            int count = 0;
+            bool truncated = false;
+            var tree = BuildElementTree(root, "root", 0, maxDepth, maxNodes, includeStyle, ref count, ref truncated);
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "document", BuildUIDocumentInfo(document) },
+                { "nodeCount", count },
+                { "truncated", truncated },
+                { "tree", tree },
+            };
+        }
+
+        public static object QueryRuntimeUI(Dictionary<string, object> args)
+        {
+            var document = FindRuntimeUIDocument(args, out string error);
+            if (document == null)
+                return new { error };
+
+            var root = document.rootVisualElement;
+            if (root == null)
+                return new { error = $"UIDocument '{document.name}' has no rootVisualElement" };
+
+            bool includeStyle = GetBool(args, "includeStyle", false);
+            var element = FindRuntimeElement(args, document, out string elementPath, out error);
+            if (element != null && HasElementLocator(args))
+            {
+                return new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "document", BuildUIDocumentInfo(document) },
+                    { "count", 1 },
+                    { "results", new List<Dictionary<string, object>>
+                        {
+                            BuildElementInfo(element, elementPath, includeStyle),
+                        }
+                    },
+                };
+            }
+
+            string name = GetString(args, "name");
+            string className = GetString(args, "className");
+            string typeName = GetString(args, "typeName");
+            string text = GetString(args, "text");
+            if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(className) &&
+                string.IsNullOrEmpty(typeName) && string.IsNullOrEmpty(text))
+                return new { error = string.IsNullOrEmpty(error) ? "At least one query filter or path is required" : error };
+
+            int maxResults = GetInt(args, "maxResults", 50);
+            var results = new List<Dictionary<string, object>>();
+            QueryElements(root, "root", name, className, typeName, text, includeStyle, maxResults, results);
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "document", BuildUIDocumentInfo(document) },
+                { "count", results.Count },
+                { "results", results },
+            };
+        }
+
+        public static object GetRuntimeUIStyle(Dictionary<string, object> args)
+        {
+            var document = FindRuntimeUIDocument(args, out string error);
+            if (document == null)
+                return new { error };
+
+            var element = FindRuntimeElement(args, document, out string elementPath, out error);
+            if (element == null)
+                return new { error };
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "document", BuildUIDocumentInfo(document) },
+                { "element", BuildElementInfo(element, elementPath, false) },
+                { "inlineStyle", BuildInlineStyleInfo(element) },
+                { "resolvedStyle", BuildResolvedStyleInfo(element) },
+                { "background", BuildBackgroundInfo(element) },
+            };
+        }
+
+        public static object RepaintRuntimeUI(Dictionary<string, object> args)
+        {
+            var document = FindRuntimeUIDocument(args, out string error);
+            if (document == null)
+                return new { error };
+
+            var element = FindRuntimeElement(args, document, out string elementPath, out error);
+            if (element == null && HasElementLocator(args))
+                return new { error };
+
+            if (element != null)
+                element.MarkDirtyRepaint();
+
+            document.rootVisualElement?.MarkDirtyRepaint();
+            EditorApplication.QueuePlayerLoopUpdate();
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "document", BuildUIDocumentInfo(document) },
+                { "repaintedPath", element == null ? "root" : elementPath },
+            };
+        }
+
+        public static object RefreshUIToolkit(Dictionary<string, object> args)
+        {
+            bool refreshAssets = GetBool(args, "refreshAssets", true);
+            bool forceSynchronousImport = GetBool(args, "forceSynchronousImport", true);
+            if (refreshAssets)
+            {
+                var options = forceSynchronousImport
+                    ? ImportAssetOptions.ForceSynchronousImport
+                    : ImportAssetOptions.Default;
+                AssetDatabase.Refresh(options);
+            }
+
+            int documentCount = MarkAllUIToolkitDirty();
+            EditorApplication.QueuePlayerLoopUpdate();
+
+            return BuildUIToolkitRefreshResult(true, false, 0, 0, documentCount);
+        }
+
+        public static void WaitForUIToolkitRefresh(Dictionary<string, object> args, Action<object> resolve)
+        {
+            bool refreshAssets = GetBool(args, "refreshAssets", true);
+            bool forceSynchronousImport = GetBool(args, "forceSynchronousImport", true);
+            if (refreshAssets)
+            {
+                var options = forceSynchronousImport
+                    ? ImportAssetOptions.ForceSynchronousImport
+                    : ImportAssetOptions.Default;
+                AssetDatabase.Refresh(options);
+            }
+
+            int timeoutMs = Math.Max(1, GetInt(args, "timeoutMs", 10000));
+            int stableFrames = Math.Max(1, GetInt(args, "stableFrames", 2));
+            double startTime = EditorApplication.timeSinceStartup;
+            int frameCount = 0;
+            int stableFrameCount = 0;
+            bool resolved = false;
+
+            void Resolve(object result)
+            {
+                if (resolved)
+                    return;
+
+                resolved = true;
+                resolve(result);
+            }
+
+            void Tick()
+            {
+                frameCount++;
+                int documentCount = MarkAllUIToolkitDirty();
+                bool idle = !EditorApplication.isCompiling && !EditorApplication.isUpdating;
+                stableFrameCount = idle ? stableFrameCount + 1 : 0;
+                double elapsedMs = (EditorApplication.timeSinceStartup - startTime) * 1000d;
+
+                if (stableFrameCount >= stableFrames)
+                {
+                    EditorApplication.update -= Tick;
+                    Resolve(BuildUIToolkitRefreshResult(true, false, elapsedMs, frameCount, documentCount));
+                    return;
+                }
+
+                if (elapsedMs >= timeoutMs)
+                {
+                    EditorApplication.update -= Tick;
+                    Resolve(BuildUIToolkitRefreshResult(false, true, elapsedMs, frameCount, documentCount));
+                }
+            }
+
+            Tick();
+            if (!resolved)
+                EditorApplication.update += Tick;
+        }
+
+        public static object AssertUIToolkitLayout(Dictionary<string, object> args)
+        {
+            var document = FindRuntimeUIDocument(args, out string error);
+            if (document == null)
+                return new { error };
+
+            var root = document.rootVisualElement;
+            if (root == null)
+                return new { error = $"UIDocument '{document.name}' has no rootVisualElement" };
+
+            var assertionArgs = GetObjectList(args, "assertions");
+            if (assertionArgs.Count == 0)
+                return new { error = "assertions array is required" };
+
+            var results = new List<Dictionary<string, object>>();
+            bool valid = true;
+
+            for (int i = 0; i < assertionArgs.Count; i++)
+            {
+                var assertion = AsDictionary(assertionArgs[i]);
+                var result = BuildLayoutAssertion(root, assertion, i);
+                results.Add(result);
+                if (!GetBool(result, "passed", false))
+                    valid = false;
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "valid", valid },
+                { "document", BuildUIDocumentInfo(document) },
+                { "count", results.Count },
+                { "results", results },
+            };
+        }
+
         // ─── Helpers ───
 
         private static GameObject CreateTextElement(string name)
@@ -647,6 +891,253 @@ namespace UnityMCP.Editor
                 { "hasRootVisualElement", root != null },
                 { "rootChildCount", root?.childCount ?? 0 },
             };
+        }
+
+        private static Dictionary<string, object> BuildUIDocumentInfo(UnityEngine.UIElements.UIDocument document)
+        {
+            var root = document != null ? document.rootVisualElement : null;
+            var visualTreeAsset = document != null ? document.visualTreeAsset : null;
+            var panelSettings = document != null ? document.panelSettings : null;
+
+            return new Dictionary<string, object>
+            {
+                { "instanceId", document != null ? document.GetInstanceID() : 0 },
+                { "name", document != null ? document.name : "" },
+                { "enabled", document != null && document.enabled },
+                { "gameObjectName", document != null ? document.gameObject.name : "" },
+                { "gameObjectPath", document != null ? GetGameObjectPath(document.transform) : "" },
+                { "gameObjectActive", document != null && document.gameObject.activeInHierarchy },
+                { "visualTreeAsset", visualTreeAsset != null ? visualTreeAsset.name : "" },
+                { "visualTreeAssetPath", visualTreeAsset != null ? AssetDatabase.GetAssetPath(visualTreeAsset) : "" },
+                { "panelSettings", panelSettings != null ? panelSettings.name : "" },
+                { "panelSettingsPath", panelSettings != null ? AssetDatabase.GetAssetPath(panelSettings) : "" },
+                { "hasRootVisualElement", root != null },
+                { "rootChildCount", root?.childCount ?? 0 },
+                { "rootWorldBound", root != null ? RectToDictionary(root.worldBound) : null },
+            };
+        }
+
+        private static List<UnityEngine.UIElements.UIDocument> GetRuntimeUIDocuments(bool includeInactive)
+        {
+            return Resources.FindObjectsOfTypeAll<UnityEngine.UIElements.UIDocument>()
+                .Where(document => document != null &&
+                                   document.gameObject != null &&
+                                   document.gameObject.scene.IsValid() &&
+                                   (includeInactive || (document.enabled && document.gameObject.activeInHierarchy)))
+                .OrderBy(document => GetGameObjectPath(document.transform), StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
+        private static UnityEngine.UIElements.UIDocument FindRuntimeUIDocument(
+            Dictionary<string, object> args, out string error)
+        {
+            error = "";
+            bool includeInactive = GetBool(args, "includeInactive", true);
+            int instanceId = GetInt(args, "documentInstanceId", 0);
+            if (instanceId == 0)
+                instanceId = GetInt(args, "uidocumentInstanceId", 0);
+            if (instanceId == 0)
+                instanceId = GetInt(args, "instanceId", 0);
+
+            string documentName = GetString(args, "documentName");
+            string gameObjectPath = GetString(args, "gameObjectPath");
+            string gameObjectName = GetString(args, "gameObjectName");
+
+            if (instanceId != 0)
+            {
+                var obj = EditorUtility.InstanceIDToObject(instanceId);
+                if (obj is UnityEngine.UIElements.UIDocument directDocument)
+                    return directDocument;
+                if (obj is GameObject go)
+                {
+                    var component = go.GetComponent<UnityEngine.UIElements.UIDocument>();
+                    if (component != null)
+                        return component;
+                }
+
+                error = $"UIDocument or GameObject instanceId '{instanceId}' was not found";
+                return null;
+            }
+
+            var documents = GetRuntimeUIDocuments(includeInactive);
+            if (string.IsNullOrEmpty(gameObjectPath) == false)
+            {
+                string normalizedPath = NormalizeGameObjectPath(gameObjectPath);
+                documents = documents
+                    .Where(document => string.Equals(GetGameObjectPath(document.transform), normalizedPath,
+                        StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+
+            if (string.IsNullOrEmpty(gameObjectName) == false)
+            {
+                documents = documents
+                    .Where(document => string.Equals(document.gameObject.name, gameObjectName,
+                        StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+
+            if (string.IsNullOrEmpty(documentName) == false)
+            {
+                documents = documents
+                    .Where(document => string.Equals(document.name, documentName, StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+            }
+
+            if (documents.Count == 1)
+                return documents[0];
+
+            if (documents.Count == 0)
+            {
+                error = "No runtime UIDocument matched the supplied filters";
+                return null;
+            }
+
+            if (string.IsNullOrEmpty(gameObjectPath) && string.IsNullOrEmpty(gameObjectName) &&
+                string.IsNullOrEmpty(documentName))
+            {
+                var activeDocuments = documents
+                    .Where(document => document.enabled && document.gameObject.activeInHierarchy)
+                    .ToList();
+                if (activeDocuments.Count > 0)
+                    return activeDocuments[0];
+            }
+
+            error = $"Multiple runtime UIDocuments matched ({documents.Count}). Pass gameObjectPath, documentName, or documentInstanceId.";
+            return null;
+        }
+
+        private static UnityEngine.UIElements.VisualElement FindRuntimeElement(
+            Dictionary<string, object> args, UnityEngine.UIElements.UIDocument document,
+            out string elementPath, out string error)
+        {
+            elementPath = "root";
+            error = "";
+
+            var root = document.rootVisualElement;
+            if (root == null)
+            {
+                error = $"UIDocument '{document.name}' has no rootVisualElement";
+                return null;
+            }
+
+            string path = GetString(args, "path");
+            if (string.IsNullOrEmpty(path))
+                path = GetString(args, "treePath");
+            if (string.IsNullOrEmpty(path) == false)
+            {
+                var element = GetElementByFlexiblePath(root, path);
+                if (element != null)
+                {
+                    elementPath = GetElementPath(root, element);
+                    return element;
+                }
+
+                error = $"UI Toolkit element path '{path}' was not found";
+                return null;
+            }
+
+            var visualElementPath = GetVisualElementPathNames(args, "");
+            if (visualElementPath.Count > 0)
+            {
+                var element = GetElementByVisualElementPath(root, visualElementPath);
+                if (element != null)
+                {
+                    elementPath = GetElementPath(root, element);
+                    return element;
+                }
+
+                error = $"VisualElementPath '{string.Join("/", visualElementPath)}' was not found";
+                return null;
+            }
+
+            string name = GetString(args, "name");
+            string className = GetString(args, "className");
+            string typeName = GetString(args, "typeName");
+            string text = GetString(args, "text");
+            if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(className) &&
+                string.IsNullOrEmpty(typeName) && string.IsNullOrEmpty(text))
+                return root;
+
+            var results = new List<Dictionary<string, object>>();
+            QueryElements(root, "root", name, className, typeName, text, false, 1, results);
+            if (results.Count == 0)
+            {
+                error = "No UI Toolkit element matched the supplied query filters";
+                return null;
+            }
+
+            elementPath = results[0]["path"].ToString();
+            return GetElementByPath(root, elementPath);
+        }
+
+        private static bool HasElementLocator(Dictionary<string, object> args)
+        {
+            return string.IsNullOrEmpty(GetString(args, "path")) == false ||
+                   string.IsNullOrEmpty(GetString(args, "treePath")) == false ||
+                   string.IsNullOrEmpty(GetString(args, "visualElementPath")) == false ||
+                   string.IsNullOrEmpty(GetString(args, "namePath")) == false ||
+                   GetStringList(args, "visualElementNames", "").Count > 0 ||
+                   GetStringList(args, "names", "").Count > 0;
+        }
+
+        private static int MarkAllUIToolkitDirty()
+        {
+            int documentCount = 0;
+            foreach (var document in GetRuntimeUIDocuments(true))
+            {
+                if (document.rootVisualElement == null)
+                    continue;
+
+                document.rootVisualElement.MarkDirtyRepaint();
+                documentCount++;
+            }
+
+            foreach (var window in Resources.FindObjectsOfTypeAll<EditorWindow>().Where(window => window != null))
+            {
+                window.rootVisualElement?.MarkDirtyRepaint();
+                window.Repaint();
+            }
+
+            SceneView.RepaintAll();
+            return documentCount;
+        }
+
+        private static Dictionary<string, object> BuildUIToolkitRefreshResult(
+            bool success, bool timedOut, double elapsedMs, int frameCount, int documentCount)
+        {
+            return new Dictionary<string, object>
+            {
+                { "success", success },
+                { "timedOut", timedOut },
+                { "elapsedMs", Math.Round(elapsedMs, 2) },
+                { "frameCount", frameCount },
+                { "repaintedRuntimeDocuments", documentCount },
+                { "isCompiling", EditorApplication.isCompiling },
+                { "isUpdating", EditorApplication.isUpdating },
+            };
+        }
+
+        private static string GetGameObjectPath(Transform transform)
+        {
+            if (transform == null)
+                return "";
+
+            var names = new List<string>();
+            var current = transform;
+            while (current != null)
+            {
+                names.Add(current.name);
+                current = current.parent;
+            }
+
+            names.Reverse();
+            return string.Join("/", names);
+        }
+
+        private static string NormalizeGameObjectPath(string path)
+        {
+            return (path ?? "").Trim().Trim('/').Replace('\\', '/');
         }
 
         private static EditorWindow FindEditorWindow(Dictionary<string, object> args, out string error)
@@ -784,6 +1275,7 @@ namespace UnityMCP.Editor
             {
                 info["inlineStyle"] = BuildInlineStyleInfo(element);
                 info["resolvedStyle"] = BuildResolvedStyleInfo(element);
+                info["background"] = BuildBackgroundInfo(element);
             }
 
             return info;
@@ -829,6 +1321,417 @@ namespace UnityMCP.Editor
                 return false;
 
             return true;
+        }
+
+        private static UnityEngine.UIElements.VisualElement GetElementByFlexiblePath(
+            UnityEngine.UIElements.VisualElement root, string path)
+        {
+            var element = GetElementByPath(root, path);
+            if (element != null)
+                return element;
+
+            var names = SplitVisualElementPath(path);
+            return names.Count > 0 ? GetElementByVisualElementPath(root, names) : null;
+        }
+
+        private static UnityEngine.UIElements.VisualElement GetElementByVisualElementPath(
+            UnityEngine.UIElements.VisualElement root, List<string> names)
+        {
+            if (root == null || names == null || names.Count == 0)
+                return null;
+
+            var current = FindNamedElement(root, names[0], true);
+            for (int i = 1; i < names.Count && current != null; i++)
+            {
+                current = FindNamedElement(current, names[i], false);
+            }
+
+            return current;
+        }
+
+        private static UnityEngine.UIElements.VisualElement FindNamedElement(
+            UnityEngine.UIElements.VisualElement root, string name, bool includeRoot)
+        {
+            if (root == null || string.IsNullOrEmpty(name))
+                return null;
+
+            if (includeRoot && string.Equals(root.name, name, StringComparison.Ordinal))
+                return root;
+
+            foreach (var child in root.Children())
+            {
+                var result = FindNamedElement(child, name, true);
+                if (result != null)
+                    return result;
+            }
+
+            return null;
+        }
+
+        private static List<string> GetVisualElementPathNames(Dictionary<string, object> args, string prefix)
+        {
+            var names = new List<string>();
+            if (args == null)
+                return names;
+
+            string visualElementPathKey = string.IsNullOrEmpty(prefix) ? "visualElementPath" : $"{prefix}VisualElementPath";
+            if (args.TryGetValue(visualElementPathKey, out object pathValue))
+                AddVisualElementPathNames(names, pathValue);
+
+            string namePathKey = string.IsNullOrEmpty(prefix) ? "namePath" : $"{prefix}NamePath";
+            AddVisualElementPathNames(names, GetString(args, namePathKey));
+
+            string namesKey = string.IsNullOrEmpty(prefix) ? "visualElementNames" : $"{prefix}Names";
+            foreach (string name in GetStringList(args, namesKey, ""))
+                AddVisualElementPathNames(names, name);
+
+            if (string.IsNullOrEmpty(prefix))
+            {
+                foreach (string name in GetStringList(args, "names", ""))
+                    AddVisualElementPathNames(names, name);
+            }
+
+            return names.Where(name => string.IsNullOrEmpty(name) == false).ToList();
+        }
+
+        private static void AddVisualElementPathNames(List<string> names, object value)
+        {
+            if (value == null)
+                return;
+
+            if (value is List<object> list)
+            {
+                foreach (object item in list)
+                    AddVisualElementPathNames(names, item);
+                return;
+            }
+
+            if (value is Dictionary<string, object> dictionary)
+            {
+                foreach (string name in GetStringList(dictionary, "names", "name"))
+                    AddVisualElementPathNames(names, name);
+                return;
+            }
+
+            foreach (string name in SplitVisualElementPath(value.ToString()))
+            {
+                if (names.Contains(name, StringComparer.Ordinal) == false)
+                    names.Add(name);
+            }
+        }
+
+        private static List<string> SplitVisualElementPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return new List<string>();
+
+            return path.Split(new[] { '/', '\\', '>', '.' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(part => part.Trim())
+                .Where(part => string.IsNullOrEmpty(part) == false &&
+                               string.Equals(part, "root", StringComparison.OrdinalIgnoreCase) == false)
+                .ToList();
+        }
+
+        private static string GetElementPath(UnityEngine.UIElements.VisualElement root,
+            UnityEngine.UIElements.VisualElement target)
+        {
+            if (root == null || target == null)
+                return "";
+
+            if (root == target)
+                return "root";
+
+            var indexes = new List<int>();
+            if (TryBuildElementPath(root, target, indexes) == false)
+                return "";
+
+            return "root/" + string.Join("/", indexes);
+        }
+
+        private static bool TryBuildElementPath(UnityEngine.UIElements.VisualElement current,
+            UnityEngine.UIElements.VisualElement target, List<int> indexes)
+        {
+            int childIndex = 0;
+            foreach (var child in current.Children())
+            {
+                indexes.Add(childIndex);
+                if (child == target || TryBuildElementPath(child, target, indexes))
+                    return true;
+
+                indexes.RemoveAt(indexes.Count - 1);
+                childIndex++;
+            }
+
+            return false;
+        }
+
+        private static Dictionary<string, object> BuildLayoutAssertion(
+            UnityEngine.UIElements.VisualElement root, Dictionary<string, object> assertion, int index)
+        {
+            string type = GetString(assertion, "type");
+            if (string.IsNullOrEmpty(type))
+                type = GetString(assertion, "kind");
+            if (string.IsNullOrEmpty(type))
+                type = "edge-touch";
+
+            try
+            {
+                switch (type.ToLowerInvariant())
+                {
+                    case "edge-touch":
+                    case "touch":
+                    case "no-gap-no-overlap":
+                        return BuildEdgeTouchAssertion(root, assertion, index, type);
+                    case "inside":
+                    case "contained":
+                        return BuildInsideAssertion(root, assertion, index, type);
+                    case "size":
+                        return BuildSizeAssertion(root, assertion, index, type);
+                    default:
+                        return new Dictionary<string, object>
+                        {
+                            { "index", index },
+                            { "type", type },
+                            { "passed", false },
+                            { "error", $"Unknown assertion type '{type}'" },
+                        };
+                }
+            }
+            catch (Exception ex)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "index", index },
+                    { "type", type },
+                    { "passed", false },
+                    { "error", ex.Message },
+                };
+            }
+        }
+
+        private static Dictionary<string, object> BuildEdgeTouchAssertion(
+            UnityEngine.UIElements.VisualElement root, Dictionary<string, object> assertion, int index, string type)
+        {
+            var first = FindAssertionElement(root, assertion, "first", out string firstPath, out string firstError);
+            var second = FindAssertionElement(root, assertion, "second", out string secondPath, out string secondError);
+            float tolerance = GetFloat(assertion, "tolerance", 0.5f);
+
+            if (first == null || second == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "index", index },
+                    { "type", type },
+                    { "passed", false },
+                    { "error", first == null ? firstError : secondError },
+                };
+            }
+
+            string axis = GetString(assertion, "axis").ToLowerInvariant();
+            if (axis != "y")
+                axis = "x";
+
+            string firstEdge = GetString(assertion, "firstEdge");
+            string secondEdge = GetString(assertion, "secondEdge");
+            if (string.IsNullOrEmpty(firstEdge))
+                firstEdge = axis == "x" ? "right" : "bottom";
+            if (string.IsNullOrEmpty(secondEdge))
+                secondEdge = axis == "x" ? "left" : "top";
+
+            float firstValue = GetRectEdge(first.worldBound, firstEdge);
+            float secondValue = GetRectEdge(second.worldBound, secondEdge);
+            float delta = secondValue - firstValue;
+            bool passed = Math.Abs(delta) <= tolerance;
+
+            return new Dictionary<string, object>
+            {
+                { "index", index },
+                { "type", type },
+                { "passed", passed },
+                { "axis", axis },
+                { "firstPath", firstPath },
+                { "secondPath", secondPath },
+                { "firstEdge", firstEdge },
+                { "secondEdge", secondEdge },
+                { "firstValue", firstValue },
+                { "secondValue", secondValue },
+                { "delta", delta },
+                { "gap", delta > tolerance ? delta : 0 },
+                { "overlap", delta < -tolerance ? -delta : 0 },
+                { "tolerance", tolerance },
+                { "firstRect", RectToDictionary(first.worldBound) },
+                { "secondRect", RectToDictionary(second.worldBound) },
+            };
+        }
+
+        private static Dictionary<string, object> BuildInsideAssertion(
+            UnityEngine.UIElements.VisualElement root, Dictionary<string, object> assertion, int index, string type)
+        {
+            var inner = FindAssertionElement(root, assertion, "inner", out string innerPath, out string innerError);
+            var outer = FindAssertionElement(root, assertion, "outer", out string outerPath, out string outerError);
+            float tolerance = GetFloat(assertion, "tolerance", 0.5f);
+
+            if (inner == null || outer == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "index", index },
+                    { "type", type },
+                    { "passed", false },
+                    { "error", inner == null ? innerError : outerError },
+                };
+            }
+
+            Rect innerRect = inner.worldBound;
+            Rect outerRect = outer.worldBound;
+            bool passed = innerRect.xMin >= outerRect.xMin - tolerance &&
+                          innerRect.yMin >= outerRect.yMin - tolerance &&
+                          innerRect.xMax <= outerRect.xMax + tolerance &&
+                          innerRect.yMax <= outerRect.yMax + tolerance;
+
+            return new Dictionary<string, object>
+            {
+                { "index", index },
+                { "type", type },
+                { "passed", passed },
+                { "innerPath", innerPath },
+                { "outerPath", outerPath },
+                { "tolerance", tolerance },
+                { "leftOverflow", Math.Max(0, outerRect.xMin - innerRect.xMin) },
+                { "topOverflow", Math.Max(0, outerRect.yMin - innerRect.yMin) },
+                { "rightOverflow", Math.Max(0, innerRect.xMax - outerRect.xMax) },
+                { "bottomOverflow", Math.Max(0, innerRect.yMax - outerRect.yMax) },
+                { "innerRect", RectToDictionary(innerRect) },
+                { "outerRect", RectToDictionary(outerRect) },
+            };
+        }
+
+        private static Dictionary<string, object> BuildSizeAssertion(
+            UnityEngine.UIElements.VisualElement root, Dictionary<string, object> assertion, int index, string type)
+        {
+            var element = FindAssertionElement(root, assertion, "", out string path, out string error);
+            float expectedWidth = GetFloat(assertion, "width", float.NaN);
+            if (float.IsNaN(expectedWidth))
+                expectedWidth = GetFloat(assertion, "expectedWidth", float.NaN);
+            float expectedHeight = GetFloat(assertion, "height", float.NaN);
+            if (float.IsNaN(expectedHeight))
+                expectedHeight = GetFloat(assertion, "expectedHeight", float.NaN);
+            float tolerance = GetFloat(assertion, "tolerance", 0.5f);
+
+            if (element == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "index", index },
+                    { "type", type },
+                    { "passed", false },
+                    { "error", error },
+                };
+            }
+
+            Rect rect = element.worldBound;
+            float widthDelta = float.IsNaN(expectedWidth) ? 0 : rect.width - expectedWidth;
+            float heightDelta = float.IsNaN(expectedHeight) ? 0 : rect.height - expectedHeight;
+            bool widthPassed = float.IsNaN(expectedWidth) || Math.Abs(widthDelta) <= tolerance;
+            bool heightPassed = float.IsNaN(expectedHeight) || Math.Abs(heightDelta) <= tolerance;
+
+            return new Dictionary<string, object>
+            {
+                { "index", index },
+                { "type", type },
+                { "passed", widthPassed && heightPassed },
+                { "path", path },
+                { "expectedWidth", float.IsNaN(expectedWidth) ? null : (object)expectedWidth },
+                { "expectedHeight", float.IsNaN(expectedHeight) ? null : (object)expectedHeight },
+                { "actualWidth", rect.width },
+                { "actualHeight", rect.height },
+                { "widthDelta", widthDelta },
+                { "heightDelta", heightDelta },
+                { "tolerance", tolerance },
+                { "rect", RectToDictionary(rect) },
+            };
+        }
+
+        private static UnityEngine.UIElements.VisualElement FindAssertionElement(
+            UnityEngine.UIElements.VisualElement root, Dictionary<string, object> assertion,
+            string prefix, out string path, out string error)
+        {
+            path = "";
+            error = "";
+
+            string pathKey = string.IsNullOrEmpty(prefix) ? "path" : $"{prefix}Path";
+            string requestedPath = GetString(assertion, pathKey);
+            if (string.IsNullOrEmpty(requestedPath) && string.IsNullOrEmpty(prefix))
+                requestedPath = GetString(assertion, "elementPath");
+            if (string.IsNullOrEmpty(requestedPath) == false)
+            {
+                var element = GetElementByFlexiblePath(root, requestedPath);
+                if (element != null)
+                {
+                    path = GetElementPath(root, element);
+                    return element;
+                }
+
+                error = $"Element path '{requestedPath}' was not found";
+                return null;
+            }
+
+            var names = GetVisualElementPathNames(assertion, prefix);
+            if (names.Count > 0)
+            {
+                var element = GetElementByVisualElementPath(root, names);
+                if (element != null)
+                {
+                    path = GetElementPath(root, element);
+                    return element;
+                }
+
+                error = $"VisualElementPath '{string.Join("/", names)}' was not found";
+                return null;
+            }
+
+            string nameKey = string.IsNullOrEmpty(prefix) ? "name" : $"{prefix}Name";
+            string name = GetString(assertion, nameKey);
+            if (string.IsNullOrEmpty(name) == false)
+            {
+                var element = FindNamedElement(root, name, true);
+                if (element != null)
+                {
+                    path = GetElementPath(root, element);
+                    return element;
+                }
+
+                error = $"Element name '{name}' was not found";
+                return null;
+            }
+
+            error = $"No element locator was supplied for prefix '{prefix}'";
+            return null;
+        }
+
+        private static float GetRectEdge(Rect rect, string edge)
+        {
+            switch ((edge ?? "").ToLowerInvariant())
+            {
+                case "left":
+                case "xmin":
+                    return rect.xMin;
+                case "right":
+                case "xmax":
+                    return rect.xMax;
+                case "top":
+                case "ymin":
+                    return rect.yMin;
+                case "bottom":
+                case "ymax":
+                    return rect.yMax;
+                case "centerx":
+                    return rect.center.x;
+                case "centery":
+                    return rect.center.y;
+                default:
+                    throw new ArgumentException($"Unknown rect edge '{edge}'");
+            }
         }
 
         private static void CollectUxmlElements(XElement element, string path, List<UxmlElementInfo> elements,
@@ -1219,6 +2122,66 @@ namespace UnityMCP.Editor
             };
         }
 
+        private static Dictionary<string, object> BuildBackgroundInfo(UnityEngine.UIElements.VisualElement element)
+        {
+            return new Dictionary<string, object>
+            {
+                { "inline", BuildBackgroundValueInfo(GetPropertyValue(element.style, "backgroundImage")) },
+                { "resolved", BuildBackgroundValueInfo(GetPropertyValue(element.resolvedStyle, "backgroundImage")) },
+            };
+        }
+
+        private static Dictionary<string, object> BuildBackgroundValueInfo(object styleValue)
+        {
+            var info = new Dictionary<string, object>
+            {
+                { "text", styleValue != null ? styleValue.ToString() : "" },
+            };
+
+            object background = GetPropertyValue(styleValue, "value");
+            if (background == null)
+                background = styleValue;
+
+            AddBackgroundObjectInfo(info, background, "texture");
+            AddBackgroundObjectInfo(info, background, "sprite");
+            AddBackgroundObjectInfo(info, background, "renderTexture");
+            AddBackgroundObjectInfo(info, background, "vectorImage");
+
+            return info;
+        }
+
+        private static void AddBackgroundObjectInfo(Dictionary<string, object> info, object background, string propertyName)
+        {
+            object value = GetPropertyValue(background, propertyName);
+            if (value is UnityEngine.Object unityObject)
+            {
+                info[propertyName] = new Dictionary<string, object>
+                {
+                    { "name", unityObject.name },
+                    { "type", unityObject.GetType().Name },
+                    { "instanceId", unityObject.GetInstanceID() },
+                    { "assetPath", AssetDatabase.GetAssetPath(unityObject) },
+                };
+            }
+        }
+
+        private static object GetPropertyValue(object target, string propertyName)
+        {
+            if (target == null || string.IsNullOrEmpty(propertyName))
+                return null;
+
+            try
+            {
+                var property = target.GetType().GetProperty(propertyName,
+                    System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public);
+                return property != null ? property.GetValue(target, null) : null;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
         private static Dictionary<string, object> RectToDictionary(Rect rect)
         {
             return new Dictionary<string, object>
@@ -1227,6 +2190,10 @@ namespace UnityMCP.Editor
                 { "y", rect.y },
                 { "width", rect.width },
                 { "height", rect.height },
+                { "xMin", rect.xMin },
+                { "yMin", rect.yMin },
+                { "xMax", rect.xMax },
+                { "yMax", rect.yMax },
             };
         }
 
@@ -1260,6 +2227,30 @@ namespace UnityMCP.Editor
                 return defaultValue;
 
             return int.TryParse(args[key].ToString(), out int parsed) ? parsed : defaultValue;
+        }
+
+        private static float GetFloat(Dictionary<string, object> args, string key, float defaultValue)
+        {
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return defaultValue;
+
+            return float.TryParse(args[key].ToString(), out float parsed) ? parsed : defaultValue;
+        }
+
+        private static List<object> GetObjectList(Dictionary<string, object> args, string key)
+        {
+            if (args == null || args.TryGetValue(key, out object value) == false || value == null)
+                return new List<object>();
+
+            if (value is List<object> list)
+                return list;
+
+            return new List<object> { value };
+        }
+
+        private static Dictionary<string, object> AsDictionary(object value)
+        {
+            return value as Dictionary<string, object> ?? new Dictionary<string, object>();
         }
 
         private static List<string> GetStringList(Dictionary<string, object> args, string arrayKey, string singleKey)

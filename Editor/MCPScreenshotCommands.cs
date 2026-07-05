@@ -194,6 +194,161 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object CropImage(Dictionary<string, object> args)
+        {
+            string sourcePath = GetString(args, "sourcePath");
+            if (string.IsNullOrEmpty(sourcePath))
+                sourcePath = GetString(args, "imagePath");
+            if (string.IsNullOrEmpty(sourcePath))
+                sourcePath = GetString(args, "path");
+            if (string.IsNullOrEmpty(sourcePath))
+                return new { error = "sourcePath, imagePath, or path is required" };
+
+            string absoluteSourcePath = ResolveFilePath(sourcePath);
+            if (File.Exists(absoluteSourcePath) == false)
+                return new { error = $"Image file not found at '{sourcePath}'" };
+
+            if (!TryGetRectInt(args, out RectInt rect))
+                return new { error = "rect is required with x, y, width, and height" };
+
+            string outputPath = GetString(args, "outputPath");
+            if (string.IsNullOrEmpty(outputPath))
+            {
+                string dir = Path.GetDirectoryName(absoluteSourcePath) ?? "";
+                string name = Path.GetFileNameWithoutExtension(absoluteSourcePath);
+                outputPath = Path.Combine(dir, name + "_crop.png");
+            }
+
+            string absoluteOutputPath = ResolveFilePath(outputPath);
+            bool originTopLeft = GetBool(args, "originTopLeft", true);
+            Texture2D source = null;
+            Texture2D cropped = null;
+            try
+            {
+                source = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                if (!source.LoadImage(File.ReadAllBytes(absoluteSourcePath)))
+                    return new { error = $"Could not decode image '{sourcePath}'" };
+
+                int x = Mathf.Clamp(rect.x, 0, source.width);
+                int y = Mathf.Clamp(rect.y, 0, source.height);
+                int width = Mathf.Clamp(rect.width, 0, source.width - x);
+                int height = Mathf.Clamp(rect.height, 0, source.height - y);
+                if (width <= 0 || height <= 0)
+                    return new { error = $"Crop rect is outside image bounds. Image={source.width}x{source.height}, rect={rect}" };
+
+                int readY = originTopLeft ? source.height - y - height : y;
+                readY = Mathf.Clamp(readY, 0, source.height - height);
+                cropped = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                cropped.SetPixels(source.GetPixels(x, readY, width, height));
+                cropped.Apply();
+
+                string directory = Path.GetDirectoryName(absoluteOutputPath);
+                if (string.IsNullOrEmpty(directory) == false)
+                    Directory.CreateDirectory(directory);
+
+                byte[] png = cropped.EncodeToPNG();
+                File.WriteAllBytes(absoluteOutputPath, png);
+                RefreshAssetIfNeeded(absoluteOutputPath);
+
+                return new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "sourcePath", sourcePath },
+                    { "outputPath", outputPath },
+                    { "absoluteOutputPath", absoluteOutputPath },
+                    { "sourceWidth", source.width },
+                    { "sourceHeight", source.height },
+                    { "originTopLeft", originTopLeft },
+                    { "cropRect", new Dictionary<string, object>
+                        {
+                            { "x", x },
+                            { "y", y },
+                            { "width", width },
+                            { "height", height },
+                        }
+                    },
+                    { "sizeBytes", png.Length },
+                };
+            }
+            finally
+            {
+                if (source != null)
+                    UnityEngine.Object.DestroyImmediate(source);
+                if (cropped != null)
+                    UnityEngine.Object.DestroyImmediate(cropped);
+            }
+        }
+
+        private static string GetString(Dictionary<string, object> args, string key)
+        {
+            return args != null && args.ContainsKey(key) && args[key] != null ? args[key].ToString() : "";
+        }
+
+        private static bool GetBool(Dictionary<string, object> args, string key, bool defaultValue)
+        {
+            if (args == null || args.ContainsKey(key) == false || args[key] == null)
+                return defaultValue;
+
+            if (args[key] is bool value)
+                return value;
+
+            return bool.TryParse(args[key].ToString(), out bool parsed) ? parsed : defaultValue;
+        }
+
+        private static bool TryGetRectInt(Dictionary<string, object> args, out RectInt rect)
+        {
+            rect = default(RectInt);
+            if (args == null)
+                return false;
+
+            var dictionary = args;
+            if (args.TryGetValue("rect", out object rectValue))
+            {
+                dictionary = rectValue as Dictionary<string, object>;
+                if (dictionary == null)
+                    return false;
+            }
+
+            if (!TryGetInt(dictionary, "x", out int x) ||
+                !TryGetInt(dictionary, "y", out int y) ||
+                !TryGetInt(dictionary, "width", out int width) ||
+                !TryGetInt(dictionary, "height", out int height))
+            {
+                return false;
+            }
+
+            rect = new RectInt(x, y, width, height);
+            return true;
+        }
+
+        private static bool TryGetInt(Dictionary<string, object> args, string key, out int value)
+        {
+            value = 0;
+            return args != null && args.ContainsKey(key) && args[key] != null &&
+                   int.TryParse(args[key].ToString(), out value);
+        }
+
+        private static string ResolveFilePath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return path;
+
+            string normalized = path.Replace('\\', '/');
+            if (Path.IsPathRooted(path))
+                return path;
+
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            return Path.GetFullPath(Path.Combine(projectRoot, normalized));
+        }
+
+        private static void RefreshAssetIfNeeded(string absolutePath)
+        {
+            string normalized = absolutePath.Replace('\\', '/');
+            string assetsRoot = Application.dataPath.Replace('\\', '/');
+            if (normalized.StartsWith(assetsRoot, StringComparison.OrdinalIgnoreCase))
+                AssetDatabase.Refresh();
+        }
+
         // ─── Capture an arbitrary EditorWindow (Inspector, Project, custom windows…) ───
         // Unlike Game/Scene view (which ARE cameras and are captured by rendering the camera
         // into a RenderTexture), an EditorWindow is an IMGUI/UI-Toolkit window with no camera.

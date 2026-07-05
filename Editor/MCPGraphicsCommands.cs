@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
@@ -574,6 +575,167 @@ namespace UnityMCP.Editor
             return result;
         }
 
+        public static object InspectImageAlphaBounds(Dictionary<string, object> args)
+        {
+            string assetPath = GetString(args, "assetPath");
+            if (string.IsNullOrEmpty(assetPath))
+                assetPath = GetString(args, "path");
+            string filePath = GetString(args, "filePath");
+
+            Texture2D source = null;
+            string resolvedPath = assetPath;
+            if (string.IsNullOrEmpty(assetPath) == false)
+            {
+                source = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+                if (source == null)
+                    return new { error = $"Texture2D asset not found at '{assetPath}'" };
+            }
+            else if (string.IsNullOrEmpty(filePath) == false)
+            {
+                if (File.Exists(filePath) == false)
+                    return new { error = $"Image file not found at '{filePath}'" };
+
+                source = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                source.LoadImage(File.ReadAllBytes(filePath));
+                resolvedPath = filePath;
+            }
+            else
+            {
+                return new { error = "assetPath or filePath is required" };
+            }
+
+            float alphaThreshold = GetFloat(args, "alphaThreshold", 0.01f);
+            byte thresholdByte = alphaThreshold <= 1f
+                ? (byte)Mathf.Clamp(Mathf.RoundToInt(alphaThreshold * 255f), 0, 255)
+                : (byte)Mathf.Clamp(Mathf.RoundToInt(alphaThreshold), 0, 255);
+
+            Texture2D readable = null;
+            bool destroySource = string.IsNullOrEmpty(assetPath);
+            try
+            {
+                readable = CopyToReadableTexture(source);
+                var pixels = readable.GetPixels32();
+                int width = readable.width;
+                int height = readable.height;
+                int minX = width;
+                int minY = height;
+                int maxX = -1;
+                int maxY = -1;
+                int opaqueCount = 0;
+
+                for (int y = 0; y < height; y++)
+                {
+                    int row = y * width;
+                    for (int x = 0; x < width; x++)
+                    {
+                        if (pixels[row + x].a < thresholdByte)
+                            continue;
+
+                        opaqueCount++;
+                        if (x < minX) minX = x;
+                        if (y < minY) minY = y;
+                        if (x > maxX) maxX = x;
+                        if (y > maxY) maxY = y;
+                    }
+                }
+
+                bool hasAlphaPixels = opaqueCount > 0;
+                var result = new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "path", resolvedPath },
+                    { "width", width },
+                    { "height", height },
+                    { "alphaThreshold", thresholdByte },
+                    { "hasAlphaPixels", hasAlphaPixels },
+                    { "alphaPixelCount", opaqueCount },
+                };
+
+                if (hasAlphaPixels)
+                {
+                    int boundsWidth = maxX - minX + 1;
+                    int boundsHeight = maxY - minY + 1;
+                    result["boundsBottomLeft"] = new Dictionary<string, object>
+                    {
+                        { "x", minX },
+                        { "y", minY },
+                        { "width", boundsWidth },
+                        { "height", boundsHeight },
+                        { "xMin", minX },
+                        { "yMin", minY },
+                        { "xMax", maxX + 1 },
+                        { "yMax", maxY + 1 },
+                    };
+                    result["boundsTopLeft"] = new Dictionary<string, object>
+                    {
+                        { "x", minX },
+                        { "y", height - maxY - 1 },
+                        { "width", boundsWidth },
+                        { "height", boundsHeight },
+                        { "xMin", minX },
+                        { "yMin", height - maxY - 1 },
+                        { "xMax", maxX + 1 },
+                        { "yMax", height - minY },
+                    };
+                    result["transparentMargins"] = new Dictionary<string, object>
+                    {
+                        { "left", minX },
+                        { "right", width - maxX - 1 },
+                        { "bottom", minY },
+                        { "top", height - maxY - 1 },
+                    };
+                }
+
+                return result;
+            }
+            finally
+            {
+                if (readable != null)
+                    UnityEngine.Object.DestroyImmediate(readable);
+                if (destroySource && source != null)
+                    UnityEngine.Object.DestroyImmediate(source);
+            }
+        }
+
+        public static object MeasureRectGap(Dictionary<string, object> args)
+        {
+            if (!TryGetRect(args, "firstRect", out Rect firstRect))
+                return new { error = "firstRect is required with x, y, width, and height" };
+            if (!TryGetRect(args, "secondRect", out Rect secondRect))
+                return new { error = "secondRect is required with x, y, width, and height" };
+
+            string axis = GetString(args, "axis").ToLowerInvariant();
+            if (axis != "y")
+                axis = "x";
+
+            string firstEdge = GetString(args, "firstEdge");
+            string secondEdge = GetString(args, "secondEdge");
+            if (string.IsNullOrEmpty(firstEdge))
+                firstEdge = axis == "x" ? "right" : "bottom";
+            if (string.IsNullOrEmpty(secondEdge))
+                secondEdge = axis == "x" ? "left" : "top";
+
+            float tolerance = GetFloat(args, "tolerance", 0.5f);
+            float firstValue = GetRectEdge(firstRect, firstEdge);
+            float secondValue = GetRectEdge(secondRect, secondEdge);
+            float delta = secondValue - firstValue;
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "touching", Math.Abs(delta) <= tolerance },
+                { "axis", axis },
+                { "firstEdge", firstEdge },
+                { "secondEdge", secondEdge },
+                { "firstValue", firstValue },
+                { "secondValue", secondValue },
+                { "delta", delta },
+                { "gap", delta > tolerance ? delta : 0 },
+                { "overlap", delta < -tolerance ? -delta : 0 },
+                { "tolerance", tolerance },
+            };
+        }
+
         // ─── 8. Renderer Info ───
 
         public static object GetRendererInfo(Dictionary<string, object> args)
@@ -713,6 +875,90 @@ namespace UnityMCP.Editor
                 { "lightCount", lights.Count },
                 { "lights", lights },
             };
+        }
+
+        private static Texture2D CopyToReadableTexture(Texture texture)
+        {
+            RenderTexture rt = null;
+            Texture2D readable = null;
+            RenderTexture previous = RenderTexture.active;
+            try
+            {
+                rt = RenderTexture.GetTemporary(texture.width, texture.height, 0, RenderTextureFormat.ARGB32);
+                Graphics.Blit(texture, rt);
+                RenderTexture.active = rt;
+                readable = new Texture2D(texture.width, texture.height, TextureFormat.RGBA32, false);
+                readable.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0);
+                readable.Apply();
+                return readable;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                if (rt != null)
+                    RenderTexture.ReleaseTemporary(rt);
+            }
+        }
+
+        private static string GetString(Dictionary<string, object> args, string key)
+        {
+            return args != null && args.ContainsKey(key) && args[key] != null ? args[key].ToString() : "";
+        }
+
+        private static float GetFloat(Dictionary<string, object> args, string key, float defaultValue)
+        {
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return defaultValue;
+
+            return float.TryParse(args[key].ToString(), out float parsed) ? parsed : defaultValue;
+        }
+
+        private static bool TryGetRect(Dictionary<string, object> args, string key, out Rect rect)
+        {
+            rect = default(Rect);
+            if (args == null || args.TryGetValue(key, out object value) == false)
+                return false;
+
+            var dictionary = value as Dictionary<string, object>;
+            if (dictionary == null)
+            {
+                return false;
+            }
+
+            float x = GetFloat(dictionary, "x", 0);
+            float y = GetFloat(dictionary, "y", 0);
+            float width = GetFloat(dictionary, "width", float.NaN);
+            float height = GetFloat(dictionary, "height", float.NaN);
+            if (float.IsNaN(width) || float.IsNaN(height))
+                return false;
+
+            rect = new Rect(x, y, width, height);
+            return true;
+        }
+
+        private static float GetRectEdge(Rect rect, string edge)
+        {
+            switch ((edge ?? "").ToLowerInvariant())
+            {
+                case "left":
+                case "xmin":
+                    return rect.xMin;
+                case "right":
+                case "xmax":
+                    return rect.xMax;
+                case "top":
+                case "ymin":
+                    return rect.yMin;
+                case "bottom":
+                case "ymax":
+                    return rect.yMax;
+                case "centerx":
+                    return rect.center.x;
+                case "centery":
+                    return rect.center.y;
+                default:
+                    throw new ArgumentException($"Unknown rect edge '{edge}'");
+            }
         }
     }
 }

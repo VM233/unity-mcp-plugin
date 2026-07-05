@@ -48,6 +48,7 @@ namespace UnityMCP.Editor
         {
             { "testing/list-tests", MCPTestRunnerCommands.ListTests },
             { "wait/editor-idle", MCPEditorCommands.WaitForIdle },
+            { "uitoolkit/wait-refresh", MCPUICommands.WaitForUIToolkitRefresh },
             { "packages/update-git", MCPPackageManagerCommands.UpdateGitPackageDeferred },
             { "prefab-asset/add-component", MCPPrefabAssetCommands.AddComponentDeferred },
             { "prefab-asset/batch-edit", MCPPrefabAssetCommands.BatchEditDeferred },
@@ -666,6 +667,28 @@ namespace UnityMCP.Editor
                     return "Trigger repaint on a UI Toolkit EditorWindow or element.";
                 case "uitoolkit/asset-inspect":
                     return "Inspect UXML and USS assets for VisualElement names, types, and default USS dimensions.";
+                case "uitoolkit/runtime-documents":
+                    return "List runtime UIDocuments with root visual element metadata.";
+                case "uitoolkit/runtime-tree":
+                    return "Read a runtime UIDocument UI Toolkit visual tree.";
+                case "uitoolkit/runtime-query":
+                    return "Query runtime UIDocument UI Toolkit elements by VisualElementPath, name, class, type, or text.";
+                case "uitoolkit/runtime-style":
+                    return "Read inline, resolved, and background style data for a runtime UI Toolkit element.";
+                case "uitoolkit/runtime-repaint":
+                    return "Trigger repaint for a runtime UIDocument or one of its elements.";
+                case "uitoolkit/refresh":
+                    return "Refresh UI Toolkit assets and repaint runtime UIDocuments and Editor UI Toolkit windows.";
+                case "uitoolkit/wait-refresh":
+                    return "Refresh UI Toolkit assets, repaint panels, and wait for a few stable editor frames.";
+                case "uitoolkit/assert-layout":
+                    return "Assert UI Toolkit runtime layout constraints such as edge touching, containment, and size.";
+                case "screenshot/crop":
+                    return "Crop an existing screenshot or image file to a PNG.";
+                case "graphics/image-alpha-bounds":
+                    return "Inspect a PNG or texture asset and return alpha-based visible pixel bounds.";
+                case "graphics/rect-gap":
+                    return "Measure the gap or overlap between two rectangles along an edge pair.";
                 case "animation/set-object-reference-curve":
                     return "Set AnimationClip ObjectReference keyframes, such as SpriteRenderer.m_Sprite.";
                 case "project-tools/list":
@@ -894,6 +917,89 @@ namespace UnityMCP.Editor
                         Prop("maxResults", "number", "Maximum returned elements per query. Defaults to 100."),
                         Prop("includeUss", "boolean", "Parse USS files and attach default size declarations. Defaults to true.")
                     ));
+                case "uitoolkit/runtime-documents":
+                    return Schema(Props(
+                        Prop("includeInactive", "boolean", "Include inactive scene UIDocuments. Defaults to true.")
+                    ));
+                case "uitoolkit/runtime-tree":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("maxDepth", "number", "Maximum tree depth. Defaults to 8."),
+                        Prop("maxNodes", "number", "Maximum returned nodes. Defaults to 300."),
+                        Prop("includeStyle", "boolean", "Include inline, resolved, and background style summaries.")
+                    ));
+                case "uitoolkit/runtime-query":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("path", "string", "Element tree path from runtime-tree, e.g. root/0/1."),
+                        Prop("treePath", "string", "Alias for path."),
+                        Prop("visualElementPath", "string", "Slash-separated VisualElementPath names, e.g. MainMap/RightControls."),
+                        Prop("visualElementNames", "array", "VisualElementPath names array."),
+                        Prop("names", "array", "Alias for visualElementNames."),
+                        Prop("name", "string", "VisualElement.name exact match."),
+                        Prop("className", "string", "USS class name exact match."),
+                        Prop("typeName", "string", "VisualElement type name contains match."),
+                        Prop("text", "string", "TextElement text contains match."),
+                        Prop("maxResults", "number", "Maximum returned elements. Defaults to 50."),
+                        Prop("includeStyle", "boolean", "Include inline, resolved, and background style summaries.")
+                    ));
+                case "uitoolkit/runtime-style":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("path", "string", "Element tree path from runtime-tree, e.g. root/0/1."),
+                        Prop("treePath", "string", "Alias for path."),
+                        Prop("visualElementPath", "string", "Slash-separated VisualElementPath names."),
+                        Prop("visualElementNames", "array", "VisualElementPath names array."),
+                        Prop("names", "array", "Alias for visualElementNames."),
+                        Prop("name", "string", "VisualElement.name exact match if path is omitted."),
+                        Prop("className", "string", "USS class name exact match if path is omitted."),
+                        Prop("typeName", "string", "VisualElement type name contains match if path is omitted."),
+                        Prop("text", "string", "TextElement text contains match if path is omitted.")
+                    ));
+                case "uitoolkit/runtime-repaint":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("path", "string", "Optional element tree path from runtime-tree."),
+                        Prop("visualElementPath", "string", "Optional slash-separated VisualElementPath names."),
+                        Prop("visualElementNames", "array", "Optional VisualElementPath names array.")
+                    ));
+                case "uitoolkit/refresh":
+                    return Schema(Props(
+                        Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh before repainting. Defaults to true."),
+                        Prop("forceSynchronousImport", "boolean", "Use ForceSynchronousImport. Defaults to true.")
+                    ));
+                case "uitoolkit/wait-refresh":
+                    return Schema(Props(
+                        Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh before repainting. Defaults to true."),
+                        Prop("forceSynchronousImport", "boolean", "Use ForceSynchronousImport. Defaults to true."),
+                        Prop("timeoutMs", "number", "Maximum wait time in milliseconds. Defaults to 10000."),
+                        Prop("stableFrames", "number", "Consecutive idle repaint frames required. Defaults to 2.")
+                    ));
+                case "uitoolkit/assert-layout":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("assertions", "array", "Layout assertions. Supported types: edge-touch, inside, size.")
+                    ), "assertions");
+                case "screenshot/crop":
+                    return Schema(Props(
+                        Prop("sourcePath", "string", "Image path to crop. Aliases: imagePath, path."),
+                        Prop("imagePath", "string", "Alias for sourcePath."),
+                        Prop("path", "string", "Alias for sourcePath."),
+                        Prop("rect", "object", "Crop rect with x, y, width, height."),
+                        Prop("outputPath", "string", "Output PNG path. Defaults next to source with _crop suffix."),
+                        Prop("originTopLeft", "boolean", "Treat rect x/y as top-left image coordinates. Defaults to true.")
+                    ));
+                case "graphics/image-alpha-bounds":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Texture2D asset path."),
+                        Prop("filePath", "string", "Absolute or project-relative PNG path if assetPath is omitted."),
+                        Prop("path", "string", "Alias for assetPath."),
+                        Prop("alphaThreshold", "number", "Alpha threshold. 0-1 or 0-255. Defaults to 0.01.")
+                    ));
+                case "graphics/rect-gap":
+                    return Schema(Props(
+                        Prop("firstRect", "object", "First rect with x, y, width, height."),
+                        Prop("secondRect", "object", "Second rect with x, y, width, height."),
+                        Prop("axis", "string", "x or y. Defaults to x."),
+                        Prop("firstEdge", "string", "First rect edge. Defaults to right for x, bottom for y."),
+                        Prop("secondEdge", "string", "Second rect edge. Defaults to left for x, top for y."),
+                        Prop("tolerance", "number", "Touch tolerance in pixels. Defaults to 0.5.")
+                    ), "firstRect", "secondRect");
                 default:
                     return new Dictionary<string, object>
                     {
@@ -917,6 +1023,23 @@ namespace UnityMCP.Editor
                 props[pair.Key] = pair.Value;
 
             return Schema(props);
+        }
+
+        private static Dictionary<string, object> RuntimeUIDocumentSchema(Dictionary<string, object> extraProps, params string[] required)
+        {
+            var props = Props(
+                Prop("documentInstanceId", "number", "UIDocument instance id from uitoolkit/runtime-documents."),
+                Prop("uidocumentInstanceId", "number", "Alias for documentInstanceId."),
+                Prop("gameObjectPath", "string", "Scene GameObject path that owns the UIDocument."),
+                Prop("gameObjectName", "string", "Scene GameObject name that owns the UIDocument."),
+                Prop("documentName", "string", "UIDocument component name."),
+                Prop("includeInactive", "boolean", "Include inactive scene UIDocuments. Defaults to true.")
+            );
+
+            foreach (var pair in extraProps)
+                props[pair.Key] = pair.Value;
+
+            return Schema(props, required);
         }
 
         private static Dictionary<string, object> Schema(Dictionary<string, object> properties, params string[] required)
@@ -996,6 +1119,8 @@ namespace UnityMCP.Editor
                     return MCPEditorCommands.GetEditorState();
                 case "wait/editor-idle":
                     return new { error = "wait/editor-idle must be executed through the deferred route." };
+                case "uitoolkit/wait-refresh":
+                    return new { error = "uitoolkit/wait-refresh must be executed through the deferred route." };
                 case "editor/play-mode":
                     return MCPEditorCommands.SetPlayMode(ParseJson(body));
                 case "editor/execute-menu-item":
@@ -1490,6 +1615,8 @@ namespace UnityMCP.Editor
                     return MCPScreenshotCommands.CaptureSceneView(ParseJson(body));
                 case "screenshot/editor-window":
                     return MCPScreenshotCommands.CaptureEditorWindow(ParseJson(body));
+                case "screenshot/crop":
+                    return MCPScreenshotCommands.CropImage(ParseJson(body));
                 case "sceneview/info":
                     return MCPScreenshotCommands.GetSceneViewInfo(ParseJson(body));
                 case "sceneview/set-camera":
@@ -1510,6 +1637,10 @@ namespace UnityMCP.Editor
                     return MCPGraphicsCommands.GetMaterialInfo(ParseJson(body));
                 case "graphics/texture-info":
                     return MCPGraphicsCommands.GetTextureInfo(ParseJson(body));
+                case "graphics/image-alpha-bounds":
+                    return MCPGraphicsCommands.InspectImageAlphaBounds(ParseJson(body));
+                case "graphics/rect-gap":
+                    return MCPGraphicsCommands.MeasureRectGap(ParseJson(body));
                 case "graphics/renderer-info":
                     return MCPGraphicsCommands.GetRendererInfo(ParseJson(body));
                 case "graphics/lighting-summary":
@@ -1670,6 +1801,20 @@ namespace UnityMCP.Editor
                     return MCPUICommands.RepaintEditorUI(ParseJson(body));
                 case "uitoolkit/asset-inspect":
                     return MCPUICommands.InspectUIToolkitAsset(ParseJson(body));
+                case "uitoolkit/runtime-documents":
+                    return MCPUICommands.ListRuntimeUIDocuments(ParseJson(body));
+                case "uitoolkit/runtime-tree":
+                    return MCPUICommands.GetRuntimeUITree(ParseJson(body));
+                case "uitoolkit/runtime-query":
+                    return MCPUICommands.QueryRuntimeUI(ParseJson(body));
+                case "uitoolkit/runtime-style":
+                    return MCPUICommands.GetRuntimeUIStyle(ParseJson(body));
+                case "uitoolkit/runtime-repaint":
+                    return MCPUICommands.RepaintRuntimeUI(ParseJson(body));
+                case "uitoolkit/refresh":
+                    return MCPUICommands.RefreshUIToolkit(ParseJson(body));
+                case "uitoolkit/assert-layout":
+                    return MCPUICommands.AssertUIToolkitLayout(ParseJson(body));
 
                 // ─── Package Manager ───
                 case "packages/list":

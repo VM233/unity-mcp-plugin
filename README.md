@@ -47,6 +47,17 @@ http://127.0.0.1:7890/api/ping
 | Animator editing | `unity_animation_update_transition` | `animation/update-transition` | Modify an existing transition and add, update, remove, or replace transition conditions. |
 | Animator editing | `unity_animation_connect_states` | `animation/connect-states` | Create directed pairwise transitions between a list of Animator states. |
 | UI Toolkit assets | `unity_uitoolkit_asset_inspect` | `uitoolkit/asset-inspect` | Inspect UXML/USS assets for VisualElement names, type matches, USS classes, and default size declarations. |
+| UI Toolkit runtime | `unity_uitoolkit_runtime_documents` | `uitoolkit/runtime-documents` | List runtime UIDocuments and their root visual element metadata. |
+| UI Toolkit runtime | `unity_uitoolkit_runtime_tree` | `uitoolkit/runtime-tree` | Read a UIDocument visual tree, including optional style and bounds data. |
+| UI Toolkit runtime | `unity_uitoolkit_runtime_query` | `uitoolkit/runtime-query` | Query runtime VisualElements by tree path, VisualElementPath name list, name, class, type, or text. |
+| UI Toolkit runtime | `unity_uitoolkit_runtime_style` | `uitoolkit/runtime-style` | Read inline style, resolved style, bounds, and background asset metadata for a runtime element. |
+| UI Toolkit runtime | `unity_uitoolkit_runtime_repaint` | `uitoolkit/runtime-repaint` | Repaint a runtime UIDocument or one selected VisualElement. |
+| UI Toolkit runtime | `unity_uitoolkit_refresh` | `uitoolkit/refresh` | Refresh UI Toolkit assets and repaint runtime and editor panels. |
+| UI Toolkit runtime | `unity_uitoolkit_wait_refresh` | `uitoolkit/wait-refresh` | Refresh UI Toolkit assets, repaint panels, and wait for stable editor frames. |
+| UI Toolkit runtime | `unity_uitoolkit_assert_layout` | `uitoolkit/assert-layout` | Assert runtime layout constraints such as no-gap/no-overlap edge touching, containment, and expected size. |
+| Screenshot utilities | `unity_screenshot_crop` | `screenshot/crop` | Crop a screenshot or image file to a PNG for focused visual inspection. |
+| Graphics utilities | `unity_graphics_image_alpha_bounds` | `graphics/image-alpha-bounds` | Inspect a PNG or texture asset and return visible alpha pixel bounds plus transparent margins. |
+| Graphics utilities | `unity_graphics_rect_gap` | `graphics/rect-gap` | Measure a gap or overlap between two rectangles along selected edges. |
 | Package management | `unity_packages_update_git` | `packages/update-git` | Update a Git package through a deferred route so Unity does not block its main thread while Package Manager resolves the dependency. |
 | Project extensions | `unity_project_tools_list` | `project-tools/list` | List project-defined extension tools from loaded Unity editor assemblies. |
 | Project extensions | `unity_project_tools_execute` | `project-tools/execute` | Execute a project-defined extension tool by `toolName`. |
