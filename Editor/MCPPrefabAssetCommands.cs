@@ -2272,6 +2272,28 @@ namespace UnityMCP.Editor
             return args != null && args.ContainsKey(key) ? args[key]?.ToString() : "";
         }
 
+        private static List<string> GetStringList(Dictionary<string, object> args, string key)
+        {
+            var results = new List<string>();
+            if (args == null || !args.TryGetValue(key, out object value) || value == null)
+                return results;
+
+            if (value is List<object> list)
+            {
+                foreach (object item in list)
+                {
+                    if (item != null)
+                        results.Add(item.ToString());
+                }
+            }
+            else
+            {
+                results.Add(value.ToString());
+            }
+
+            return results;
+        }
+
         private static Dictionary<string, object> GetDictionary(Dictionary<string, object> args, string key)
         {
             if (args == null || !args.TryGetValue(key, out object value) || value == null)
@@ -2312,6 +2334,10 @@ namespace UnityMCP.Editor
         {
             var afterSnapshot = CaptureAssetText(assetPath);
             int contextLines = Math.Max(0, GetInt(args, "prefabFileDiffContextLines", 2));
+            string diffMode = (GetString(args, "prefabFileDiffMode") ?? "full").ToLowerInvariant();
+            if (diffMode == "minimal")
+                contextLines = 0;
+
             int maxLines = Math.Max(1, GetInt(args, "prefabFileDiffMaxLines", 200));
 
             var result = new Dictionary<string, object>
@@ -2341,11 +2367,79 @@ namespace UnityMCP.Editor
 
             var lines = BuildChangedLineBlock(beforeLines, afterLines, contextLines, maxLines, out int changedLineCount,
                 out bool truncated);
+            var summary = BuildDiffSummary(beforeLines.Length, afterLines.Length, lines);
+            int ignoredLineCount = FilterDiffLines(lines, args);
+
             result["changedLineCount"] = changedLineCount;
-            result["returnedLineCount"] = lines.Count;
+            result["ignoredLineCount"] = ignoredLineCount;
+            result["returnedLineCount"] = diffMode == "summary" ? 0 : lines.Count;
             result["truncated"] = truncated;
-            result["lines"] = lines;
+            result["summary"] = summary;
+            result["lines"] = diffMode == "summary" ? new List<Dictionary<string, object>>() : lines;
             return result;
+        }
+
+        private static Dictionary<string, object> BuildDiffSummary(int beforeLineCount, int afterLineCount,
+            List<Dictionary<string, object>> lines)
+        {
+            int added = 0;
+            int removed = 0;
+            int context = 0;
+
+            foreach (var line in lines)
+            {
+                var type = line.TryGetValue("type", out var value) && value != null ? value.ToString() : "";
+                switch (type)
+                {
+                    case "added":
+                        added++;
+                        break;
+                    case "removed":
+                        removed++;
+                        break;
+                    case "context":
+                        context++;
+                        break;
+                }
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "beforeLineCount", beforeLineCount },
+                { "afterLineCount", afterLineCount },
+                { "netLineDelta", afterLineCount - beforeLineCount },
+                { "addedLineCount", added },
+                { "removedLineCount", removed },
+                { "contextLineCount", context },
+            };
+        }
+
+        private static int FilterDiffLines(List<Dictionary<string, object>> lines, Dictionary<string, object> args)
+        {
+            var ignoreContains = GetStringList(args, "prefabFileDiffIgnoreContains");
+            var ignoreProperties = GetStringList(args, "prefabFileDiffIgnoreYamlProperties");
+            if (ignoreContains.Count == 0 && ignoreProperties.Count == 0)
+                return 0;
+
+            int beforeCount = lines.Count;
+            lines.RemoveAll(line =>
+            {
+                var text = line.TryGetValue("text", out var value) && value != null ? value.ToString() : "";
+                return ignoreContains.Any(item => text.Contains(item)) ||
+                       ignoreProperties.Any(property => IsYamlPropertyLine(text, property));
+            });
+
+            return beforeCount - lines.Count;
+        }
+
+        private static bool IsYamlPropertyLine(string text, string propertyName)
+        {
+            if (string.IsNullOrEmpty(text) || string.IsNullOrEmpty(propertyName))
+                return false;
+
+            string trimmed = text.TrimStart();
+            return trimmed.StartsWith(propertyName + ":", StringComparison.Ordinal) ||
+                   trimmed.StartsWith("- " + propertyName + ":", StringComparison.Ordinal);
         }
 
         private static List<Dictionary<string, object>> BuildChangedLineBlock(string[] beforeLines, string[] afterLines,

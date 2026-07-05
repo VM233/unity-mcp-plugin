@@ -4,6 +4,7 @@
   "references": [
     "UnityEngine.TestRunner",
     "UnityEditor.TestRunner",
+    "Unity.2D.Sprite.Editor",
     "UMA_Core",
     "UMA_Core_Editor"
   ],

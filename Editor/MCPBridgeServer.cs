@@ -47,6 +47,7 @@ namespace UnityMCP.Editor
             _deferredRoutes = new Dictionary<string, Action<Dictionary<string, object>, Action<object>>>
         {
             { "testing/list-tests", MCPTestRunnerCommands.ListTests },
+            { "advanced/execute", ExecuteAdvancedRouteDeferred },
             { "wait/editor-idle", MCPEditorCommands.WaitForIdle },
             { "uitoolkit/wait-refresh", MCPUICommands.WaitForUIToolkitRefresh },
             { "packages/update-git", MCPPackageManagerCommands.UpdateGitPackageDeferred },
@@ -629,6 +630,8 @@ namespace UnityMCP.Editor
             {
                 case "packages/update-git":
                     return "Update a Git-based Unity package and return the resolved packages-lock hash.";
+                case "advanced/execute":
+                    return "Stable generic entrypoint that executes any Unity route by route name and arguments.";
                 case "packages/lint-metas":
                     return "Lint a Unity package root for missing .meta files.";
                 case "wait/editor-idle":
@@ -689,6 +692,18 @@ namespace UnityMCP.Editor
                     return "Inspect a PNG or texture asset and return alpha-based visible pixel bounds.";
                 case "graphics/rect-gap":
                     return "Measure the gap or overlap between two rectangles along an edge pair.";
+                case "graphics/annotate-rects":
+                    return "Draw rectangle overlays on a screenshot or image file for visual verification.";
+                case "sprite/sheet-info":
+                    return "Inspect a sliced sprite sheet and return texture and sprite metadata.";
+                case "sprite/replace-and-slice":
+                    return "Replace a sprite sheet image file and slice it into numbered sprites.";
+                case "sprite/slice-sheet":
+                    return "Slice an existing sprite sheet into numbered sprites while preserving existing sprite IDs by name.";
+                case "sprite/update-animation-clip":
+                    return "Update an AnimationClip SpriteRenderer.m_Sprite object-reference curve from a sprite sheet.";
+                case "sprite/replace-slice-update-clip":
+                    return "Replace a sprite sheet, slice it, then update an AnimationClip from the generated sprites.";
                 case "animation/set-object-reference-curve":
                     return "Set AnimationClip ObjectReference keyframes, such as SpriteRenderer.m_Sprite.";
                 case "project-tools/list":
@@ -704,6 +719,15 @@ namespace UnityMCP.Editor
         {
             switch (route)
             {
+                case "advanced/execute":
+                    return Schema(Props(
+                        Prop("route", "string", "Unity route to execute, e.g. prefab-asset/batch-edit or project-tools/execute."),
+                        Prop("method", "string", "HTTP-like method used for the nested route. Defaults to POST."),
+                        Prop("args", "object", "Arguments passed to the nested route."),
+                        Prop("arguments", "object", "Alias for args."),
+                        Prop("parameters", "object", "Alias for args."),
+                        Prop("body", "string", "Optional raw JSON body. If provided, args are ignored.")
+                    ), "route");
                 case "packages/update-git":
                     return Schema(Props(
                         Prop("name", "string", "Package name, e.g. com.example.package"),
@@ -750,7 +774,10 @@ namespace UnityMCP.Editor
                         Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh once before waiting. Defaults to true."),
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                         Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
-                        Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200.")
+                        Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full."),
+                        Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
+                        Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
                     ), "assetPath", "componentType");
                 case "prefab-asset/move-gameobject":
                     return Schema(Props(
@@ -781,7 +808,10 @@ namespace UnityMCP.Editor
                         Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh once before waiting. Defaults to true."),
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                         Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
-                        Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200.")
+                        Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full."),
+                        Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
+                        Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
                     ), "assetPath", "operations");
                 case "asset/rename":
                     return Schema(Props(
@@ -1002,6 +1032,59 @@ namespace UnityMCP.Editor
                         Prop("secondEdge", "string", "Second rect edge. Defaults to left for x, top for y."),
                         Prop("tolerance", "number", "Touch tolerance in pixels. Defaults to 0.5.")
                     ), "firstRect", "secondRect");
+                case "graphics/annotate-rects":
+                    return Schema(Props(
+                        Prop("sourcePath", "string", "Image path to annotate. Aliases: imagePath, filePath, path."),
+                        Prop("imagePath", "string", "Alias for sourcePath."),
+                        Prop("filePath", "string", "Alias for sourcePath."),
+                        Prop("path", "string", "Alias for sourcePath."),
+                        Prop("outputPath", "string", "Output PNG path. Defaults next to source with _annotated suffix."),
+                        Prop("rects", "array", "Rectangles to draw. Each has x, y, width, height, optional color and thickness."),
+                        Prop("originTopLeft", "boolean", "Treat rect x/y as top-left image coordinates. Defaults to true."),
+                        Prop("color", "string", "Default HTML color, e.g. #ff00ffff."),
+                        Prop("thickness", "number", "Default border thickness in pixels. Defaults to 2.")
+                    ), "rects");
+                case "sprite/sheet-info":
+                    return Schema(Props(
+                        Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path.")
+                    ));
+                case "sprite/replace-and-slice":
+                case "sprite/slice-sheet":
+                    return Schema(Props(
+                        Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path."),
+                        Prop("sourcePath", "string", "External image file to copy over texturePath. Required for replace-and-slice."),
+                        Prop("frameWidth", "number", "Frame width in pixels."),
+                        Prop("frameHeight", "number", "Frame height in pixels."),
+                        Prop("frameCount", "number", "Optional frame count. Defaults to the full grid."),
+                        Prop("baseName", "string", "Generated sprite name prefix. Defaults to texture file name."),
+                        Prop("columns", "number", "Grid column count. Defaults to textureWidth / frameWidth."),
+                        Prop("startX", "number", "Grid start x in pixels. Defaults to 0."),
+                        Prop("startY", "number", "Grid start y in top-left pixels. Defaults to 0."),
+                        Prop("pivotX", "number", "Optional normalized pivot x."),
+                        Prop("pivotY", "number", "Optional normalized pivot y."),
+                        Prop("preserveSpriteIDs", "boolean", "Preserve existing sprite IDs by generated name. Defaults to true.")
+                    ), "texturePath", "frameWidth", "frameHeight");
+                case "sprite/update-animation-clip":
+                    return Schema(Props(
+                        Prop("clipPath", "string", "AnimationClip asset path."),
+                        Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path."),
+                        Prop("bindingPath", "string", "Animation binding path to SpriteRenderer. Empty means the animated object itself."),
+                        Prop("frameRate", "number", "Animation frame rate. Defaults to the clip frame rate or 12."),
+                        Prop("spriteNames", "array", "Optional exact sprite names to use."),
+                        Prop("loopTime", "boolean", "Whether the clip loops. Defaults to the current clip setting.")
+                    ), "clipPath", "texturePath");
+                case "sprite/replace-slice-update-clip":
+                    return Schema(Props(
+                        Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path."),
+                        Prop("sourcePath", "string", "External image file to copy over texturePath."),
+                        Prop("clipPath", "string", "Optional AnimationClip asset path to update after slicing."),
+                        Prop("frameWidth", "number", "Frame width in pixels."),
+                        Prop("frameHeight", "number", "Frame height in pixels."),
+                        Prop("frameCount", "number", "Optional frame count. Defaults to the full grid."),
+                        Prop("baseName", "string", "Generated sprite name prefix. Defaults to texture file name."),
+                        Prop("frameRate", "number", "Animation frame rate. Defaults to the clip frame rate or 12."),
+                        Prop("bindingPath", "string", "Animation binding path to SpriteRenderer.")
+                    ), "texturePath", "sourcePath", "frameWidth", "frameHeight");
                 default:
                     return new Dictionary<string, object>
                     {
@@ -1075,6 +1158,84 @@ namespace UnityMCP.Editor
             });
         }
 
+        private static object ExecuteAdvancedRoute(Dictionary<string, object> args, string outerMethod)
+        {
+            string route = GetArgumentString(args, "route");
+            if (string.IsNullOrEmpty(route))
+                route = GetArgumentString(args, "path");
+            if (string.IsNullOrEmpty(route))
+                return new { error = "route is required" };
+
+            route = route.Trim('/');
+            if (route == "advanced/execute")
+                return new { error = "advanced/execute cannot call itself" };
+
+            string nestedMethod = GetArgumentString(args, "method");
+            if (string.IsNullOrEmpty(nestedMethod))
+                nestedMethod = string.IsNullOrEmpty(outerMethod) ? "POST" : outerMethod;
+
+            string nestedBody = GetArgumentString(args, "body");
+            if (string.IsNullOrEmpty(nestedBody))
+            {
+                var nestedArgs = GetArgumentDictionary(args, "args")
+                                 ?? GetArgumentDictionary(args, "arguments")
+                                 ?? GetArgumentDictionary(args, "parameters")
+                                 ?? new Dictionary<string, object>();
+                nestedBody = MiniJson.Serialize(nestedArgs);
+            }
+
+            return RouteRequest(route, nestedMethod, nestedBody);
+        }
+
+        private static void ExecuteAdvancedRouteDeferred(Dictionary<string, object> args, Action<object> resolve)
+        {
+            string route = GetArgumentString(args, "route");
+            if (string.IsNullOrEmpty(route))
+                route = GetArgumentString(args, "path");
+            if (string.IsNullOrEmpty(route))
+            {
+                resolve(new { error = "route is required" });
+                return;
+            }
+
+            route = route.Trim('/');
+            if (route == "advanced/execute")
+            {
+                resolve(new { error = "advanced/execute cannot call itself" });
+                return;
+            }
+
+            string nestedBody = GetArgumentString(args, "body");
+            var nestedArgs = GetArgumentDictionary(args, "args")
+                             ?? GetArgumentDictionary(args, "arguments")
+                             ?? GetArgumentDictionary(args, "parameters")
+                             ?? new Dictionary<string, object>();
+            if (string.IsNullOrEmpty(nestedBody))
+                nestedBody = MiniJson.Serialize(nestedArgs);
+
+            if (_deferredRoutes.TryGetValue(route, out var deferredHandler))
+            {
+                deferredHandler(ParseJson(nestedBody), resolve);
+                return;
+            }
+
+            resolve(ExecuteAdvancedRoute(args, "POST"));
+        }
+
+        private static string GetArgumentString(Dictionary<string, object> args, string key)
+        {
+            if (args == null || args.TryGetValue(key, out var value) == false || value == null)
+                return "";
+            return value.ToString();
+        }
+
+        private static Dictionary<string, object> GetArgumentDictionary(Dictionary<string, object> args, string key)
+        {
+            if (args == null || args.TryGetValue(key, out var value) == false || value == null)
+                return null;
+            return value as Dictionary<string, object>;
+        }
+
         /// <summary>
         /// Route API requests to the appropriate handler.
         /// NOTE: This entire method runs on the main thread (dispatched by HandleRequest
@@ -1115,6 +1276,10 @@ namespace UnityMCP.Editor
                         cloneIndex = MCPInstanceRegistry.GetParrelSyncCloneIndex(),
                         processId = System.Diagnostics.Process.GetCurrentProcess().Id
                     };
+
+                // ─── Stable Generic Route ───
+                case "advanced/execute":
+                    return ExecuteAdvancedRoute(ParseJson(body), method);
 
                 // ─── Editor State ───
                 case "editor/state":
@@ -1643,10 +1808,24 @@ namespace UnityMCP.Editor
                     return MCPGraphicsCommands.InspectImageAlphaBounds(ParseJson(body));
                 case "graphics/rect-gap":
                     return MCPGraphicsCommands.MeasureRectGap(ParseJson(body));
+                case "graphics/annotate-rects":
+                    return MCPGraphicsCommands.AnnotateRects(ParseJson(body));
                 case "graphics/renderer-info":
                     return MCPGraphicsCommands.GetRendererInfo(ParseJson(body));
                 case "graphics/lighting-summary":
                     return MCPGraphicsCommands.GetLightingSummary(ParseJson(body));
+
+                // ─── Sprite Sheet ───
+                case "sprite/sheet-info":
+                    return MCPSpriteSheetCommands.GetSheetInfo(ParseJson(body));
+                case "sprite/replace-and-slice":
+                    return MCPSpriteSheetCommands.ReplaceAndSlice(ParseJson(body));
+                case "sprite/slice-sheet":
+                    return MCPSpriteSheetCommands.SliceSheet(ParseJson(body));
+                case "sprite/update-animation-clip":
+                    return MCPSpriteSheetCommands.UpdateAnimationClip(ParseJson(body));
+                case "sprite/replace-slice-update-clip":
+                    return MCPSpriteSheetCommands.ReplaceSliceAndUpdateClip(ParseJson(body));
 
                 // ─── Terrain ───
                 case "terrain/create":

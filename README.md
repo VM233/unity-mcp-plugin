@@ -33,6 +33,7 @@ http://127.0.0.1:7890/api/ping
 
 | Area | MCP tool name | HTTP route | Purpose |
 |------|---------------|------------|---------|
+| Stable entrypoint | `unity_advanced_execute` | `advanced/execute` | Execute any Unity route through one stable route when MCP client tool metadata is stale. |
 | Editor stability | `unity_wait_editor_idle` | `wait/editor-idle` | Wait for compilation, package refresh, domain reload, and asset import to settle before issuing the next command. |
 | Prefab asset editing | `unity_prefab_asset_add_component` | `prefab-asset/add-component` | Add a component after waiting for a newly compiled script type to become available; returns prefab YAML diff by default. |
 | Prefab asset editing | `unity_prefab_asset_batch_edit` | `prefab-asset/batch-edit` | Apply ordered prefab asset edits in one load/save transaction, such as adding a component and setting its fields before a single save. |
@@ -58,6 +59,12 @@ http://127.0.0.1:7890/api/ping
 | Screenshot utilities | `unity_screenshot_crop` | `screenshot/crop` | Crop a screenshot or image file to a PNG for focused visual inspection. |
 | Graphics utilities | `unity_graphics_image_alpha_bounds` | `graphics/image-alpha-bounds` | Inspect a PNG or texture asset and return visible alpha pixel bounds plus transparent margins. |
 | Graphics utilities | `unity_graphics_rect_gap` | `graphics/rect-gap` | Measure a gap or overlap between two rectangles along selected edges. |
+| Graphics utilities | `unity_graphics_annotate_rects` | `graphics/annotate-rects` | Draw rectangle borders onto screenshots or images for visual verification reports. |
+| Sprite pipeline | `unity_sprite_sheet_info` | `sprite/sheet-info` | Inspect a sliced sprite sheet and return texture and sprite metadata. |
+| Sprite pipeline | `unity_sprite_replace_and_slice` | `sprite/replace-and-slice` | Replace a sprite sheet PNG and slice it into numbered sprites while preserving sprite IDs by name. |
+| Sprite pipeline | `unity_sprite_slice_sheet` | `sprite/slice-sheet` | Slice an existing sprite sheet into numbered sprites. |
+| Sprite pipeline | `unity_sprite_update_animation_clip` | `sprite/update-animation-clip` | Rebuild a SpriteRenderer sprite animation curve from a sheet's sprites. |
+| Sprite pipeline | `unity_sprite_replace_slice_update_clip` | `sprite/replace-slice-update-clip` | Replace a sheet, slice it, and update an AnimationClip in one call. |
 | Package management | `unity_packages_update_git` | `packages/update-git` | Update a Git package through a deferred route; same-commit updates skip Unity Package Manager resolve by default. |
 | Project extensions | `unity_project_tools_list` | `project-tools/list` | List project-defined extension tools from loaded Unity editor assemblies. |
 | Project extensions | `unity_project_tools_execute` | `project-tools/execute` | Execute a project-defined extension tool by `toolName`. |
@@ -92,13 +99,13 @@ Call `project-tools/list` to discover tools, then `project-tools/execute` with:
 }
 ```
 
-If an MCP client has stale tool metadata, use the companion server's stable `unity_advanced_tool` entry with `tool` set to a raw route such as `project-tools/execute`, or to `project-tool:<toolName>` for project-defined tools.
+If an MCP client has stale tool metadata, use `advanced/execute` with `route` set to a raw route such as `project-tools/execute`. The route runs through the same editor-side dispatcher and category checks as normal tools.
 
 ## Notes
 
 - Use the upstream README for the general feature list and MCP setup flow.
 - `unity_wait_editor_idle` waits for both consecutive idle editor frames and a continuous idle time window (`stableMs`, default `500`) to avoid returning before a delayed compile or asset import starts.
-- Prefab asset mutation tools return `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it or adjust `prefabFileDiffMaxLines`.
+- Prefab asset mutation tools return `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it, adjust `prefabFileDiffMaxLines`, or use `prefabFileDiffMode=summary/minimal` plus ignore filters to reduce unrelated YAML noise.
 - `unity_packages_update_git` defaults to `skipIfResolved=true`. When the requested ref is a commit hash already recorded in `packages-lock.json`, the tool returns `skipped=true` without asking Unity Package Manager to resolve again. Pass `force=true` to force a resolve.
 - This fork intentionally keeps the package smaller by removing local documentation images.
 - The package is still the Unity Editor side only. You need an MCP server/client setup to call the tools from an assistant.

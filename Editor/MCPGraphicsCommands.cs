@@ -736,6 +736,91 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object AnnotateRects(Dictionary<string, object> args)
+        {
+            string sourcePath = GetString(args, "sourcePath");
+            if (string.IsNullOrEmpty(sourcePath))
+                sourcePath = GetString(args, "imagePath");
+            if (string.IsNullOrEmpty(sourcePath))
+                sourcePath = GetString(args, "filePath");
+            if (string.IsNullOrEmpty(sourcePath))
+                sourcePath = GetString(args, "path");
+            if (string.IsNullOrEmpty(sourcePath))
+                return new { error = "sourcePath is required" };
+
+            string absoluteSourcePath = ResolveAbsolutePath(sourcePath);
+            if (File.Exists(absoluteSourcePath) == false)
+                return new { error = $"Image file not found at '{absoluteSourcePath}'" };
+
+            var rects = GetDictionaryList(args, "rects");
+            if (rects.Count == 0)
+                return new { error = "rects is required and must contain at least one rectangle" };
+
+            string outputPath = GetString(args, "outputPath");
+            if (string.IsNullOrEmpty(outputPath))
+            {
+                outputPath = Path.Combine(Path.GetDirectoryName(absoluteSourcePath) ?? "",
+                    Path.GetFileNameWithoutExtension(absoluteSourcePath) + "_annotated.png");
+            }
+
+            outputPath = ResolveAbsolutePath(outputPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath) ?? "");
+
+            bool originTopLeft = GetBool(args, "originTopLeft", true);
+            int defaultThickness = Math.Max(1, Mathf.RoundToInt(GetFloat(args, "thickness", 2)));
+            Color defaultColor = ParseColor(GetString(args, "color"), Color.yellow);
+
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            try
+            {
+                texture.LoadImage(File.ReadAllBytes(absoluteSourcePath));
+
+                var annotations = new List<Dictionary<string, object>>();
+                foreach (var rectArgs in rects)
+                {
+                    if (!TryGetRect(rectArgs, "rect", out Rect rect))
+                    {
+                        if (!TryGetRectFromDictionary(rectArgs, out rect))
+                            continue;
+                    }
+
+                    int thickness = Math.Max(1, Mathf.RoundToInt(GetFloat(rectArgs, "thickness", defaultThickness)));
+                    Color color = ParseColor(GetString(rectArgs, "color"), defaultColor);
+                    Rect pixelRect = originTopLeft
+                        ? new Rect(rect.x, texture.height - rect.y - rect.height, rect.width, rect.height)
+                        : rect;
+
+                    DrawRectBorder(texture, pixelRect, color, thickness);
+                    annotations.Add(new Dictionary<string, object>
+                    {
+                        { "label", GetString(rectArgs, "label") },
+                        { "rect", RectToDictionary(rect) },
+                        { "pixelRectBottomLeft", RectToDictionary(pixelRect) },
+                        { "thickness", thickness },
+                        { "color", ColorToDict(color) },
+                    });
+                }
+
+                texture.Apply();
+                File.WriteAllBytes(outputPath, texture.EncodeToPNG());
+
+                return new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "sourcePath", absoluteSourcePath },
+                    { "outputPath", outputPath },
+                    { "width", texture.width },
+                    { "height", texture.height },
+                    { "annotationCount", annotations.Count },
+                    { "annotations", annotations },
+                };
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
         // ─── 8. Renderer Info ───
 
         public static object GetRendererInfo(Dictionary<string, object> args)
@@ -905,12 +990,58 @@ namespace UnityMCP.Editor
             return args != null && args.ContainsKey(key) && args[key] != null ? args[key].ToString() : "";
         }
 
+        private static bool GetBool(Dictionary<string, object> args, string key, bool defaultValue)
+        {
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return defaultValue;
+
+            if (args[key] is bool value)
+                return value;
+
+            return bool.TryParse(args[key].ToString(), out bool parsed) ? parsed : defaultValue;
+        }
+
         private static float GetFloat(Dictionary<string, object> args, string key, float defaultValue)
         {
             if (args == null || !args.ContainsKey(key) || args[key] == null)
                 return defaultValue;
 
             return float.TryParse(args[key].ToString(), out float parsed) ? parsed : defaultValue;
+        }
+
+        private static List<Dictionary<string, object>> GetDictionaryList(Dictionary<string, object> args, string key)
+        {
+            var results = new List<Dictionary<string, object>>();
+            if (args == null || !args.TryGetValue(key, out object value) || value == null)
+                return results;
+
+            if (value is List<object> list)
+            {
+                foreach (object item in list)
+                {
+                    if (item is Dictionary<string, object> dict)
+                        results.Add(dict);
+                }
+            }
+
+            return results;
+        }
+
+        private static bool TryGetRectFromDictionary(Dictionary<string, object> args, out Rect rect)
+        {
+            rect = default(Rect);
+            if (args == null)
+                return false;
+
+            float x = GetFloat(args, "x", 0);
+            float y = GetFloat(args, "y", 0);
+            float width = GetFloat(args, "width", float.NaN);
+            float height = GetFloat(args, "height", float.NaN);
+            if (float.IsNaN(width) || float.IsNaN(height))
+                return false;
+
+            rect = new Rect(x, y, width, height);
+            return true;
         }
 
         private static bool TryGetRect(Dictionary<string, object> args, string key, out Rect rect)
@@ -934,6 +1065,66 @@ namespace UnityMCP.Editor
 
             rect = new Rect(x, y, width, height);
             return true;
+        }
+
+        private static Dictionary<string, object> RectToDictionary(Rect rect)
+        {
+            return new Dictionary<string, object>
+            {
+                { "x", rect.x },
+                { "y", rect.y },
+                { "width", rect.width },
+                { "height", rect.height },
+                { "xMin", rect.xMin },
+                { "yMin", rect.yMin },
+                { "xMax", rect.xMax },
+                { "yMax", rect.yMax },
+            };
+        }
+
+        private static string ResolveAbsolutePath(string path)
+        {
+            if (Path.IsPathRooted(path))
+                return Path.GetFullPath(path);
+
+            string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+            return Path.GetFullPath(Path.Combine(projectRoot, path));
+        }
+
+        private static Color ParseColor(string value, Color defaultColor)
+        {
+            if (string.IsNullOrEmpty(value))
+                return defaultColor;
+
+            return ColorUtility.TryParseHtmlString(value, out var color) ? color : defaultColor;
+        }
+
+        private static void DrawRectBorder(Texture2D texture, Rect rect, Color color, int thickness)
+        {
+            int xMin = Mathf.Clamp(Mathf.RoundToInt(rect.xMin), 0, texture.width - 1);
+            int xMax = Mathf.Clamp(Mathf.RoundToInt(rect.xMax) - 1, 0, texture.width - 1);
+            int yMin = Mathf.Clamp(Mathf.RoundToInt(rect.yMin), 0, texture.height - 1);
+            int yMax = Mathf.Clamp(Mathf.RoundToInt(rect.yMax) - 1, 0, texture.height - 1);
+
+            for (int i = 0; i < thickness; i++)
+            {
+                int top = Mathf.Clamp(yMax - i, 0, texture.height - 1);
+                int bottom = Mathf.Clamp(yMin + i, 0, texture.height - 1);
+                int left = Mathf.Clamp(xMin + i, 0, texture.width - 1);
+                int right = Mathf.Clamp(xMax - i, 0, texture.width - 1);
+
+                for (int x = xMin; x <= xMax; x++)
+                {
+                    texture.SetPixel(x, top, color);
+                    texture.SetPixel(x, bottom, color);
+                }
+
+                for (int y = yMin; y <= yMax; y++)
+                {
+                    texture.SetPixel(left, y, color);
+                    texture.SetPixel(right, y, color);
+                }
+            }
         }
 
         private static float GetRectEdge(Rect rect, string edge)
