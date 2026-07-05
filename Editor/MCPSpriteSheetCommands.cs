@@ -175,7 +175,7 @@ namespace UnityMCP.Editor
         {
             var replaceAndSliceResult = ReplaceAndSlice(args) as Dictionary<string, object>;
             if (replaceAndSliceResult == null || replaceAndSliceResult.ContainsKey("error"))
-                return replaceAndSliceResult ?? new { error = "replace-and-slice failed." };
+                return replaceAndSliceResult ?? new Dictionary<string, object> { { "error", "replace-and-slice failed." } };
 
             var clipPath = GetString(args, "clipPath");
             if (string.IsNullOrEmpty(clipPath))
