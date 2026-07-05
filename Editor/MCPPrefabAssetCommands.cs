@@ -1502,6 +1502,34 @@ namespace UnityMCP.Editor
             }
         }
 
+        public static object TransactionEdit(Dictionary<string, object> args)
+        {
+            if (args == null)
+                args = new Dictionary<string, object>();
+
+            if (args.ContainsKey("includePrefabFileDiff") == false)
+                args["includePrefabFileDiff"] = true;
+            if (args.ContainsKey("prefabFileDiffMode") == false)
+                args["prefabFileDiffMode"] = "summary";
+            if (args.ContainsKey("prefabFileDiffContextLines") == false)
+                args["prefabFileDiffContextLines"] = 0;
+
+            var batchResult = BatchEdit(args);
+            var result = batchResult as Dictionary<string, object>;
+            if (result == null)
+                return batchResult;
+
+            result["transaction"] = new Dictionary<string, object>
+            {
+                { "assetPath", GetString(args, "assetPath") },
+                { "operationCount", GetDictionaryList(args, "operations").Count },
+                { "diffMode", GetString(args, "prefabFileDiffMode") },
+                { "saved", result.TryGetValue("saved", out var saved) && saved is bool savedValue && savedValue },
+            };
+
+            return result;
+        }
+
         public static void BatchEditDeferred(Dictionary<string, object> args, Action<object> resolve)
         {
             var componentTypes = CollectBatchEditComponentTypes(args);

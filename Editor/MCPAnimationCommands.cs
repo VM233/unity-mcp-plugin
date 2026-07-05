@@ -131,6 +131,36 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object ValidateController(Dictionary<string, object> args)
+        {
+            args ??= new Dictionary<string, object>();
+            string path = args.ContainsKey("controllerPath") ? args["controllerPath"].ToString() :
+                args.ContainsKey("path") ? args["path"].ToString() : "";
+            var controller = AssetDatabase.LoadAssetAtPath<AnimatorController>(path);
+            if (controller == null)
+                return new { error = $"Animator controller not found at '{path}'" };
+
+            int layerIndex = args.ContainsKey("layerIndex") ? Convert.ToInt32(args["layerIndex"]) : 0;
+            if (!TryGetLayerStateMachine(controller, layerIndex, out var stateMachine, out var error))
+                return new { error };
+
+            var issues = new List<Dictionary<string, object>>();
+            ValidateParameters(controller, args, issues);
+            ValidateStates(stateMachine, args, issues);
+            ValidateTransitions(stateMachine, args, issues);
+            ValidateStateMesh(stateMachine, args, issues);
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "valid", issues.Count == 0 },
+                { "controllerPath", path },
+                { "layerIndex", layerIndex },
+                { "issueCount", issues.Count },
+                { "issues", issues },
+            };
+        }
+
         // ─── Parameters ───
 
         public static object AddParameter(Dictionary<string, object> args)
@@ -1498,6 +1528,165 @@ namespace UnityMCP.Editor
             return true;
         }
 
+        private static void ValidateParameters(AnimatorController controller, Dictionary<string, object> args,
+            List<Dictionary<string, object>> issues)
+        {
+            foreach (var parameterObj in GetObjectList(args, "requiredParameters"))
+            {
+                string parameterName;
+                string expectedType = "";
+
+                if (parameterObj is Dictionary<string, object> parameterArgs)
+                {
+                    parameterName = parameterArgs.ContainsKey("name") ? parameterArgs["name"].ToString() :
+                        parameterArgs.ContainsKey("parameterName") ? parameterArgs["parameterName"].ToString() : "";
+                    expectedType = parameterArgs.ContainsKey("type") ? parameterArgs["type"].ToString() :
+                        parameterArgs.ContainsKey("parameterType") ? parameterArgs["parameterType"].ToString() : "";
+                }
+                else
+                {
+                    parameterName = parameterObj?.ToString() ?? "";
+                }
+
+                var parameter = controller.parameters.FirstOrDefault(item => item.name == parameterName);
+                if (parameter == null)
+                {
+                    AddIssue(issues, "missing-parameter", parameterName, $"Parameter '{parameterName}' is missing.");
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(expectedType) &&
+                    !string.Equals(parameter.type.ToString(), expectedType, StringComparison.OrdinalIgnoreCase))
+                {
+                    AddIssue(issues, "parameter-type", parameterName,
+                        $"Parameter '{parameterName}' is {parameter.type}, expected {expectedType}.");
+                }
+            }
+        }
+
+        private static void ValidateStates(AnimatorStateMachine stateMachine, Dictionary<string, object> args,
+            List<Dictionary<string, object>> issues)
+        {
+            foreach (string stateName in GetStringList(args, "requiredStates"))
+            {
+                if (FindState(stateMachine, stateName) == null)
+                    AddIssue(issues, "missing-state", stateName, $"State '{stateName}' is missing.");
+            }
+
+            if (args.ContainsKey("requireMotion") && Convert.ToBoolean(args["requireMotion"]))
+            {
+                foreach (var childState in stateMachine.states)
+                {
+                    if (childState.state != null && childState.state.motion == null)
+                    {
+                        AddIssue(issues, "missing-motion", childState.state.name,
+                            $"State '{childState.state.name}' has no motion.");
+                    }
+                }
+            }
+        }
+
+        private static void ValidateTransitions(AnimatorStateMachine stateMachine, Dictionary<string, object> args,
+            List<Dictionary<string, object>> issues)
+        {
+            foreach (var transitionObj in GetObjectList(args, "requiredTransitions"))
+            {
+                if (transitionObj is not Dictionary<string, object> transitionArgs)
+                    continue;
+
+                string sourceName = transitionArgs.ContainsKey("source") ? transitionArgs["source"].ToString() :
+                    transitionArgs.ContainsKey("sourceState") ? transitionArgs["sourceState"].ToString() : "";
+                string destinationName = transitionArgs.ContainsKey("destination") ? transitionArgs["destination"].ToString() :
+                    transitionArgs.ContainsKey("destinationState") ? transitionArgs["destinationState"].ToString() : "";
+                string conditionParameter = transitionArgs.ContainsKey("conditionParameter")
+                    ? transitionArgs["conditionParameter"].ToString()
+                    : "";
+
+                var source = FindState(stateMachine, sourceName);
+                if (source == null)
+                {
+                    AddIssue(issues, "missing-transition-source", sourceName,
+                        $"Transition source state '{sourceName}' is missing.");
+                    continue;
+                }
+
+                var transition = source.transitions.FirstOrDefault(item =>
+                    TransitionDestinationMatches(item, destinationName));
+                if (transition == null)
+                {
+                    AddIssue(issues, "missing-transition", $"{sourceName}->{destinationName}",
+                        $"Transition '{sourceName}' -> '{destinationName}' is missing.");
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(conditionParameter) &&
+                    transition.conditions.All(condition => condition.parameter != conditionParameter))
+                {
+                    AddIssue(issues, "missing-transition-condition", $"{sourceName}->{destinationName}",
+                        $"Transition '{sourceName}' -> '{destinationName}' has no condition '{conditionParameter}'.");
+                }
+            }
+        }
+
+        private static void ValidateStateMesh(AnimatorStateMachine stateMachine, Dictionary<string, object> args,
+            List<Dictionary<string, object>> issues)
+        {
+            bool requireFullMesh = args.ContainsKey("requireFullMesh") && Convert.ToBoolean(args["requireFullMesh"]);
+            if (!requireFullMesh)
+                requireFullMesh = args.ContainsKey("requireMutualTransitions") &&
+                                  Convert.ToBoolean(args["requireMutualTransitions"]);
+            if (!requireFullMesh)
+                return;
+
+            var stateNames = GetStringList(args, "stateNames");
+            if (stateNames.Count == 0)
+                stateNames = stateMachine.states
+                    .Where(item => item.state != null)
+                    .Select(item => item.state.name)
+                    .ToList();
+
+            foreach (string sourceName in stateNames)
+            {
+                var source = FindState(stateMachine, sourceName);
+                if (source == null)
+                    continue;
+
+                foreach (string destinationName in stateNames)
+                {
+                    if (sourceName == destinationName)
+                        continue;
+
+                    if (source.transitions.Any(transition =>
+                            TransitionDestinationMatches(transition, destinationName)) == false)
+                    {
+                        AddIssue(issues, "missing-mutual-transition", $"{sourceName}->{destinationName}",
+                            $"Transition '{sourceName}' -> '{destinationName}' is missing.");
+                    }
+                }
+            }
+        }
+
+        private static AnimatorState FindState(AnimatorStateMachine stateMachine, string stateName)
+        {
+            if (string.IsNullOrEmpty(stateName))
+                return null;
+
+            return stateMachine.states
+                .Select(item => item.state)
+                .FirstOrDefault(state => state != null && state.name == stateName);
+        }
+
+        private static void AddIssue(List<Dictionary<string, object>> issues, string type, string target,
+            string message)
+        {
+            issues.Add(new Dictionary<string, object>
+            {
+                { "type", type },
+                { "target", target },
+                { "message", message },
+            });
+        }
+
         private static Dictionary<string, object> BuildStateInfo(AnimatorStateMachine stateMachine,
             AnimatorState state, Vector3 position, int layerIndex)
         {
@@ -1826,11 +2015,10 @@ namespace UnityMCP.Editor
 
         private static List<object> GetObjectList(Dictionary<string, object> args, string key)
         {
-            if (args == null || !args.ContainsKey(key))
+            if (args == null || !args.TryGetValue(key, out object value) || value == null)
                 return new List<object>();
 
-            var values = args[key] as List<object>;
-            return values ?? new List<object>();
+            return value is List<object> values ? values : new List<object> { value };
         }
 
         private static Type ResolveUnityType(string typeName, Type fallback = null)

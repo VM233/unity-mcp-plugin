@@ -644,6 +644,12 @@ namespace UnityMCP.Editor
                     return "Find GameObjects inside a prefab asset by name/path, component type, and serialized property value.";
                 case "prefab-asset/batch-edit":
                     return "Apply multiple prefab asset edits in one transaction, save once, and return operation summaries plus prefab YAML diff.";
+                case "prefab-asset/transaction-edit":
+                    return "High-level prefab asset transaction edit with default summary diff for minimal-change review.";
+                case "serialized-object/get":
+                    return "Read serialized properties from a scene object, component, or asset via SerializedObject.";
+                case "serialized-object/set":
+                    return "Set one serialized property on a scene object, component, or asset via SerializedObject.";
                 case "asset/rename":
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
@@ -658,6 +664,8 @@ namespace UnityMCP.Editor
                     return "Modify an existing Animator transition, including settings and condition edits.";
                 case "animation/connect-states":
                     return "Create transitions between every pair of the provided Animator states.";
+                case "animation/validate-controller":
+                    return "Validate Animator parameters, states, motions, required transitions, and pairwise state connections.";
                 case "uitoolkit/windows":
                     return "List open Unity Editor windows with UI Toolkit root metadata.";
                 case "uitoolkit/tree":
@@ -678,6 +686,10 @@ namespace UnityMCP.Editor
                     return "Query runtime UIDocument UI Toolkit elements by VisualElementPath, name, class, type, or text.";
                 case "uitoolkit/runtime-style":
                     return "Read inline, resolved, and background style data for a runtime UI Toolkit element.";
+                case "uitoolkit/diagnose-runtime":
+                    return "Diagnose runtime UI Toolkit elements with VisualElementPath lookup, style, parent/children, background, and pixel-grid data.";
+                case "uitoolkit/visual-check":
+                    return "Run runtime UI Toolkit visual checks such as pixel-grid, background scale, and expected size.";
                 case "uitoolkit/runtime-repaint":
                     return "Trigger repaint for a runtime UIDocument or one of its elements.";
                 case "uitoolkit/refresh":
@@ -696,6 +708,8 @@ namespace UnityMCP.Editor
                     return "Draw rectangle overlays on a screenshot or image file for visual verification.";
                 case "sprite/sheet-info":
                     return "Inspect a sliced sprite sheet and return texture and sprite metadata.";
+                case "sprite/pixel-check":
+                    return "Check Sprite/Texture import settings, dimensions, pivot, border, and pixel-art suitability.";
                 case "sprite/replace-and-slice":
                     return "Replace a sprite sheet image file and slice it into numbered sprites.";
                 case "sprite/slice-sheet":
@@ -813,6 +827,36 @@ namespace UnityMCP.Editor
                         Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
                         Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
                     ), "assetPath", "operations");
+                case "prefab-asset/transaction-edit":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("operations", "array", "Ordered operations. Same operation format as prefab-asset/batch-edit."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode. Defaults to summary for this high-level transaction route."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true.")
+                    ), "assetPath", "operations");
+                case "serialized-object/get":
+                    return Schema(Props(
+                        Prop("instanceId", "number", "Target Unity object instance id."),
+                        Prop("assetPath", "string", "Target asset path if instanceId is omitted."),
+                        Prop("assetType", "string", "Optional asset type name/full name used when loading assetPath."),
+                        Prop("gameObjectPath", "string", "Scene GameObject path if instanceId and assetPath are omitted."),
+                        Prop("componentType", "string", "Optional component type to select from a GameObject target."),
+                        Prop("componentIndex", "number", "Component index when multiple components of the same type exist."),
+                        Prop("propertyPath", "string", "Optional serialized property path to read."),
+                        Prop("maxProperties", "number", "Maximum properties to return when propertyPath is omitted. Defaults to 200."),
+                        Prop("includeChildren", "boolean", "Walk child properties. Defaults to true.")
+                    ));
+                case "serialized-object/set":
+                    return Schema(Props(
+                        Prop("instanceId", "number", "Target Unity object instance id."),
+                        Prop("assetPath", "string", "Target asset path if instanceId is omitted."),
+                        Prop("assetType", "string", "Optional asset type name/full name used when loading assetPath."),
+                        Prop("gameObjectPath", "string", "Scene GameObject path if instanceId and assetPath are omitted."),
+                        Prop("componentType", "string", "Optional component type to select from a GameObject target."),
+                        Prop("componentIndex", "number", "Component index when multiple components of the same type exist."),
+                        Prop("propertyPath", "string", "Serialized property path to write."),
+                        Prop("value", "object", "Serialized value. ObjectReference supports assetPath, instanceId, or gameObject.")
+                    ), "propertyPath", "value");
                 case "asset/rename":
                     return Schema(Props(
                         Prop("path", "string", "Current asset path, e.g. Assets/Art/Old Name.png."),
@@ -899,6 +943,19 @@ namespace UnityMCP.Editor
                         Prop("hasFixedDuration", "boolean", "Fixed duration flag applied to created transitions."),
                         Prop("conditions", "array", "Conditions applied to every created transition.")
                     ), "controllerPath", "stateNames");
+                case "animation/validate-controller":
+                    return Schema(Props(
+                        Prop("controllerPath", "string", "AnimatorController asset path."),
+                        Prop("path", "string", "Alias for controllerPath."),
+                        Prop("layerIndex", "number", "Layer index. Defaults to 0."),
+                        Prop("requiredParameters", "array", "Strings or objects with name/parameterName and optional type/parameterType."),
+                        Prop("requiredStates", "array", "State names that must exist."),
+                        Prop("requireMotion", "boolean", "Require every state in the layer to have a motion."),
+                        Prop("requiredTransitions", "array", "Objects with source/sourceState, destination/destinationState, and optional conditionParameter."),
+                        Prop("requireFullMesh", "boolean", "Require all stateNames to have pairwise transitions."),
+                        Prop("requireMutualTransitions", "boolean", "Alias for requireFullMesh."),
+                        Prop("stateNames", "array", "States used by full mesh validation. Defaults to all layer states.")
+                    ), "controllerPath");
                 case "project-tools/list":
                     return Schema(Props());
                 case "project-tools/execute":
@@ -985,6 +1042,26 @@ namespace UnityMCP.Editor
                         Prop("typeName", "string", "VisualElement type name contains match if path is omitted."),
                         Prop("text", "string", "TextElement text contains match if path is omitted.")
                     ));
+                case "uitoolkit/diagnose-runtime":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("queries", "array", "Optional list of element queries. Each accepts path, visualElementPath, name, className, typeName, text, and pixelScale."),
+                        Prop("path", "string", "Element tree path if queries is omitted."),
+                        Prop("visualElementPath", "string", "Slash-separated VisualElementPath names if queries is omitted."),
+                        Prop("visualElementNames", "array", "VisualElementPath names array if queries is omitted."),
+                        Prop("name", "string", "VisualElement.name exact match if queries is omitted."),
+                        Prop("pixelScale", "number", "Pixel grid scale used for pixel diagnostics. Defaults to 1.")
+                    ));
+                case "uitoolkit/visual-check":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("checks", "array", "Visual checks. Supported type values: pixel-grid, background-scale, size."),
+                        Prop("path", "string", "Element tree path if checks is omitted."),
+                        Prop("visualElementPath", "string", "Slash-separated VisualElementPath names if checks is omitted."),
+                        Prop("pixelScale", "number", "Pixel grid scale. Defaults to 1."),
+                        Prop("expectedScale", "number", "Expected background image scale for background-scale checks."),
+                        Prop("width", "number", "Expected element width for size checks."),
+                        Prop("height", "number", "Expected element height for size checks."),
+                        Prop("tolerance", "number", "Allowed pixel delta. Defaults to 0.01.")
+                    ));
                 case "uitoolkit/runtime-repaint":
                     return RuntimeUIDocumentSchema(Props(
                         Prop("path", "string", "Optional element tree path from runtime-tree."),
@@ -1047,6 +1124,18 @@ namespace UnityMCP.Editor
                 case "sprite/sheet-info":
                     return Schema(Props(
                         Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path.")
+                    ));
+                case "sprite/pixel-check":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Texture/Sprite asset path."),
+                        Prop("assetPaths", "array", "Texture/Sprite asset paths."),
+                        Prop("folderPath", "string", "Folder to scan recursively for Texture2D assets."),
+                        Prop("dimensionsMultipleOf", "number", "Optional divisor required for texture width/height."),
+                        Prop("expectedScale", "number", "Optional UI scale used to check source dimensions after scaling."),
+                        Prop("tolerance", "number", "Allowed pixel delta. Defaults to 0.01."),
+                        Prop("requirePointFilter", "boolean", "Warn if FilterMode is not Point. Defaults to true."),
+                        Prop("requireNoCompression", "boolean", "Warn if default platform format is compressed. Defaults to true."),
+                        Prop("requireNoMipMaps", "boolean", "Warn if mip maps are enabled. Defaults to true.")
                     ));
                 case "sprite/replace-and-slice":
                 case "sprite/slice-sheet":
@@ -1333,6 +1422,12 @@ namespace UnityMCP.Editor
                 case "component/get-referenceable":
                     return MCPComponentCommands.GetReferenceableObjects(ParseJson(body));
 
+                // ─── SerializedObject ───
+                case "serialized-object/get":
+                    return MCPSerializedObjectCommands.Get(ParseJson(body));
+                case "serialized-object/set":
+                    return MCPSerializedObjectCommands.Set(ParseJson(body));
+
                 // ─── Assets ───
                 case "asset/list":
                     return MCPAssetCommands.List(ParseJson(body));
@@ -1410,6 +1505,8 @@ namespace UnityMCP.Editor
                     return MCPAnimationCommands.UpdateTransition(ParseJson(body));
                 case "animation/connect-states":
                     return MCPAnimationCommands.ConnectStates(ParseJson(body));
+                case "animation/validate-controller":
+                    return MCPAnimationCommands.ValidateController(ParseJson(body));
                 case "animation/create-clip":
                     return MCPAnimationCommands.CreateClip(ParseJson(body));
                 case "animation/clip-info":
@@ -1492,6 +1589,8 @@ namespace UnityMCP.Editor
                     return MCPPrefabAssetCommands.Find(ParseJson(body));
                 case "prefab-asset/batch-edit":
                     return MCPPrefabAssetCommands.BatchEdit(ParseJson(body));
+                case "prefab-asset/transaction-edit":
+                    return MCPPrefabAssetCommands.TransactionEdit(ParseJson(body));
 
                 // ─── Prefab Variant Management ───
                 case "prefab-asset/variant-info":
@@ -1818,6 +1917,8 @@ namespace UnityMCP.Editor
                 // ─── Sprite Sheet ───
                 case "sprite/sheet-info":
                     return MCPSpriteSheetCommands.GetSheetInfo(ParseJson(body));
+                case "sprite/pixel-check":
+                    return MCPSpritePixelCommands.Check(ParseJson(body));
                 case "sprite/replace-and-slice":
                     return MCPSpriteSheetCommands.ReplaceAndSlice(ParseJson(body));
                 case "sprite/slice-sheet":
@@ -1990,6 +2091,10 @@ namespace UnityMCP.Editor
                     return MCPUICommands.QueryRuntimeUI(ParseJson(body));
                 case "uitoolkit/runtime-style":
                     return MCPUICommands.GetRuntimeUIStyle(ParseJson(body));
+                case "uitoolkit/diagnose-runtime":
+                    return MCPUICommands.DiagnoseRuntimeUI(ParseJson(body));
+                case "uitoolkit/visual-check":
+                    return MCPUICommands.VisualCheckRuntimeUI(ParseJson(body));
                 case "uitoolkit/runtime-repaint":
                     return MCPUICommands.RepaintRuntimeUI(ParseJson(body));
                 case "uitoolkit/refresh":

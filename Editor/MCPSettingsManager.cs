@@ -111,7 +111,7 @@ namespace UnityMCP.Editor
             "memoryprofiler", "mppm", "navigation", "packagemanager", "particle", "physics", "prefab",
             "prefabasset", "prefs", "profiler", "project", "project-tools", "projectsettings", "renderer",
             "scenario", "scene", "screenshot", "script", "scriptableobject", "search",
-            "selection", "shadergraph", "sprite", "spriteatlas", "taglayer", "terrain", "testing",
+            "selection", "serialized-object", "shadergraph", "sprite", "spriteatlas", "taglayer", "terrain", "testing",
             "texture", "ui", "uitoolkit", "uma", "undo"
         };
 

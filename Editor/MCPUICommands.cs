@@ -637,6 +637,146 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object DiagnoseRuntimeUI(Dictionary<string, object> args)
+        {
+            var document = FindRuntimeUIDocument(args, out string error);
+            if (document == null)
+                return new { error };
+
+            var root = document.rootVisualElement;
+            if (root == null)
+                return new { error = $"UIDocument '{document.name}' has no rootVisualElement" };
+
+            var checks = new List<Dictionary<string, object>>();
+            var queryObjects = GetObjectList(args, "queries");
+            if (queryObjects.Count == 0)
+                queryObjects.Add(args);
+
+            for (int i = 0; i < queryObjects.Count; i++)
+            {
+                var query = AsDictionary(queryObjects[i]);
+                var element = FindRuntimeElement(query, document, out string elementPath, out string elementError);
+                var check = new Dictionary<string, object>
+                {
+                    { "index", i },
+                    { "query", query },
+                    { "found", element != null },
+                    { "path", elementPath },
+                    { "error", element == null ? elementError : "" },
+                };
+
+                if (element != null)
+                {
+                    check["element"] = BuildElementInfo(element, elementPath, true);
+                    check["parent"] = element.parent == null
+                        ? null
+                        : BuildElementInfo(element.parent, GetElementPath(root, element.parent), false);
+                    check["children"] = element.Children()
+                        .Select(child => BuildElementInfo(child, GetElementPath(root, child), false))
+                        .ToList();
+                    check["pixel"] = BuildPixelInfo(element, GetFloat(query, "pixelScale",
+                        GetFloat(args, "pixelScale", 1f)));
+                    check["backgroundScale"] = BuildBackgroundScaleInfo(element);
+                }
+
+                checks.Add(check);
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "document", BuildUIDocumentInfo(document) },
+                { "valid", checks.All(check => GetBool(check, "found", false)) },
+                { "count", checks.Count },
+                { "checks", checks },
+            };
+        }
+
+        public static object VisualCheckRuntimeUI(Dictionary<string, object> args)
+        {
+            var document = FindRuntimeUIDocument(args, out string error);
+            if (document == null)
+                return new { error };
+
+            var root = document.rootVisualElement;
+            if (root == null)
+                return new { error = $"UIDocument '{document.name}' has no rootVisualElement" };
+
+            var checkArgs = GetObjectList(args, "checks");
+            if (checkArgs.Count == 0)
+                checkArgs.Add(args);
+
+            float defaultPixelScale = GetFloat(args, "pixelScale", 1f);
+            float defaultTolerance = GetFloat(args, "tolerance", 0.01f);
+            var results = new List<Dictionary<string, object>>();
+            bool valid = true;
+
+            for (int i = 0; i < checkArgs.Count; i++)
+            {
+                var check = AsDictionary(checkArgs[i]);
+                string kind = GetString(check, "type");
+                if (string.IsNullOrEmpty(kind))
+                    kind = GetString(check, "kind");
+                if (string.IsNullOrEmpty(kind))
+                    kind = "pixel-grid";
+
+                var element = FindAssertionElement(root, check, "", out string path, out string elementError);
+                var result = new Dictionary<string, object>
+                {
+                    { "index", i },
+                    { "type", kind },
+                    { "path", path },
+                };
+
+                if (element == null)
+                {
+                    result["passed"] = false;
+                    result["error"] = elementError;
+                    results.Add(result);
+                    valid = false;
+                    continue;
+                }
+
+                switch (kind.ToLowerInvariant())
+                {
+                    case "pixel-grid":
+                    case "pixel":
+                        AddPixelGridResult(result, element,
+                            GetFloat(check, "pixelScale", defaultPixelScale),
+                            GetFloat(check, "tolerance", defaultTolerance));
+                        break;
+                    case "background-scale":
+                    case "sprite-scale":
+                    case "texture-scale":
+                        AddBackgroundScaleResult(result, element,
+                            GetFloat(check, "expectedScale", GetFloat(check, "scale", defaultPixelScale)),
+                            GetFloat(check, "tolerance", defaultTolerance));
+                        break;
+                    case "size":
+                        AddRuntimeSizeResult(result, element, check, defaultTolerance);
+                        break;
+                    default:
+                        result["passed"] = false;
+                        result["error"] = $"Unknown visual check type '{kind}'";
+                        break;
+                }
+
+                if (GetBool(result, "passed", false) == false)
+                    valid = false;
+
+                results.Add(result);
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "valid", valid },
+                { "document", BuildUIDocumentInfo(document) },
+                { "count", results.Count },
+                { "results", results },
+            };
+        }
+
         public static object RepaintRuntimeUI(Dictionary<string, object> args)
         {
             var document = FindRuntimeUIDocument(args, out string error);
@@ -2040,6 +2180,185 @@ namespace UnityMCP.Editor
             }
 
             return current;
+        }
+
+        private static Dictionary<string, object> BuildPixelInfo(
+            UnityEngine.UIElements.VisualElement element, float pixelScale)
+        {
+            var rect = element.worldBound;
+            return new Dictionary<string, object>
+            {
+                { "pixelScale", SafeFloat(pixelScale) },
+                { "worldBound", RectToDictionary(rect) },
+                { "xOnGrid", IsOnPixelGrid(rect.x, pixelScale, 0.01f) },
+                { "yOnGrid", IsOnPixelGrid(rect.y, pixelScale, 0.01f) },
+                { "widthOnGrid", IsOnPixelGrid(rect.width, pixelScale, 0.01f) },
+                { "heightOnGrid", IsOnPixelGrid(rect.height, pixelScale, 0.01f) },
+            };
+        }
+
+        private static Dictionary<string, object> BuildBackgroundScaleInfo(
+            UnityEngine.UIElements.VisualElement element)
+        {
+            var result = new Dictionary<string, object>
+            {
+                { "hasBackground", false },
+            };
+
+            var backgroundObject = GetBackgroundObject(element);
+            if (backgroundObject == null)
+                return result;
+
+            var sourceSize = GetBackgroundObjectSize(backgroundObject);
+            var rect = element.worldBound;
+            result["hasBackground"] = true;
+            result["background"] = BuildUnityObjectInfo(backgroundObject);
+            result["sourceWidth"] = SafeFloat(sourceSize.x);
+            result["sourceHeight"] = SafeFloat(sourceSize.y);
+            result["renderedWidth"] = SafeFloat(rect.width);
+            result["renderedHeight"] = SafeFloat(rect.height);
+            result["scaleX"] = sourceSize.x > 0 ? SafeFloat(rect.width / sourceSize.x) : null;
+            result["scaleY"] = sourceSize.y > 0 ? SafeFloat(rect.height / sourceSize.y) : null;
+            result["uniformScale"] = sourceSize.x > 0 && sourceSize.y > 0
+                ? SafeFloat(Math.Abs(rect.width / sourceSize.x - rect.height / sourceSize.y))
+                : null;
+            return result;
+        }
+
+        private static void AddPixelGridResult(Dictionary<string, object> result,
+            UnityEngine.UIElements.VisualElement element, float pixelScale, float tolerance)
+        {
+            var rect = element.worldBound;
+            bool xPassed = IsOnPixelGrid(rect.x, pixelScale, tolerance);
+            bool yPassed = IsOnPixelGrid(rect.y, pixelScale, tolerance);
+            bool widthPassed = IsOnPixelGrid(rect.width, pixelScale, tolerance);
+            bool heightPassed = IsOnPixelGrid(rect.height, pixelScale, tolerance);
+
+            result["passed"] = xPassed && yPassed && widthPassed && heightPassed;
+            result["pixelScale"] = SafeFloat(pixelScale);
+            result["tolerance"] = SafeFloat(tolerance);
+            result["xDelta"] = SafeFloat(GetPixelGridDelta(rect.x, pixelScale));
+            result["yDelta"] = SafeFloat(GetPixelGridDelta(rect.y, pixelScale));
+            result["widthDelta"] = SafeFloat(GetPixelGridDelta(rect.width, pixelScale));
+            result["heightDelta"] = SafeFloat(GetPixelGridDelta(rect.height, pixelScale));
+            result["rect"] = RectToDictionary(rect);
+        }
+
+        private static void AddBackgroundScaleResult(Dictionary<string, object> result,
+            UnityEngine.UIElements.VisualElement element, float expectedScale, float tolerance)
+        {
+            var backgroundObject = GetBackgroundObject(element);
+            if (backgroundObject == null)
+            {
+                result["passed"] = false;
+                result["error"] = "Element has no resolved background image";
+                return;
+            }
+
+            var sourceSize = GetBackgroundObjectSize(backgroundObject);
+            if (sourceSize.x <= 0 || sourceSize.y <= 0)
+            {
+                result["passed"] = false;
+                result["error"] = "Could not determine background source size";
+                result["background"] = BuildUnityObjectInfo(backgroundObject);
+                return;
+            }
+
+            var rect = element.worldBound;
+            float scaleX = rect.width / sourceSize.x;
+            float scaleY = rect.height / sourceSize.y;
+            bool passed = Math.Abs(scaleX - expectedScale) <= tolerance &&
+                          Math.Abs(scaleY - expectedScale) <= tolerance;
+
+            result["passed"] = passed;
+            result["expectedScale"] = SafeFloat(expectedScale);
+            result["tolerance"] = SafeFloat(tolerance);
+            result["scaleX"] = SafeFloat(scaleX);
+            result["scaleY"] = SafeFloat(scaleY);
+            result["background"] = BuildUnityObjectInfo(backgroundObject);
+            result["sourceWidth"] = SafeFloat(sourceSize.x);
+            result["sourceHeight"] = SafeFloat(sourceSize.y);
+            result["renderedWidth"] = SafeFloat(rect.width);
+            result["renderedHeight"] = SafeFloat(rect.height);
+        }
+
+        private static void AddRuntimeSizeResult(Dictionary<string, object> result,
+            UnityEngine.UIElements.VisualElement element, Dictionary<string, object> args, float defaultTolerance)
+        {
+            float expectedWidth = GetFloat(args, "width", float.NaN);
+            if (float.IsNaN(expectedWidth))
+                expectedWidth = GetFloat(args, "expectedWidth", float.NaN);
+            float expectedHeight = GetFloat(args, "height", float.NaN);
+            if (float.IsNaN(expectedHeight))
+                expectedHeight = GetFloat(args, "expectedHeight", float.NaN);
+            float tolerance = GetFloat(args, "tolerance", defaultTolerance);
+
+            var rect = element.worldBound;
+            float widthDelta = float.IsNaN(expectedWidth) ? 0 : rect.width - expectedWidth;
+            float heightDelta = float.IsNaN(expectedHeight) ? 0 : rect.height - expectedHeight;
+            bool widthPassed = float.IsNaN(expectedWidth) || Math.Abs(widthDelta) <= tolerance;
+            bool heightPassed = float.IsNaN(expectedHeight) || Math.Abs(heightDelta) <= tolerance;
+
+            result["passed"] = widthPassed && heightPassed;
+            result["expectedWidth"] = float.IsNaN(expectedWidth) ? null : (object)expectedWidth;
+            result["expectedHeight"] = float.IsNaN(expectedHeight) ? null : (object)expectedHeight;
+            result["actualWidth"] = SafeFloat(rect.width);
+            result["actualHeight"] = SafeFloat(rect.height);
+            result["widthDelta"] = SafeFloat(widthDelta);
+            result["heightDelta"] = SafeFloat(heightDelta);
+            result["tolerance"] = SafeFloat(tolerance);
+            result["rect"] = RectToDictionary(rect);
+        }
+
+        private static bool IsOnPixelGrid(float value, float pixelScale, float tolerance)
+        {
+            if (pixelScale <= 0)
+                return true;
+
+            return Math.Abs(GetPixelGridDelta(value, pixelScale)) <= tolerance;
+        }
+
+        private static float GetPixelGridDelta(float value, float pixelScale)
+        {
+            if (pixelScale <= 0)
+                return 0;
+
+            return value - Mathf.Round(value / pixelScale) * pixelScale;
+        }
+
+        private static UnityEngine.Object GetBackgroundObject(UnityEngine.UIElements.VisualElement element)
+        {
+            object styleValue = GetPropertyValue(element.resolvedStyle, "backgroundImage");
+            object background = GetPropertyValue(styleValue, "value") ?? styleValue;
+
+            return GetPropertyValue(background, "sprite") as UnityEngine.Object
+                   ?? GetPropertyValue(background, "texture") as UnityEngine.Object
+                   ?? GetPropertyValue(background, "renderTexture") as UnityEngine.Object
+                   ?? GetPropertyValue(background, "vectorImage") as UnityEngine.Object;
+        }
+
+        private static Vector2 GetBackgroundObjectSize(UnityEngine.Object backgroundObject)
+        {
+            switch (backgroundObject)
+            {
+                case Sprite sprite:
+                    return sprite.rect.size;
+                case Texture texture:
+                    return new Vector2(texture.width, texture.height);
+                default:
+                    return Vector2.zero;
+            }
+        }
+
+        private static Dictionary<string, object> BuildUnityObjectInfo(UnityEngine.Object unityObject)
+        {
+            return new Dictionary<string, object>
+            {
+                { "name", unityObject != null ? unityObject.name : "" },
+                { "type", unityObject != null ? unityObject.GetType().Name : "" },
+                { "instanceId", unityObject != null ? unityObject.GetInstanceID() : 0 },
+                { "assetPath", unityObject != null ? AssetDatabase.GetAssetPath(unityObject) : "" },
+            };
         }
 
         private static Dictionary<string, object> BuildInlineStyleInfo(UnityEngine.UIElements.VisualElement element)
