@@ -55,6 +55,8 @@ namespace UnityMCP.Editor
             { "prefab-asset/batch-edit", MCPPrefabAssetCommands.BatchEditDeferred },
         };
 
+        internal static IEnumerable<string> DeferredRouteNames => _deferredRoutes.Keys;
+
         // SessionState key to persist running state across domain reloads (Play Mode, recompile)
         private const string WasRunningKey = "UnityMCP_WasRunningBeforeReload";
 
@@ -1393,6 +1395,8 @@ namespace UnityMCP.Editor
                     return MCPTextureCommands.ApplySpriteImportPreset(ParseJson(body));
                 case "texture/import-image":
                     return MCPTextureCommands.ImportImage(ParseJson(body));
+                case "texture/check-import-settings":
+                    return MCPTextureCommands.CheckImportSettings(ParseJson(body));
 
                 // ─── Sprite Atlas ───
                 case "spriteatlas/create":
@@ -1479,6 +1483,8 @@ namespace UnityMCP.Editor
                     return MCPPackageManagerCommands.SearchPackage(ParseJson(body));
                 case "packages/info":
                     return MCPPackageManagerCommands.GetPackageInfo(ParseJson(body));
+                case "packages/status":
+                    return MCPPackageManagerCommands.GetPackageStatus(ParseJson(body));
                 case "packages/update-git":
                     return MCPPackageManagerCommands.UpdateGitPackage(ParseJson(body));
                 case "packages/lint-metas":

@@ -68,6 +68,7 @@ namespace UnityMCP.Editor
         private static List<string> GetRegisteredRouteList()
         {
             var routes = ExtractRouteCasesFromSource();
+            routes.AddRange(MCPBridgeServer.DeferredRouteNames);
             return routes
                 .Where(route => !string.IsNullOrEmpty(route))
                 .Distinct()
@@ -181,6 +182,8 @@ namespace UnityMCP.Editor
             {
                 case "packages/update-git":
                     return "Update a Git-based Unity package and return the resolved packages-lock hash.";
+                case "packages/status":
+                    return "Read Package Manager manifest and lock status for one package or all Git packages.";
                 case "advanced/execute":
                     return "Stable generic entrypoint that executes any Unity route by route name and arguments.";
                 case "packages/lint-metas":
@@ -315,6 +318,8 @@ namespace UnityMCP.Editor
                     return "Apply high-level TextureImporter/Sprite settings such as pixel sprite preset, PPU, pivot, border, and reference settings.";
                 case "texture/import-image":
                     return "Import an external image from a URL or local path into Assets, optionally dedupe, then apply sprite import settings.";
+                case "texture/check-import-settings":
+                    return "Check TextureImporter settings against a reference texture or a pixel-sprite preset without modifying assets.";
                 case "build/run-test":
                     return "Build the player, launch the built executable, sample Player.log, optionally capture its window, and terminate it.";
                 case "animation/set-object-reference-curve":
@@ -352,6 +357,11 @@ namespace UnityMCP.Editor
                         Prop("skipIfResolved", "boolean", "Skip Package Manager resolve when packages-lock already matches the requested Git commit. Defaults to true."),
                         Prop("force", "boolean", "Force Package Manager resolve even when packages-lock already matches. Defaults to false.")
                     ), "name");
+                case "packages/status":
+                    return Schema(Props(
+                        Prop("name", "string", "Optional package name. If omitted, returns all Git dependencies from the manifest."),
+                        Prop("includeResolved", "boolean", "Include Package Manager resolved package data when available. Defaults to false.")
+                    ));
                 case "packages/lint-metas":
                     return Schema(Props(
                         Prop("name", "string", "Installed package name to lint."),
@@ -504,13 +514,20 @@ namespace UnityMCP.Editor
                 case "asset/rename":
                     return Schema(Props(
                         Prop("path", "string", "Current asset path, e.g. Assets/Art/Old Name.png."),
-                        Prop("newName", "string", "New file or folder name. Do not include a directory path.")
-                    ), "path", "newName");
+                        Prop("assetPath", "string", "Alias for path."),
+                        Prop("newName", "string", "New file or folder name. Do not include a directory path."),
+                        Prop("name", "string", "Alias for newName."),
+                        Prop("dryRun", "boolean", "Validate and return expected paths without renaming.")
+                    ));
                 case "asset/move":
                     return Schema(Props(
                         Prop("path", "string", "Current asset path."),
-                        Prop("destinationPath", "string", "Destination asset path, or an existing folder path to keep the same file name.")
-                    ), "path", "destinationPath");
+                        Prop("assetPath", "string", "Alias for path."),
+                        Prop("destinationPath", "string", "Destination asset path, or an existing folder path to keep the same file name."),
+                        Prop("targetPath", "string", "Alias for destinationPath."),
+                        Prop("destinationFolder", "string", "Existing folder path to keep the same file name."),
+                        Prop("dryRun", "boolean", "Validate and return expected paths without moving.")
+                    ));
                 case "console/query":
                     return Schema(Props(
                         Prop("count", "number", "Maximum returned entries. Defaults to 50."),
@@ -914,6 +931,16 @@ namespace UnityMCP.Editor
                         Prop("dedupeByHash", "boolean", "Skip if the target folder already contains identical image bytes. Defaults to true."),
                         Prop("applySpritePreset", "boolean", "Apply sprite import settings after import. Defaults to true."),
                         Prop("preset", "string", "Preset passed to texture/apply-sprite-preset. Defaults to pixel-sprite.")
+                    ));
+                case "texture/check-import-settings":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Texture asset path to check."),
+                        Prop("assetPaths", "array", "Texture asset paths to check."),
+                        Prop("folderPath", "string", "Folder to scan recursively for Texture2D assets."),
+                        Prop("referencePath", "string", "Optional texture asset whose importer settings are treated as expected."),
+                        Prop("preset", "string", "Optional high-level preset to check. Supported: pixel-sprite."),
+                        Prop("requirePixelSprite", "boolean", "Shortcut for preset=pixel-sprite. Defaults to true when referencePath is omitted."),
+                        Prop("includeMatching", "boolean", "Include passing comparisons in the returned comparisons list. Defaults to false.")
                     ));
                 case "build/run-test":
                     return Schema(Props(

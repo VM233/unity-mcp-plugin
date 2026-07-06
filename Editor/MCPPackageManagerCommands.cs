@@ -369,6 +369,102 @@ namespace UnityMCP.Editor
             return new { error = $"Package '{name}' not found" };
         }
 
+        public static object GetPackageStatus(Dictionary<string, object> args)
+        {
+            string name = GetString(args, "name");
+            bool includeResolved = GetBool(args, "includeResolved", false);
+            var manifestDependencies = GetManifestDependencies();
+            var packages = new List<Dictionary<string, object>>();
+
+            if (string.IsNullOrEmpty(name))
+            {
+                foreach (var pair in manifestDependencies)
+                {
+                    if (IsGitIdentifier(pair.Value))
+                        packages.Add(BuildPackageStatus(pair.Key, pair.Value, includeResolved));
+                }
+            }
+            else
+            {
+                manifestDependencies.TryGetValue(name, out string manifestDependency);
+                packages.Add(BuildPackageStatus(name, manifestDependency ?? "", includeResolved));
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "isCompiling", EditorApplication.isCompiling },
+                { "isUpdating", EditorApplication.isUpdating },
+                { "projectRoot", GetProjectRoot() },
+                { "manifestPath", NormalizePath(Path.Combine(GetProjectRoot(), "Packages", "manifest.json")) },
+                { "lockPath", NormalizePath(Path.Combine(GetProjectRoot(), "Packages", "packages-lock.json")) },
+                { "count", packages.Count },
+                { "packages", packages },
+            };
+        }
+
+        private static Dictionary<string, object> BuildPackageStatus(string name, string manifestDependency,
+            bool includeResolved)
+        {
+            var lockInfo = GetPackageLockInfo(name);
+            var result = new Dictionary<string, object>
+            {
+                { "name", name },
+                { "manifestDependency", manifestDependency ?? "" },
+                { "manifestRef", GetGitRef(manifestDependency ?? "") },
+                { "manifestGitUrl", StripGitRef(manifestDependency ?? "") },
+                { "manifestIsGit", IsGitIdentifier(manifestDependency ?? "") },
+                { "lockVersion", lockInfo.version },
+                { "lockSource", lockInfo.source },
+                { "lockHash", lockInfo.hash },
+                { "lockRef", GetGitRef(lockInfo.version ?? "") },
+                { "manifestMatchesLockHash", !string.IsNullOrEmpty(GetGitRef(manifestDependency ?? "")) &&
+                                             !string.IsNullOrEmpty(lockInfo.hash) &&
+                                             lockInfo.hash.StartsWith(GetGitRef(manifestDependency ?? ""),
+                                                 StringComparison.OrdinalIgnoreCase) },
+            };
+
+            if (includeResolved)
+                result["resolved"] = GetResolvedPackageInfo(name);
+
+            return result;
+        }
+
+        private static Dictionary<string, object> GetResolvedPackageInfo(string name)
+        {
+            if (string.IsNullOrEmpty(name) || EditorApplication.isUpdating)
+                return new Dictionary<string, object>();
+
+            var listRequest = Client.List(true);
+            while (!listRequest.IsCompleted)
+                System.Threading.Thread.Sleep(10);
+
+            if (listRequest.Status == StatusCode.Failure)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "error", listRequest.Error?.message ?? "Failed to list packages" },
+                };
+            }
+
+            foreach (var pkg in listRequest.Result)
+            {
+                if (pkg.name != name)
+                    continue;
+
+                return new Dictionary<string, object>
+                {
+                    { "name", pkg.name },
+                    { "displayName", pkg.displayName },
+                    { "version", pkg.version },
+                    { "source", pkg.source.ToString() },
+                    { "resolvedPath", NormalizePath(pkg.resolvedPath ?? "") },
+                };
+            }
+
+            return new Dictionary<string, object>();
+        }
+
         private static string GetString(Dictionary<string, object> args, string key)
         {
             return args != null && args.ContainsKey(key) && args[key] != null ? args[key].ToString() : "";
@@ -439,19 +535,25 @@ namespace UnityMCP.Editor
 
         private static string GetManifestDependency(string name)
         {
+            var dependencies = GetManifestDependencies();
+            return dependencies.TryGetValue(name, out string dependency) ? dependency : "";
+        }
+
+        private static Dictionary<string, string> GetManifestDependencies()
+        {
             string manifestPath = Path.Combine(GetProjectRoot(), "Packages", "manifest.json");
             if (!File.Exists(manifestPath))
-                return "";
+                return new Dictionary<string, string>();
 
             var manifest = MiniJson.Deserialize(File.ReadAllText(manifestPath)) as Dictionary<string, object>;
             if (manifest == null || !manifest.TryGetValue("dependencies", out object dependenciesObj))
-                return "";
+                return new Dictionary<string, string>();
 
             var dependencies = dependenciesObj as Dictionary<string, object>;
-            if (dependencies == null || !dependencies.TryGetValue(name, out object dependency))
-                return "";
+            if (dependencies == null)
+                return new Dictionary<string, string>();
 
-            return dependency?.ToString() ?? "";
+            return dependencies.ToDictionary(pair => pair.Key, pair => pair.Value?.ToString() ?? "");
         }
 
         private static (string version, string source, string hash) GetPackageLockInfo(string name)

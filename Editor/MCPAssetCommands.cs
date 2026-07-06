@@ -183,19 +183,22 @@ namespace UnityMCP.Editor
 
         public static object Rename(Dictionary<string, object> args)
         {
-            string path = GetString(args, "path");
-            string newName = GetString(args, "newName");
+            string path = NormalizeAssetPath(GetFirstString(args, "path", "assetPath"));
+            string newName = GetFirstString(args, "newName", "name", "newAssetName");
+            bool dryRun = GetBool(args, "dryRun", false);
 
             if (string.IsNullOrEmpty(path))
-                return new { error = "path is required" };
+                return new { error = "path or assetPath is required" };
             if (string.IsNullOrEmpty(newName))
-                return new { error = "newName is required" };
+                return new { error = "newName or name is required" };
             if (newName.Contains("/") || newName.Contains("\\"))
                 return new { error = "newName must be a file or folder name, not a path" };
             if (!AssetExists(path))
                 return new { error = $"Asset not found at '{path}'" };
 
             string oldGuid = AssetDatabase.AssetPathToGUID(path);
+            string oldMetaPath = GetMetaPath(path);
+            bool oldMetaExists = File.Exists(GetAbsolutePath(oldMetaPath));
             bool isFolder = AssetDatabase.IsValidFolder(path);
             string directory = Path.GetDirectoryName(path)?.Replace('\\', '/') ?? "";
             string extension = isFolder ? "" : Path.GetExtension(path);
@@ -218,6 +221,21 @@ namespace UnityMCP.Editor
                 return new { error = $"Target asset already exists at '{expectedPath}'" };
             }
 
+            if (dryRun)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "dryRun", true },
+                    { "oldPath", path },
+                    { "expectedPath", expectedPath },
+                    { "oldGuid", oldGuid },
+                    { "oldMetaPath", oldMetaPath },
+                    { "expectedMetaPath", GetMetaPath(expectedPath) },
+                    { "oldMetaExists", oldMetaExists },
+                };
+            }
+
             string error = AssetDatabase.RenameAsset(path, renameName);
             if (!string.IsNullOrEmpty(error))
                 return new { error };
@@ -228,33 +246,45 @@ namespace UnityMCP.Editor
             string newPath = AssetDatabase.GUIDToAssetPath(oldGuid);
             string newGuid = string.IsNullOrEmpty(newPath) ? "" : AssetDatabase.AssetPathToGUID(newPath);
             bool guidChanged = !string.Equals(oldGuid, newGuid, StringComparison.Ordinal);
+            string newMetaPath = string.IsNullOrEmpty(newPath) ? "" : GetMetaPath(newPath);
+            bool newMetaExists = !string.IsNullOrEmpty(newMetaPath) && File.Exists(GetAbsolutePath(newMetaPath));
 
             return new Dictionary<string, object>
             {
                 { "success", true },
+                { "dryRun", false },
                 { "oldPath", path },
                 { "newPath", newPath },
                 { "expectedPath", expectedPath },
+                { "actualPathMatchesExpected", string.Equals(newPath, expectedPath, StringComparison.OrdinalIgnoreCase) },
                 { "oldGuid", oldGuid },
                 { "newGuid", newGuid },
                 { "guidChanged", guidChanged },
                 { "metaPreserved", !guidChanged },
+                { "oldMetaPath", oldMetaPath },
+                { "newMetaPath", newMetaPath },
+                { "oldMetaExists", oldMetaExists },
+                { "newMetaExists", newMetaExists },
             };
         }
 
         public static object Move(Dictionary<string, object> args)
         {
-            string path = GetString(args, "path");
-            string destinationPath = GetString(args, "destinationPath");
+            string path = NormalizeAssetPath(GetFirstString(args, "path", "assetPath"));
+            string destinationPath = NormalizeAssetPath(GetFirstString(args, "destinationPath", "targetPath",
+                "destinationFolder", "targetFolder", "folder"));
+            bool dryRun = GetBool(args, "dryRun", false);
 
             if (string.IsNullOrEmpty(path))
-                return new { error = "path is required" };
+                return new { error = "path or assetPath is required" };
             if (string.IsNullOrEmpty(destinationPath))
-                return new { error = "destinationPath is required" };
+                return new { error = "destinationPath, targetPath, or destinationFolder is required" };
             if (!AssetExists(path))
                 return new { error = $"Asset not found at '{path}'" };
 
             string oldGuid = AssetDatabase.AssetPathToGUID(path);
+            string oldMetaPath = GetMetaPath(path);
+            bool oldMetaExists = File.Exists(GetAbsolutePath(oldMetaPath));
             string targetPath = NormalizeMoveTargetPath(path, destinationPath);
             string targetDirectory = Path.GetDirectoryName(targetPath)?.Replace('\\', '/') ?? "";
             bool sourceIsFolder = AssetDatabase.IsValidFolder(path);
@@ -274,6 +304,22 @@ namespace UnityMCP.Editor
             if (!string.Equals(path, targetPath, StringComparison.OrdinalIgnoreCase) && AssetExists(targetPath))
                 return new { error = $"Target asset already exists at '{targetPath}'" };
 
+            if (dryRun)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "dryRun", true },
+                    { "oldPath", path },
+                    { "requestedDestinationPath", destinationPath },
+                    { "targetPath", targetPath },
+                    { "oldGuid", oldGuid },
+                    { "oldMetaPath", oldMetaPath },
+                    { "targetMetaPath", GetMetaPath(targetPath) },
+                    { "oldMetaExists", oldMetaExists },
+                };
+            }
+
             string error = AssetDatabase.MoveAsset(path, targetPath);
             if (!string.IsNullOrEmpty(error))
                 return new { error };
@@ -284,17 +330,26 @@ namespace UnityMCP.Editor
             string newPath = AssetDatabase.GUIDToAssetPath(oldGuid);
             string newGuid = string.IsNullOrEmpty(newPath) ? "" : AssetDatabase.AssetPathToGUID(newPath);
             bool guidChanged = !string.Equals(oldGuid, newGuid, StringComparison.Ordinal);
+            string newMetaPath = string.IsNullOrEmpty(newPath) ? "" : GetMetaPath(newPath);
+            bool newMetaExists = !string.IsNullOrEmpty(newMetaPath) && File.Exists(GetAbsolutePath(newMetaPath));
 
             return new Dictionary<string, object>
             {
                 { "success", true },
+                { "dryRun", false },
                 { "oldPath", path },
                 { "requestedDestinationPath", destinationPath },
                 { "newPath", newPath },
+                { "targetPath", targetPath },
+                { "actualPathMatchesTarget", string.Equals(newPath, targetPath, StringComparison.OrdinalIgnoreCase) },
                 { "oldGuid", oldGuid },
                 { "newGuid", newGuid },
                 { "guidChanged", guidChanged },
                 { "metaPreserved", !guidChanged },
+                { "oldMetaPath", oldMetaPath },
+                { "newMetaPath", newMetaPath },
+                { "oldMetaExists", oldMetaExists },
+                { "newMetaExists", newMetaExists },
             };
         }
 
@@ -424,6 +479,21 @@ namespace UnityMCP.Editor
             return args != null && args.ContainsKey(key) ? args[key]?.ToString() : "";
         }
 
+        private static string GetFirstString(Dictionary<string, object> args, params string[] keys)
+        {
+            if (args == null || keys == null)
+                return "";
+
+            foreach (string key in keys)
+            {
+                string value = GetString(args, key);
+                if (!string.IsNullOrEmpty(value))
+                    return value;
+            }
+
+            return "";
+        }
+
         private static bool GetBool(Dictionary<string, object> args, string key, bool defaultValue)
         {
             if (args == null || !args.ContainsKey(key) || args[key] == null)
@@ -481,6 +551,22 @@ namespace UnityMCP.Editor
                 return "";
 
             return path.Replace('\\', '/').Trim().Trim('/');
+        }
+
+        private static string GetMetaPath(string assetPath)
+        {
+            return string.IsNullOrEmpty(assetPath) ? "" : NormalizeAssetPath(assetPath) + ".meta";
+        }
+
+        private static string GetAbsolutePath(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath))
+                return "";
+
+            if (Path.IsPathRooted(assetPath))
+                return Path.GetFullPath(assetPath);
+
+            return Path.GetFullPath(Path.Combine(GetProjectRoot(), NormalizeAssetPath(assetPath)));
         }
 
         private static string NormalizeUnityPackageOutputPath(string outputPath)
