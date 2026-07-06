@@ -185,7 +185,18 @@ namespace UnityMCP.Editor
         public static object ExecuteWithTracking(string agentId, string actionName, Func<object> action)
         {
             var ticket = SubmitRequest(agentId, actionName, action);
+            return WaitForTicket(ticket);
+        }
 
+        public static object ExecuteDeferredWithTracking(string agentId, string actionName,
+            Action<Action<object>> deferredAction)
+        {
+            var ticket = SubmitDeferredRequest(agentId, actionName, deferredAction);
+            return WaitForTicket(ticket);
+        }
+
+        private static object WaitForTicket(RequestTicket ticket)
+        {
             var waiter = new ManualResetEventSlim(false);
             lock (_queueLock) { _waiters[ticket.TicketId] = waiter; }
 

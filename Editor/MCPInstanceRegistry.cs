@@ -34,6 +34,8 @@ namespace UnityMCP.Editor
         private static readonly string RegistryDir;
         private static readonly string RegistryPath;
         private static int _registeredPort = -1;
+        private static Dictionary<string, object> _currentInstanceEntry;
+        private static string _currentProjectPath = "";
 
         /// <summary>
         /// Heartbeat interval in seconds. The registry entry's lastSeen timestamp
@@ -71,6 +73,38 @@ namespace UnityMCP.Editor
         /// The port this instance registered with, or -1 if not yet registered.
         /// </summary>
         public static int RegisteredPort => _registeredPort;
+
+        public static string CurrentProjectPath =>
+            string.IsNullOrEmpty(_currentProjectPath) ? GetProjectPath() : _currentProjectPath;
+
+        public static string CurrentProjectName => GetCurrentInstanceString("projectName");
+
+        public static Dictionary<string, object> GetCurrentInstanceInfo()
+        {
+            if (_currentInstanceEntry != null)
+                return new Dictionary<string, object>(_currentInstanceEntry);
+
+            string nowUtc = DateTime.UtcNow.ToString("o");
+            var entry = BuildCurrentInstanceEntry(_registeredPort, nowUtc, nowUtc);
+            CacheCurrentInstanceEntry(entry);
+            return new Dictionary<string, object>(entry);
+        }
+
+        public static List<Dictionary<string, object>> GetRegisteredInstances(bool cleanupStale = true)
+        {
+            if (cleanupStale)
+                CleanupStaleEntries();
+
+            var result = new List<Dictionary<string, object>>();
+            WithRegistryLock(() =>
+            {
+                var instances = ReadRegistry();
+                foreach (var instance in instances)
+                    result.Add(new Dictionary<string, object>(instance));
+            }, "list-instances");
+
+            return result;
+        }
 
         /// <summary>
         /// Find an available port in the range [PortRangeStart, PortRangeEnd].
@@ -113,7 +147,7 @@ namespace UnityMCP.Editor
                         if (instPort == preferredPort)
                         {
                             string instPath = inst.ContainsKey("projectPath") ? inst["projectPath"].ToString() : "";
-                            if (instPath != myProjectPath)
+                            if (ProjectPathEquals(instPath, myProjectPath) == false)
                             {
                                 claimedByOther = true;
                             }
@@ -224,7 +258,7 @@ namespace UnityMCP.Editor
                 string projectPath = GetProjectPath();
                 instances.RemoveAll(inst =>
                     inst.ContainsKey("projectPath") &&
-                    inst["projectPath"].ToString() == projectPath);
+                    ProjectPathEquals(inst["projectPath"].ToString(), projectPath));
 
                 // Also remove any entry on the same port (stale from crash)
                 instances.RemoveAll(inst =>
@@ -239,19 +273,8 @@ namespace UnityMCP.Editor
 
                 // Build our entry
                 string nowUtc = DateTime.UtcNow.ToString("o");
-                var entry = new Dictionary<string, object>
-                {
-                    { "port", port },
-                    { "projectName", Application.productName },
-                    { "projectPath", projectPath },
-                    { "unityVersion", Application.unityVersion },
-                    { "platform", Application.platform.ToString() },
-                    { "processId", System.Diagnostics.Process.GetCurrentProcess().Id },
-                    { "isClone", IsParrelSyncClone() },
-                    { "cloneIndex", GetParrelSyncCloneIndex() },
-                    { "registeredAt", nowUtc },
-                    { "lastSeen", nowUtc }
-                };
+                var entry = BuildCurrentInstanceEntry(port, nowUtc, nowUtc);
+                CacheCurrentInstanceEntry(entry);
 
                 instances.Add(entry);
                 WriteRegistry(instances);
@@ -301,7 +324,7 @@ namespace UnityMCP.Editor
                 foreach (var inst in instances)
                 {
                     if (inst.ContainsKey("projectPath") &&
-                        inst["projectPath"].ToString() == projectPath)
+                        ProjectPathEquals(inst["projectPath"].ToString(), projectPath))
                     {
                         inst["lastSeen"] = nowUtc;
                         updated = true;
@@ -312,6 +335,8 @@ namespace UnityMCP.Editor
                 if (updated)
                 {
                     WriteRegistry(instances);
+                    if (_currentInstanceEntry != null)
+                        _currentInstanceEntry["lastSeen"] = nowUtc;
                 }
             }, "heartbeat");
         }
@@ -336,7 +361,7 @@ namespace UnityMCP.Editor
                 instances.RemoveAll(inst =>
                 {
                     bool matchPath = inst.ContainsKey("projectPath") &&
-                                     inst["projectPath"].ToString() == projectPath;
+                                     ProjectPathEquals(inst["projectPath"].ToString(), projectPath);
                     bool matchPort = false;
                     if (inst.ContainsKey("port"))
                     {
@@ -353,6 +378,7 @@ namespace UnityMCP.Editor
                 Debug.Log($"[AB-UMCP] Unregistered instance (port {port}) from registry.");
             }, "unregister");
             _registeredPort = -1;
+            _currentInstanceEntry = null;
         }
 
         /// <summary>
@@ -524,10 +550,78 @@ namespace UnityMCP.Editor
             }
         }
 
+        public static string NormalizeProjectPath(string path)
+        {
+            if (string.IsNullOrEmpty(path))
+                return "";
+
+            string normalized = path.Replace('\\', '/').TrimEnd('/');
+            if (normalized.EndsWith("/Assets", StringComparison.OrdinalIgnoreCase))
+                normalized = normalized.Substring(0, normalized.Length - "/Assets".Length);
+
+            try
+            {
+                normalized = Path.GetFullPath(normalized).Replace('\\', '/').TrimEnd('/');
+            }
+            catch
+            {
+                normalized = normalized.TrimEnd('/');
+            }
+
+            return normalized;
+        }
+
+        public static bool ProjectPathEquals(string left, string right)
+        {
+            return string.Equals(NormalizeProjectPath(left), NormalizeProjectPath(right),
+                StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static Dictionary<string, object> BuildCurrentInstanceEntry(int port, string registeredAt,
+            string lastSeen)
+        {
+            string projectPath = GetProjectPath();
+            return new Dictionary<string, object>
+            {
+                { "port", port },
+                { "projectName", Application.productName },
+                { "projectPath", projectPath },
+                { "unityVersion", Application.unityVersion },
+                { "platform", Application.platform.ToString() },
+                { "processId", System.Diagnostics.Process.GetCurrentProcess().Id },
+                { "isClone", IsParrelSyncClone() },
+                { "cloneIndex", GetParrelSyncCloneIndex() },
+                { "registeredAt", registeredAt },
+                { "lastSeen", lastSeen }
+            };
+        }
+
+        private static void CacheCurrentInstanceEntry(Dictionary<string, object> entry)
+        {
+            _currentInstanceEntry = new Dictionary<string, object>(entry);
+            _currentProjectPath = GetString(entry, "projectPath");
+        }
+
+        private static string GetCurrentInstanceString(string key)
+        {
+            if (_currentInstanceEntry == null)
+                return "";
+
+            return GetString(_currentInstanceEntry, key);
+        }
+
+        private static string GetString(Dictionary<string, object> dictionary, string key)
+        {
+            if (dictionary == null || dictionary.TryGetValue(key, out var value) == false || value == null)
+                return "";
+
+            return value.ToString();
+        }
+
         private static string GetProjectPath()
         {
             string dataPath = Application.dataPath;
-            return dataPath.Substring(0, dataPath.Length - "/Assets".Length);
+            return NormalizeProjectPath(dataPath);
         }
     }
 }

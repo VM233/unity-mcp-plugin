@@ -2,6 +2,14 @@
 
 All notable changes to this package will be documented in this file.
 
+## Unreleased
+
+### Added
+- **Multi-editor project routing safety** — new `instance/current`, `instance/list`, `instance/resolve`, and `instance/assert-project` routes expose the shared Unity MCP instance registry so clients can resolve the correct Editor by `projectPath` before sending commands. Requests can also include `expectedProjectPath` / `targetProjectPath` / `unityProjectPath` or the `X-UnityMCP-Expected-Project-Path` header; if a command reaches the wrong Unity project, the bridge returns `wrong_unity_project` before executing Unity API work.
+
+### Fixed
+- **Deferred route direct-call timeout** — direct calls to deferred routes such as `advanced/execute` now wait on a deferred queue ticket instead of wrapping another main-thread wait, preventing 30s timeouts when the route is used as the stable generic entry.
+
 ## [2.32.0] - 2026-06-02
 
 ### Added

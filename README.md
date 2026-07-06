@@ -35,6 +35,10 @@ http://127.0.0.1:7890/api/ping
 |------|---------------|------------|---------|
 | Stable entrypoint | `unity_advanced_execute` | `advanced/execute` | Execute any Unity route through one stable route when MCP client tool metadata is stale. |
 | Editor stability | `unity_wait_editor_idle` | `wait/editor-idle` | Wait for compilation, package refresh, domain reload, and asset import to settle before issuing the next command. |
+| Multi-editor safety | `unity_instance_current` | `instance/current` | Return the current Editor MCP instance identity, including project path and port. |
+| Multi-editor safety | `unity_instance_list` | `instance/list` | List registered Editor MCP instances across open Unity projects. |
+| Multi-editor safety | `unity_instance_resolve` | `instance/resolve` | Resolve exactly one Editor MCP instance by project path, project name, or port. |
+| Multi-editor safety | `unity_instance_assert_project` | `instance/assert-project` | Verify that a request reached the expected Unity project. |
 | Prefab asset editing | `unity_prefab_asset_add_component` | `prefab-asset/add-component` | Add a component after waiting for a newly compiled script type to become available; returns prefab YAML diff by default. |
 | Prefab asset editing | `unity_prefab_asset_batch_edit` | `prefab-asset/batch-edit` | Apply ordered prefab asset edits in one load/save transaction, such as adding a component and setting its fields before a single save. |
 | Prefab asset editing | `unity_prefab_asset_instantiate_prefab` | `prefab-asset/instantiate-prefab` | Instantiate one prefab asset inside another prefab asset under a selected child path. |
@@ -104,6 +108,7 @@ If an MCP client has stale tool metadata, use `advanced/execute` with `route` se
 ## Notes
 
 - Use the upstream README for the general feature list and MCP setup flow.
+- For multiple Unity projects open at once, call `instance/resolve` with the target `projectPath`, then send later calls to the returned `port`. Also pass `expectedProjectPath` on mutating calls; the Editor rejects the request with `wrong_unity_project` if it reaches the wrong project.
 - `unity_wait_editor_idle` waits for both consecutive idle editor frames and a continuous idle time window (`stableMs`, default `500`) to avoid returning before a delayed compile or asset import starts.
 - Prefab asset mutation tools return `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it, adjust `prefabFileDiffMaxLines`, or use `prefabFileDiffMode=summary/minimal` plus ignore filters to reduce unrelated YAML noise.
 - `unity_packages_update_git` defaults to `skipIfResolved=true`. When the requested ref is a commit hash already recorded in `packages-lock.json`, the tool returns `skipped=true` without asking Unity Package Manager to resolve again. Pass `force=true` to force a resolve.

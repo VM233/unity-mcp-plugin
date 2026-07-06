@@ -335,6 +335,13 @@ namespace UnityMCP.Editor
                 }
 
                 string agentId = request.Headers["X-Agent-Id"] ?? "anonymous";
+                var requestArgs = ParseJson(body);
+                AddExpectedProjectHeaders(request, requestArgs);
+                if (TryBuildProjectMismatchResponse(apiPath, requestArgs, out var projectMismatch))
+                {
+                    SendJson(response, 409, projectMismatch);
+                    return;
+                }
 
                 // ═══ Queue endpoints (async, non-blocking) ═══
                 if (apiPath == "queue/submit")
@@ -369,9 +376,8 @@ namespace UnityMCP.Editor
                 // ═══ Deferred paths (Unity APIs with async callbacks) ═══
                 if (_deferredRoutes.TryGetValue(apiPath, out var deferredHandler))
                 {
-                    var result = MCPRequestQueue.ExecuteWithTracking(agentId, apiPath,
-                        () => ExecuteOnMainThreadDeferred(resolve =>
-                            deferredHandler(ParseJson(body), resolve)));
+                    var result = MCPRequestQueue.ExecuteDeferredWithTracking(agentId, apiPath,
+                        resolve => deferredHandler(ParseJson(body), resolve));
                     SendJson(response, 200, result);
                     return;
                 }
@@ -402,6 +408,13 @@ namespace UnityMCP.Editor
                 if (string.IsNullOrEmpty(apiPath))
                 {
                     SendJson(response, 400, new { error = "Missing 'apiPath' in request body" });
+                    return;
+                }
+
+                var innerArgs = ParseJson(innerBody);
+                if (TryBuildProjectMismatchResponse(apiPath, innerArgs, out var projectMismatch))
+                {
+                    SendJson(response, 409, projectMismatch);
                     return;
                 }
 
@@ -636,6 +649,14 @@ namespace UnityMCP.Editor
                     return "Lint a Unity package root for missing .meta files.";
                 case "wait/editor-idle":
                     return "Wait until the Unity Editor is idle after compilation, domain reload, package refresh, or asset import.";
+                case "instance/current":
+                    return "Return the current Unity Editor MCP instance identity, including project path and port.";
+                case "instance/list":
+                    return "List registered Unity Editor MCP instances across open Unity projects.";
+                case "instance/resolve":
+                    return "Resolve one Unity Editor MCP instance by project path, project name, or port.";
+                case "instance/assert-project":
+                    return "Assert that this MCP request reached the expected Unity project.";
                 case "prefab-asset/instantiate-prefab":
                     return "Instantiate a prefab asset as a child inside another prefab asset.";
                 case "prefab-asset/move-gameobject":
@@ -740,7 +761,8 @@ namespace UnityMCP.Editor
                         Prop("args", "object", "Arguments passed to the nested route."),
                         Prop("arguments", "object", "Alias for args."),
                         Prop("parameters", "object", "Alias for args."),
-                        Prop("body", "string", "Optional raw JSON body. If provided, args are ignored.")
+                        Prop("body", "string", "Optional raw JSON body. If provided, args are ignored."),
+                        Prop("expectedProjectPath", "string", "Optional safety check. The request is rejected if it reaches a different Unity project.")
                     ), "route");
                 case "packages/update-git":
                     return Schema(Props(
@@ -765,6 +787,29 @@ namespace UnityMCP.Editor
                         Prop("timeoutMs", "number", "Maximum wait time in milliseconds. Defaults to 30000."),
                         Prop("stableFrames", "number", "Number of consecutive idle editor frames required. Defaults to 3."),
                         Prop("stableMs", "number", "Minimum continuous idle time in milliseconds. Defaults to 500.")
+                    ));
+                case "instance/current":
+                    return Schema(Props());
+                case "instance/list":
+                    return Schema(Props(
+                        Prop("includeStale", "boolean", "Include registry entries whose editor process may no longer be running. Defaults to false.")
+                    ));
+                case "instance/resolve":
+                    return Schema(Props(
+                        Prop("projectPath", "string", "Unity project root path to resolve. Exact normalized path match."),
+                        Prop("expectedProjectPath", "string", "Alias for projectPath."),
+                        Prop("targetProjectPath", "string", "Alias for projectPath."),
+                        Prop("unityProjectPath", "string", "Alias for projectPath."),
+                        Prop("projectName", "string", "Unity project name to resolve. Ambiguous names return an error."),
+                        Prop("port", "number", "MCP bridge port to resolve.")
+                    ));
+                case "instance/assert-project":
+                    return Schema(Props(
+                        Prop("expectedProjectPath", "string", "Expected Unity project root path."),
+                        Prop("targetProjectPath", "string", "Alias for expectedProjectPath."),
+                        Prop("unityProjectPath", "string", "Alias for expectedProjectPath."),
+                        Prop("expectedProjectName", "string", "Expected Unity project name."),
+                        Prop("projectName", "string", "Alias for expectedProjectName.")
                     ));
                 case "prefab-asset/instantiate-prefab":
                     return Schema(Props(
@@ -1302,6 +1347,12 @@ namespace UnityMCP.Editor
             if (string.IsNullOrEmpty(nestedBody))
                 nestedBody = MiniJson.Serialize(nestedArgs);
 
+            if (TryBuildProjectMismatchResponse(route, ParseJson(nestedBody), out var projectMismatch))
+            {
+                resolve(projectMismatch);
+                return;
+            }
+
             if (_deferredRoutes.TryGetValue(route, out var deferredHandler))
             {
                 deferredHandler(ParseJson(nestedBody), resolve);
@@ -1325,6 +1376,78 @@ namespace UnityMCP.Editor
             return value as Dictionary<string, object>;
         }
 
+        private static void AddExpectedProjectHeaders(HttpListenerRequest request, Dictionary<string, object> args)
+        {
+            if (request == null || args == null)
+                return;
+
+            if (args.ContainsKey("expectedProjectPath") == false)
+            {
+                string expectedProjectPath =
+                    request.Headers["X-UnityMCP-Expected-Project-Path"] ??
+                    request.Headers["X-Unity-Project-Path"] ??
+                    request.Headers["X-Unity-Project-Root"];
+
+                if (!string.IsNullOrEmpty(expectedProjectPath))
+                    args["expectedProjectPath"] = expectedProjectPath;
+            }
+
+            if (args.ContainsKey("expectedProjectName") == false)
+            {
+                string expectedProjectName =
+                    request.Headers["X-UnityMCP-Expected-Project-Name"] ??
+                    request.Headers["X-Unity-Project-Name"];
+
+                if (!string.IsNullOrEmpty(expectedProjectName))
+                    args["expectedProjectName"] = expectedProjectName;
+            }
+        }
+
+        private static bool TryBuildProjectMismatchResponse(string route, Dictionary<string, object> args,
+            out object response)
+        {
+            response = null;
+            if (ShouldSkipProjectValidation(route))
+                return false;
+
+            string expectedProjectPath = MCPInstanceCommands.GetExpectedProjectPath(args);
+            string expectedProjectName = GetArgumentString(args, "expectedProjectName");
+            if (string.IsNullOrEmpty(expectedProjectName))
+                expectedProjectName = GetArgumentString(args, "targetProjectName");
+            if (string.IsNullOrEmpty(expectedProjectName))
+                expectedProjectName = GetArgumentString(args, "unityProjectName");
+
+            if (string.IsNullOrEmpty(expectedProjectPath) && string.IsNullOrEmpty(expectedProjectName))
+                return false;
+
+            response = MCPInstanceCommands.BuildProjectMismatch(expectedProjectPath, expectedProjectName, route);
+            return response != null;
+        }
+
+        private static bool ShouldSkipProjectValidation(string route)
+        {
+            if (string.IsNullOrEmpty(route))
+                return true;
+
+            route = route.Trim('/');
+            if (route.StartsWith("_meta/", StringComparison.Ordinal))
+                return true;
+
+            switch (route)
+            {
+                case "ping":
+                case "queue/status":
+                case "queue/info":
+                case "instance/current":
+                case "instance/list":
+                case "instance/resolve":
+                case "instance/assert-project":
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
         /// <summary>
         /// Route API requests to the appropriate handler.
         /// NOTE: This entire method runs on the main thread (dispatched by HandleRequest
@@ -1340,6 +1463,11 @@ namespace UnityMCP.Editor
             if (path == "_meta/tools")
             {
                 return GetRegisteredTools();
+            }
+
+            if (TryBuildProjectMismatchResponse(path, ParseJson(body), out var projectMismatch))
+            {
+                return projectMismatch;
             }
 
             // Check if category is enabled
@@ -1365,6 +1493,16 @@ namespace UnityMCP.Editor
                         cloneIndex = MCPInstanceRegistry.GetParrelSyncCloneIndex(),
                         processId = System.Diagnostics.Process.GetCurrentProcess().Id
                     };
+
+                // ─── Instance Routing ───
+                case "instance/current":
+                    return MCPInstanceCommands.Current(ParseJson(body));
+                case "instance/list":
+                    return MCPInstanceCommands.List(ParseJson(body));
+                case "instance/resolve":
+                    return MCPInstanceCommands.Resolve(ParseJson(body));
+                case "instance/assert-project":
+                    return MCPInstanceCommands.AssertProject(ParseJson(body));
 
                 // ─── Stable Generic Route ───
                 case "advanced/execute":
