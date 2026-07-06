@@ -285,6 +285,14 @@ namespace UnityMCP.Editor
                     return "Open a UXML asset in UI Builder, wait for the preview to settle, and optionally capture the UI Builder window.";
                 case "screenshot/crop":
                     return "Crop an existing screenshot or image file to a PNG.";
+                case "gameview/info":
+                    return "Read the Unity Editor Game View resolution, selected size, scale, and minimum scale.";
+                case "gameview/set-resolution":
+                    return "Set the Unity Editor Game View to a custom resolution.";
+                case "gameview/set-scale":
+                    return "Set the Unity Editor Game View zoom scale.";
+                case "gameview/set-min-scale":
+                    return "Set the Unity Editor Game View zoom scale to its minimum slider scale.";
                 case "graphics/image-alpha-bounds":
                     return "Inspect a PNG or texture asset and return alpha-based visible pixel bounds.";
                 case "graphics/rect-gap":
@@ -775,6 +783,24 @@ namespace UnityMCP.Editor
                         Prop("rect", "object", "Crop rect with x, y, width, height."),
                         Prop("outputPath", "string", "Output PNG path. Defaults next to source with _crop suffix."),
                         Prop("originTopLeft", "boolean", "Treat rect x/y as top-left image coordinates. Defaults to true.")
+                    ));
+                case "gameview/info":
+                    return Schema(Props());
+                case "gameview/set-resolution":
+                    return Schema(Props(
+                        Prop("width", "number", "Game View custom resolution width in pixels."),
+                        Prop("height", "number", "Game View custom resolution height in pixels."),
+                        Prop("label", "string", "Optional custom size label shown in the Game View size menu."),
+                        Prop("name", "string", "Alias for label.")
+                    ), "width", "height");
+                case "gameview/set-scale":
+                    return Schema(Props(
+                        Prop("scale", "number", "Game View zoom scale, e.g. 0.76 or 1."),
+                        Prop("value", "number", "Alias for scale.")
+                    ), "scale");
+                case "gameview/set-min-scale":
+                    return Schema(Props(
+                        Prop("fallbackScale", "number", "Fallback minimum scale used if Unity internals do not expose a valid one. Defaults to 0.76.")
                     ));
                 case "graphics/image-alpha-bounds":
                     return Schema(Props(

@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 #if UNITY_EDITOR_WIN
 using System.Diagnostics;
-using System.Reflection;
 using System.Runtime.InteropServices;
 #endif
 using UnityEditor;
@@ -194,6 +194,87 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object GetGameViewInfo(Dictionary<string, object> args)
+        {
+            if (!TryGetGameView(out Type gameViewType, out EditorWindow gameView, out object error))
+                return error;
+
+            return BuildGameViewInfo(gameViewType, gameView);
+        }
+
+        public static object SetGameViewResolution(Dictionary<string, object> args)
+        {
+            int width = GetInt(args, "width", 0);
+            int height = GetInt(args, "height", 0);
+            if (width <= 0 || height <= 0)
+                return new { error = "width and height must be greater than 0" };
+
+            if (!TryGetGameView(out Type gameViewType, out EditorWindow gameView, out object error))
+                return error;
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            MethodInfo setCustomResolution = gameViewType.GetMethod("SetCustomResolution", flags);
+            if (setCustomResolution == null)
+                return new { error = "UnityEditor.GameView.SetCustomResolution was not found in this Unity version" };
+
+            string label = GetString(args, "label");
+            if (string.IsNullOrEmpty(label))
+                label = GetString(args, "name");
+            if (string.IsNullOrEmpty(label))
+                label = $"{width}x{height}";
+
+            setCustomResolution.Invoke(gameView, new object[] { new Vector2(width, height), label });
+            gameView.Repaint();
+
+            var result = BuildGameViewInfo(gameViewType, gameView);
+            result["success"] = true;
+            result["requestedWidth"] = width;
+            result["requestedHeight"] = height;
+            result["label"] = label;
+            return result;
+        }
+
+        public static object SetGameViewScale(Dictionary<string, object> args)
+        {
+            if (!TryGetFloat(args, "scale", out float scale))
+            {
+                if (!TryGetFloat(args, "value", out scale))
+                    return new { error = "scale is required" };
+            }
+
+            if (scale <= 0)
+                return new { error = "scale must be greater than 0" };
+
+            if (!TryGetGameView(out Type gameViewType, out EditorWindow gameView, out object error))
+                return error;
+
+            if (!TrySnapGameViewZoom(gameViewType, gameView, scale, out string zoomError))
+                return new { error = zoomError };
+
+            var result = BuildGameViewInfo(gameViewType, gameView);
+            result["success"] = true;
+            result["requestedScale"] = scale;
+            return result;
+        }
+
+        public static object SetGameViewMinScale(Dictionary<string, object> args)
+        {
+            if (!TryGetGameView(out Type gameViewType, out EditorWindow gameView, out object error))
+                return error;
+
+            float fallbackScale = GetFloat(args, "fallbackScale", 0.76f);
+            float minScale = GetGameViewZoomAreaMinimumScale(gameViewType, gameView, fallbackScale);
+
+            if (!TrySnapGameViewZoom(gameViewType, gameView, minScale, out string zoomError))
+                return new { error = zoomError };
+
+            var result = BuildGameViewInfo(gameViewType, gameView);
+            result["success"] = true;
+            result["appliedScale"] = minScale;
+            result["fallbackScale"] = fallbackScale;
+            return result;
+        }
+
         public static object CropImage(Dictionary<string, object> args)
         {
             string sourcePath = GetString(args, "sourcePath");
@@ -284,6 +365,26 @@ namespace UnityMCP.Editor
             return args != null && args.ContainsKey(key) && args[key] != null ? args[key].ToString() : "";
         }
 
+        private static int GetInt(Dictionary<string, object> args, string key, int defaultValue)
+        {
+            if (args == null || args.ContainsKey(key) == false || args[key] == null)
+                return defaultValue;
+
+            return int.TryParse(args[key].ToString(), out int value) ? value : defaultValue;
+        }
+
+        private static float GetFloat(Dictionary<string, object> args, string key, float defaultValue)
+        {
+            return TryGetFloat(args, key, out float value) ? value : defaultValue;
+        }
+
+        private static bool TryGetFloat(Dictionary<string, object> args, string key, out float value)
+        {
+            value = 0;
+            return args != null && args.ContainsKey(key) && args[key] != null &&
+                   float.TryParse(args[key].ToString(), out value);
+        }
+
         private static bool GetBool(Dictionary<string, object> args, string key, bool defaultValue)
         {
             if (args == null || args.ContainsKey(key) == false || args[key] == null)
@@ -347,6 +448,121 @@ namespace UnityMCP.Editor
             string assetsRoot = Application.dataPath.Replace('\\', '/');
             if (normalized.StartsWith(assetsRoot, StringComparison.OrdinalIgnoreCase))
                 AssetDatabase.Refresh();
+        }
+
+        private static bool TryGetGameView(out Type gameViewType, out EditorWindow gameView, out object error)
+        {
+            gameViewType = typeof(Editor).Assembly.GetType("UnityEditor.GameView");
+            if (gameViewType == null)
+            {
+                gameView = null;
+                error = new { error = "UnityEditor.GameView was not found in this Unity version" };
+                return false;
+            }
+
+            gameView = EditorWindow.GetWindow(gameViewType);
+            if (gameView == null)
+            {
+                error = new { error = "Could not open Unity Game View" };
+                return false;
+            }
+
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            gameViewType.GetMethod("InitializeZoomArea", flags)?.Invoke(gameView, null);
+            error = null;
+            return true;
+        }
+
+        private static bool TrySnapGameViewZoom(Type gameViewType, EditorWindow gameView, float scale,
+            out string error)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            MethodInfo snapZoom = gameViewType.GetMethod("SnapZoom", flags, null, new[] { typeof(float) }, null);
+            if (snapZoom == null)
+            {
+                error = "UnityEditor.GameView.SnapZoom(float) was not found in this Unity version";
+                return false;
+            }
+
+            snapZoom.Invoke(gameView, new object[] { scale });
+            gameView.Repaint();
+            error = null;
+            return true;
+        }
+
+        private static float GetGameViewZoomAreaMinimumScale(Type gameViewType, EditorWindow gameView,
+            float fallbackScale)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            FieldInfo zoomAreaField = gameViewType.GetField("m_ZoomArea", flags);
+            object zoomArea = zoomAreaField?.GetValue(gameView);
+            if (zoomArea == null)
+                return fallbackScale;
+
+            Type zoomAreaType = zoomArea.GetType();
+            float hMin = GetZoomAreaScaleLimit(zoomAreaType, zoomArea, "m_HScaleMin", "hScaleMin", fallbackScale);
+            float vMin = GetZoomAreaScaleLimit(zoomAreaType, zoomArea, "m_VScaleMin", "vScaleMin", fallbackScale);
+            float minScale = Mathf.Max(hMin, vMin);
+
+            return IsReasonableGameViewScale(minScale) ? minScale : fallbackScale;
+        }
+
+        private static float GetZoomAreaScaleLimit(Type zoomAreaType, object zoomArea, string fieldName,
+            string propertyName, float fallbackScale)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            object value = zoomAreaType.GetField(fieldName, flags)?.GetValue(zoomArea);
+            if (value == null)
+                value = zoomAreaType.GetProperty(propertyName, flags)?.GetValue(zoomArea);
+
+            if (value == null)
+                return fallbackScale;
+
+            try
+            {
+                float scale = Convert.ToSingle(value);
+                return IsReasonableGameViewScale(scale) ? scale : fallbackScale;
+            }
+            catch
+            {
+                return fallbackScale;
+            }
+        }
+
+        private static bool IsReasonableGameViewScale(float scale)
+        {
+            return !float.IsNaN(scale) && !float.IsInfinity(scale) && scale >= 0.05f && scale <= 10f;
+        }
+
+        private static Dictionary<string, object> BuildGameViewInfo(Type gameViewType, EditorWindow gameView)
+        {
+            var flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+            object targetRenderSize = gameViewType.GetProperty("targetRenderSize", flags)?.GetValue(gameView);
+            object zoomAreaScale = gameViewType.GetProperty("zoomAreaScale", flags)?.GetValue(gameView);
+            object selectedSizeIndex = gameViewType.GetProperty("selectedSizeIndex", flags)?.GetValue(gameView);
+            object currentSizeGroupType = gameViewType.GetProperty("currentSizeGroupType", flags)?.GetValue(gameView);
+            object currentGameViewSize = gameViewType.GetProperty("currentGameViewSize", flags)?.GetValue(gameView);
+
+            string displayText = "";
+            if (currentGameViewSize != null)
+            {
+                displayText = currentGameViewSize.GetType()
+                    .GetProperty("displayText", flags)
+                    ?.GetValue(currentGameViewSize)
+                    ?.ToString() ?? "";
+            }
+
+            float fallbackScale = 0.76f;
+            return new Dictionary<string, object>
+            {
+                { "gameViewTitle", gameView.titleContent != null ? gameView.titleContent.text : gameView.name },
+                { "selectedSizeIndex", selectedSizeIndex != null ? selectedSizeIndex.ToString() : "" },
+                { "currentSizeGroupType", currentSizeGroupType != null ? currentSizeGroupType.ToString() : "" },
+                { "displayText", displayText },
+                { "targetRenderSize", targetRenderSize != null ? targetRenderSize.ToString() : "" },
+                { "scale", zoomAreaScale != null ? zoomAreaScale.ToString() : "" },
+                { "minScale", GetGameViewZoomAreaMinimumScale(gameViewType, gameView, fallbackScale) },
+            };
         }
 
         // ─── Capture an arbitrary EditorWindow (Inspector, Project, custom windows…) ───

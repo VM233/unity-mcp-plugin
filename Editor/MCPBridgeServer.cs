@@ -1239,6 +1239,14 @@ namespace UnityMCP.Editor
                     return MCPScreenshotCommands.GetSceneViewInfo(ParseJson(body));
                 case "sceneview/set-camera":
                     return MCPScreenshotCommands.SetSceneViewCamera(ParseJson(body));
+                case "gameview/info":
+                    return MCPScreenshotCommands.GetGameViewInfo(ParseJson(body));
+                case "gameview/set-resolution":
+                    return MCPScreenshotCommands.SetGameViewResolution(ParseJson(body));
+                case "gameview/set-scale":
+                    return MCPScreenshotCommands.SetGameViewScale(ParseJson(body));
+                case "gameview/set-min-scale":
+                    return MCPScreenshotCommands.SetGameViewMinScale(ParseJson(body));
 
                 // ─── Graphics & Visuals ───
                 case "graphics/asset-preview":
