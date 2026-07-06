@@ -452,7 +452,7 @@ namespace UnityMCP.Editor
 
         private static bool TryGetGameView(out Type gameViewType, out EditorWindow gameView, out object error)
         {
-            gameViewType = typeof(Editor).Assembly.GetType("UnityEditor.GameView");
+            gameViewType = typeof(UnityEditor.Editor).Assembly.GetType("UnityEditor.GameView");
             if (gameViewType == null)
             {
                 gameView = null;
