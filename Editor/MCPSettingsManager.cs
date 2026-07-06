@@ -243,12 +243,20 @@ namespace UnityMCP.Editor
         }
 
         /// <summary>
-        /// Reset all settings to defaults.
+        /// Reset instance-scoped user preferences to defaults.
         /// </summary>
-        public static void ResetToDefaults()
+        public static void ResetUserPreferencesToDefaults()
         {
             Port = 7890;
+            UseManualPort = false;
             AutoStart = true;
+        }
+
+        /// <summary>
+        /// Reset project-scoped settings to defaults.
+        /// </summary>
+        public static void ResetProjectSettingsToDefaults()
+        {
             StartOnVirtualPlayers = true;
             ContextEnabled = true;
             ContextPath = "Assets/MCP/Context";
@@ -256,6 +264,15 @@ namespace UnityMCP.Editor
             ActionHistoryMaxEntries = 500;
             _enabledCategories = null;
             EditorPrefs.DeleteKey(ProjectPrefix + "EnabledCategories");
+        }
+
+        /// <summary>
+        /// Reset all settings to defaults.
+        /// </summary>
+        public static void ResetToDefaults()
+        {
+            ResetUserPreferencesToDefaults();
+            ResetProjectSettingsToDefaults();
         }
     }
 }

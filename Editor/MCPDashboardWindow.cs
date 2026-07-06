@@ -687,62 +687,26 @@ namespace UnityMCP.Editor
 
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            // ─── General ───
-            EditorGUILayout.LabelField("General", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField("User Preferences", EditorStyles.boldLabel);
+            MCPSettingsGUI.DrawUserPreferences(false, false);
 
-            bool autoStart = EditorGUILayout.Toggle("Auto-start on Editor Load", MCPSettingsManager.AutoStart);
-            if (autoStart != MCPSettingsManager.AutoStart)
-                MCPSettingsManager.AutoStart = autoStart;
+            EditorGUILayout.Space(8);
 
-            EditorGUILayout.Space(6);
+            EditorGUILayout.LabelField("Project Settings", EditorStyles.boldLabel);
+            MCPSettingsGUI.DrawProjectStartupSettings();
+            EditorGUILayout.HelpBox(
+                "Project context, action history, and tool category settings are in Project Settings.",
+                MessageType.None);
 
-            // ─── Port ───
-            EditorGUILayout.LabelField("Port", EditorStyles.boldLabel);
-
-            bool useManual = EditorGUILayout.Toggle("Use Manual Port", MCPSettingsManager.UseManualPort);
-            if (useManual != MCPSettingsManager.UseManualPort)
-                MCPSettingsManager.UseManualPort = useManual;
-
-            if (useManual)
-            {
-                // Manual port entry
-                EditorGUILayout.BeginHorizontal();
-                int port = EditorGUILayout.IntField("Server Port", MCPSettingsManager.Port);
-                if (port != MCPSettingsManager.Port && port > 1024 && port < 65536)
-                {
-                    MCPSettingsManager.Port = port;
-                }
-                EditorGUILayout.EndHorizontal();
-
-                if (MCPBridgeServer.IsRunning && MCPBridgeServer.ActivePort != MCPSettingsManager.Port)
-                    EditorGUILayout.HelpBox("Restart server to apply port change.", MessageType.Info);
-            }
-            else
-            {
-                // Auto-select info
-                string autoInfo = MCPBridgeServer.IsRunning
-                    ? $"Auto-selected port {MCPBridgeServer.ActivePort} (range: {MCPInstanceRegistry.PortRangeStart}-{MCPInstanceRegistry.PortRangeEnd})"
-                    : $"Will auto-select from range {MCPInstanceRegistry.PortRangeStart}-{MCPInstanceRegistry.PortRangeEnd}";
-                EditorGUILayout.HelpBox(autoInfo, MessageType.None);
-            }
-
-            EditorGUILayout.Space(6);
-
-            // ─── Multiplayer Play Mode (MPPM) ───
-            EditorGUILayout.LabelField("Multiplayer Play Mode (MPPM)", EditorStyles.boldLabel);
-
-            // Start on MPPM Virtual Players
-            bool startOnVP = EditorGUILayout.Toggle(
-                new GUIContent("Start on Virtual Players",
-                    "When off, the MCP bridge does not auto-start on Multiplayer Play Mode " +
-                    "virtual players — only on the main Editor. Manual start still works."),
-                MCPSettingsManager.StartOnVirtualPlayers);
-            if (startOnVP != MCPSettingsManager.StartOnVirtualPlayers)
-                MCPSettingsManager.StartOnVirtualPlayers = startOnVP;
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Open Preferences"))
+                SettingsService.OpenUserPreferences(MCPSettingsGUI.UserPreferencesPath);
+            if (GUILayout.Button("Open Project Settings"))
+                SettingsService.OpenProjectSettings(MCPSettingsGUI.ProjectSettingsPath);
+            EditorGUILayout.EndHorizontal();
 
             EditorGUILayout.Space(4);
 
-            // Reset button
             if (GUILayout.Button("Reset All Settings to Defaults"))
             {
                 if (EditorUtility.DisplayDialog("Reset Settings",
