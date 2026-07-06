@@ -107,7 +107,7 @@ namespace UnityMCP.Editor
         private static readonly string[] AllCategories = new[]
         {
             "advanced", "amplify", "animation", "asmdef", "asset", "audio", "build", "component", "console",
-            "constraint", "debugger", "editor", "gameobject", "graphics", "input", "instance", "lighting",
+            "constraint", "debug", "debugger", "editor", "gameobject", "graphics", "input", "instance", "lighting",
             "memoryprofiler", "mppm", "navigation", "packagemanager", "particle", "physics", "prefab",
             "prefabasset", "prefs", "profiler", "project", "project-tools", "projectsettings", "renderer",
             "scenario", "scene", "screenshot", "script", "scriptableobject", "search",

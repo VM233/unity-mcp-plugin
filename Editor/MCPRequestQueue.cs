@@ -582,6 +582,9 @@ namespace UnityMCP.Editor
                 || lower == "editor/state"
                 || lower == "project/info"
                 || lower == "console/log"
+                || lower == "debug/attach-unity"
+                || lower == "debug/stack-trace"
+                || lower == "debug/variables"
                 || lower.StartsWith("profiler/")
                 || lower.StartsWith("debugger/")
                 || lower.StartsWith("selection/get")

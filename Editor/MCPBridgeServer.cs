@@ -683,6 +683,24 @@ namespace UnityMCP.Editor
                     return "Safely move a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "console/query":
                     return "Query recent Unity Console entries with time, source, message, stack, and last-Play filters.";
+                case "debug/attach-unity":
+                    return "Inspect Unity managed debugger attachment state and return MCP debug capability boundaries.";
+                case "debug/set-breakpoint":
+                    return "Request a managed source breakpoint. Currently reports that this requires an external debugger adapter.";
+                case "debug/continue":
+                    return "Continue Unity Play Mode pause state. Source breakpoint continuation requires an external debugger adapter.";
+                case "debug/pause":
+                    return "Pause Unity Play Mode from MCP. This is not a source-level managed debugger break.";
+                case "debug/step-over":
+                    return "Request managed step-over. Optionally supports one Unity frame step with stepFrame=true.";
+                case "debug/step-into":
+                    return "Request managed step-into. Optionally supports one Unity frame step with stepFrame=true.";
+                case "debug/stack-trace":
+                    return "Return the current MCP request stack trace. Paused managed frames require an external debugger adapter.";
+                case "debug/variables":
+                    return "Request variables for a paused managed frame. Currently reports that this requires an external debugger adapter.";
+                case "debug/evaluate":
+                    return "Evaluate C# code in the Unity Editor context. Paused frame evaluation requires an external debugger adapter.";
                 case "animation/transition-info":
                     return "Read full Animator transition details including conditions, exit time, duration, and offset.";
                 case "animation/update-state":
@@ -948,6 +966,42 @@ namespace UnityMCP.Editor
                         Prop("sinceLastPlay", "boolean", "Only include entries recorded after the latest Play transition."),
                         Prop("includeStack", "boolean", "Include full stack traces. Defaults to true."),
                         Prop("newestFirst", "boolean", "Return newest entries first. Defaults to false.")
+                    ));
+                case "debug/attach-unity":
+                    return Schema(Props(
+                        Prop("openWindow", "boolean", "Open Unity's Managed Debugger window. Defaults to false."),
+                        Prop("waitForAttach", "boolean", "Wait briefly for an external managed debugger to attach. Defaults to false."),
+                        Prop("timeoutMs", "number", "Attach wait timeout in milliseconds when waitForAttach is true. Defaults to 0.")
+                    ));
+                case "debug/set-breakpoint":
+                    return Schema(Props(
+                        Prop("file", "string", "Source file path for the requested breakpoint."),
+                        Prop("line", "number", "1-based source line for the requested breakpoint.")
+                    ), "file", "line");
+                case "debug/continue":
+                    return Schema(Props());
+                case "debug/pause":
+                    return Schema(Props(
+                        Prop("breakPlayMode", "boolean", "Call Debug.Break when in Play Mode. Defaults to true.")
+                    ));
+                case "debug/step-over":
+                case "debug/step-into":
+                    return Schema(Props(
+                        Prop("stepFrame", "boolean", "When true, perform one Unity frame step instead of source-level stepping. Defaults to false.")
+                    ));
+                case "debug/stack-trace":
+                    return Schema(Props(
+                        Prop("skipFrames", "number", "Number of MCP call frames to skip. Defaults to 0."),
+                        Prop("maxFrames", "number", "Maximum stack frames to return. Defaults to 50.")
+                    ));
+                case "debug/variables":
+                    return Schema(Props(
+                        Prop("frameId", "number", "Paused debugger frame id.")
+                    ), "frameId");
+                case "debug/evaluate":
+                    return Schema(Props(
+                        Prop("expression", "string", "C# expression to evaluate in Unity Editor context. Wrapped as return <expression>; when code is omitted."),
+                        Prop("code", "string", "Full C# method body for editor-context evaluation.")
                     ));
                 case "animation/transition-info":
                     return Schema(Props(
@@ -1694,6 +1748,26 @@ namespace UnityMCP.Editor
                     return MCPConsoleCommands.Query(ParseJson(body));
                 case "console/clear":
                     return MCPConsoleCommands.Clear();
+
+                // ─── Script Debug Helpers ───
+                case "debug/attach-unity":
+                    return MCPDebugCommands.AttachUnity(ParseJson(body));
+                case "debug/set-breakpoint":
+                    return MCPDebugCommands.SetBreakpoint(ParseJson(body));
+                case "debug/continue":
+                    return MCPDebugCommands.Continue(ParseJson(body));
+                case "debug/pause":
+                    return MCPDebugCommands.Pause(ParseJson(body));
+                case "debug/step-over":
+                    return MCPDebugCommands.StepOver(ParseJson(body));
+                case "debug/step-into":
+                    return MCPDebugCommands.StepInto(ParseJson(body));
+                case "debug/stack-trace":
+                    return MCPDebugCommands.StackTrace(ParseJson(body));
+                case "debug/variables":
+                    return MCPDebugCommands.Variables(ParseJson(body));
+                case "debug/evaluate":
+                    return MCPDebugCommands.Evaluate(ParseJson(body));
 
                 // ─── Compilation ───
                 case "compilation/errors":

@@ -222,6 +222,7 @@ namespace UnityMCP.Editor
             { "input",      TestInput },
             { "asmdef",     TestAssemblyDef },
             { "profiler",   TestProfiler },
+            { "debug",      TestDebug },
             { "debugger",   TestDebugger },
             { "testing",    TestTesting },
             { "shadergraph",    TestShaderGraph },
@@ -763,6 +764,21 @@ namespace UnityMCP.Editor
             catch (Exception ex)
             {
                 return $"Profiler test threw: {ex.Message}";
+            }
+        }
+
+        // --- Script Debug Helpers ---
+        private static string TestDebug()
+        {
+            try
+            {
+                var result = MCPDebugCommands.AttachUnity(EmptyArgs());
+                if (result == null) return "AttachUnity returned null";
+                return null;
+            }
+            catch (Exception ex)
+            {
+                return $"Debug test threw: {ex.Message}";
             }
         }
 
