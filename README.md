@@ -34,6 +34,8 @@ http://127.0.0.1:7890/api/ping
 | Area | MCP tool name | HTTP route | Purpose |
 |------|---------------|------------|---------|
 | Stable entrypoint | `unity_advanced_execute` | `advanced/execute` | Execute any Unity route through one stable route when MCP client tool metadata is stale. |
+| MCP diagnostics | `unity_mcp_health` | `mcp/health` | Inspect bridge state, queue state, sessions, process memory, recent actions, and slow requests. |
+| MCP diagnostics | `unity_mcp_set_autostart` | `mcp/set-autostart` | Enable or disable bridge auto-start for the current Unity Editor instance. |
 | Editor stability | `unity_wait_editor_idle` | `wait/editor-idle` | Wait for compilation, package refresh, domain reload, and asset import to settle before issuing the next command. |
 | Multi-editor safety | `unity_instance_current` | `instance/current` | Return the current Editor MCP instance identity, including project path and port. |
 | Multi-editor safety | `unity_instance_list` | `instance/list` | List registered Editor MCP instances across open Unity projects. |
@@ -60,6 +62,7 @@ http://127.0.0.1:7890/api/ping
 | UI Toolkit runtime | `unity_uitoolkit_refresh` | `uitoolkit/refresh` | Refresh UI Toolkit assets and repaint runtime and editor panels. |
 | UI Toolkit runtime | `unity_uitoolkit_wait_refresh` | `uitoolkit/wait-refresh` | Refresh UI Toolkit assets, repaint panels, and wait for stable editor frames. |
 | UI Toolkit runtime | `unity_uitoolkit_assert_layout` | `uitoolkit/assert-layout` | Assert runtime layout constraints such as no-gap/no-overlap edge touching, containment, and expected size. |
+| UI Builder | `unity_uitoolkit_builder_preview` | `uitoolkit/builder-preview` | Open a UXML asset in UI Builder, wait for the preview to settle, and optionally capture the UI Builder window. |
 | Screenshot utilities | `unity_screenshot_crop` | `screenshot/crop` | Crop a screenshot or image file to a PNG for focused visual inspection. |
 | Graphics utilities | `unity_graphics_image_alpha_bounds` | `graphics/image-alpha-bounds` | Inspect a PNG or texture asset and return visible alpha pixel bounds plus transparent margins. |
 | Graphics utilities | `unity_graphics_rect_gap` | `graphics/rect-gap` | Measure a gap or overlap between two rectangles along selected edges. |
@@ -69,6 +72,9 @@ http://127.0.0.1:7890/api/ping
 | Sprite pipeline | `unity_sprite_slice_sheet` | `sprite/slice-sheet` | Slice an existing sprite sheet into numbered sprites. |
 | Sprite pipeline | `unity_sprite_update_animation_clip` | `sprite/update-animation-clip` | Rebuild a SpriteRenderer sprite animation curve from a sheet's sprites. |
 | Sprite pipeline | `unity_sprite_replace_slice_update_clip` | `sprite/replace-slice-update-clip` | Replace a sheet, slice it, and update an AnimationClip in one call. |
+| Texture pipeline | `unity_texture_apply_sprite_preset` | `texture/apply-sprite-preset` | Apply high-level TextureImporter/Sprite settings, including pixel sprite preset, PPU, pivot, border, and reference settings. |
+| Texture pipeline | `unity_texture_import_image` | `texture/import-image` | Import an image from a URL or local file into Assets, dedupe by hash, and apply sprite import settings. |
+| Build testing | `unity_build_run_test` | `build/run-test` | Overwrite/build a player, launch it, sample Player.log, optionally capture its window, and terminate it. |
 | Package management | `unity_packages_update_git` | `packages/update-git` | Update a Git package through a deferred route; same-commit updates skip Unity Package Manager resolve by default. |
 | Project extensions | `unity_project_tools_list` | `project-tools/list` | List project-defined extension tools from loaded Unity editor assemblies. |
 | Project extensions | `unity_project_tools_execute` | `project-tools/execute` | Execute a project-defined extension tool by `toolName`. |
@@ -110,7 +116,11 @@ If an MCP client has stale tool metadata, use `advanced/execute` with `route` se
 - Use the upstream README for the general feature list and MCP setup flow.
 - For multiple Unity projects open at once, call `instance/resolve` with the target `projectPath`, then send later calls to the returned `port`. Also pass `expectedProjectPath` on mutating calls; the Editor rejects the request with `wrong_unity_project` if it reaches the wrong project.
 - `unity_wait_editor_idle` waits for both consecutive idle editor frames and a continuous idle time window (`stableMs`, default `500`) to avoid returning before a delayed compile or asset import starts.
+- `mcp/health` is intended for diagnosing editor slowdown caused by MCP usage. It does not stop the bridge; use `mcp/set-autostart` to prevent the bridge from coming back automatically after reload.
+- `texture/import-image` is the preferred route for Figma/exported UI images: pass `sourceUrl` or `sourcePath`, `targetPath` or `targetFolder` + `assetName`, then use `preset=pixel-sprite` and `border` when needed.
 - Prefab asset mutation tools return `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it, adjust `prefabFileDiffMaxLines`, or use `prefabFileDiffMode=summary/minimal` plus ignore filters to reduce unrelated YAML noise.
+- `uitoolkit/builder-preview` opens and screenshots UI Builder. Unity does not expose a stable public UI Builder zoom API, so the route records requested zoom values but does not use reflection to force the viewport zoom.
+- `build/run-test` is a high-level test loop for local player builds. Keep `overwrite=true` for repeat tests so output folders do not accumulate.
 - `unity_packages_update_git` defaults to `skipIfResolved=true`. When the requested ref is a commit hash already recorded in `packages-lock.json`, the tool returns `skipped=true` without asking Unity Package Manager to resolve again. Pass `force=true` to force a resolve.
 - This fork intentionally keeps the package smaller by removing local documentation images.
 - The package is still the Unity Editor side only. You need an MCP server/client setup to call the tools from an assistant.

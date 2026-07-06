@@ -50,6 +50,8 @@ namespace UnityMCP.Editor
             { "advanced/execute", ExecuteAdvancedRouteDeferred },
             { "wait/editor-idle", MCPEditorCommands.WaitForIdle },
             { "uitoolkit/wait-refresh", MCPUICommands.WaitForUIToolkitRefresh },
+            { "uitoolkit/builder-preview", MCPUICommands.OpenUIBuilderPreview },
+            { "build/run-test", MCPBuildCommands.BuildAndRunTestDeferred },
             { "packages/update-git", MCPPackageManagerCommands.UpdateGitPackageDeferred },
             { "prefab-asset/add-component", MCPPrefabAssetCommands.AddComponentDeferred },
             { "prefab-asset/batch-edit", MCPPrefabAssetCommands.BatchEditDeferred },
@@ -649,6 +651,10 @@ namespace UnityMCP.Editor
                     return "Lint a Unity package root for missing .meta files.";
                 case "wait/editor-idle":
                     return "Wait until the Unity Editor is idle after compilation, domain reload, package refresh, or asset import.";
+                case "mcp/health":
+                    return "Inspect MCP bridge health, queue state, sessions, process memory, and recent slow requests.";
+                case "mcp/set-autostart":
+                    return "Enable or disable MCP bridge auto-start for this Unity Editor instance.";
                 case "instance/current":
                     return "Return the current Unity Editor MCP instance identity, including project path and port.";
                 case "instance/list":
@@ -719,6 +725,8 @@ namespace UnityMCP.Editor
                     return "Refresh UI Toolkit assets, repaint panels, and wait for a few stable editor frames.";
                 case "uitoolkit/assert-layout":
                     return "Assert UI Toolkit runtime layout constraints such as edge touching, containment, and size.";
+                case "uitoolkit/builder-preview":
+                    return "Open a UXML asset in UI Builder, wait for the preview to settle, and optionally capture the UI Builder window.";
                 case "screenshot/crop":
                     return "Crop an existing screenshot or image file to a PNG.";
                 case "graphics/image-alpha-bounds":
@@ -739,6 +747,12 @@ namespace UnityMCP.Editor
                     return "Update an AnimationClip SpriteRenderer.m_Sprite object-reference curve from a sprite sheet.";
                 case "sprite/replace-slice-update-clip":
                     return "Replace a sprite sheet, slice it, then update an AnimationClip from the generated sprites.";
+                case "texture/apply-sprite-preset":
+                    return "Apply high-level TextureImporter/Sprite settings such as pixel sprite preset, PPU, pivot, border, and reference settings.";
+                case "texture/import-image":
+                    return "Import an external image from a URL or local path into Assets, optionally dedupe, then apply sprite import settings.";
+                case "build/run-test":
+                    return "Build the player, launch the built executable, sample Player.log, optionally capture its window, and terminate it.";
                 case "animation/set-object-reference-curve":
                     return "Set AnimationClip ObjectReference keyframes, such as SpriteRenderer.m_Sprite.";
                 case "project-tools/list":
@@ -788,6 +802,15 @@ namespace UnityMCP.Editor
                         Prop("stableFrames", "number", "Number of consecutive idle editor frames required. Defaults to 3."),
                         Prop("stableMs", "number", "Minimum continuous idle time in milliseconds. Defaults to 500.")
                     ));
+                case "mcp/health":
+                    return Schema(Props(
+                        Prop("recentCount", "number", "Number of recent MCP actions to return. Defaults to 20."),
+                        Prop("slowThresholdMs", "number", "Recent actions at or above this duration are listed as slow. Defaults to 1000.")
+                    ));
+                case "mcp/set-autostart":
+                    return Schema(Props(
+                        Prop("enabled", "boolean", "Whether this Unity Editor instance should auto-start the MCP bridge after reload.")
+                    ), "enabled");
                 case "instance/current":
                     return Schema(Props());
                 case "instance/list":
@@ -1125,6 +1148,17 @@ namespace UnityMCP.Editor
                         Prop("timeoutMs", "number", "Maximum wait time in milliseconds. Defaults to 10000."),
                         Prop("stableFrames", "number", "Consecutive idle repaint frames required. Defaults to 2.")
                     ));
+                case "uitoolkit/builder-preview":
+                    return Schema(Props(
+                        Prop("uxmlPath", "string", "UXML asset path to open in UI Builder."),
+                        Prop("assetPath", "string", "Alias for uxmlPath."),
+                        Prop("path", "string", "Alias for uxmlPath."),
+                        Prop("waitFrames", "number", "Editor frames to wait before capturing. Defaults to 8."),
+                        Prop("capture", "boolean", "Capture the UI Builder window after opening. Defaults to true."),
+                        Prop("screenshotPath", "string", "PNG path for the UI Builder screenshot."),
+                        Prop("maxDimension", "number", "Maximum screenshot dimension. Defaults to 8192."),
+                        Prop("zoom", "number", "Requested zoom, recorded for diagnostics. UI Builder has no stable public zoom API.")
+                    ));
                 case "uitoolkit/assert-layout":
                     return RuntimeUIDocumentSchema(Props(
                         Prop("assertions", "array", "Layout assertions. Supported types: edge-touch, inside, size.")
@@ -1219,6 +1253,53 @@ namespace UnityMCP.Editor
                         Prop("frameRate", "number", "Animation frame rate. Defaults to the clip frame rate or 12."),
                         Prop("bindingPath", "string", "Animation binding path to SpriteRenderer.")
                     ), "texturePath", "sourcePath", "frameWidth", "frameHeight");
+                case "texture/apply-sprite-preset":
+                    return Schema(Props(
+                        Prop("path", "string", "Texture asset path. Alias: assetPath."),
+                        Prop("assetPath", "string", "Alias for path."),
+                        Prop("referencePath", "string", "Optional texture asset whose importer settings are copied first."),
+                        Prop("preset", "string", "High-level preset. Supported: pixel-sprite."),
+                        Prop("pixelsPerUnit", "number", "Sprite pixels per unit. Alias: spritePixelsPerUnit."),
+                        Prop("spritePixelsPerUnit", "number", "Sprite pixels per unit."),
+                        Prop("filterMode", "string", "Texture FilterMode, e.g. Point."),
+                        Prop("textureCompression", "string", "TextureImporterCompression value."),
+                        Prop("defaultPlatformFormat", "string", "Default platform TextureImporterFormat, e.g. RGBA32."),
+                        Prop("defaultPlatformCompression", "string", "Default platform TextureImporterCompression."),
+                        Prop("readable", "boolean", "Texture is readable."),
+                        Prop("mipmapEnabled", "boolean", "Generate mipmaps."),
+                        Prop("alphaIsTransparency", "boolean", "Alpha is transparency."),
+                        Prop("pivot", "object", "Sprite pivot with x/y."),
+                        Prop("border", "object", "Sprite border. Accepts number, [left,bottom,right,top], or object with left/bottom/right/top.")
+                    ), "path");
+                case "texture/import-image":
+                    return Schema(Props(
+                        Prop("sourcePath", "string", "Local image file path."),
+                        Prop("sourceUrl", "string", "Remote image URL. Alias: url."),
+                        Prop("url", "string", "Alias for sourceUrl."),
+                        Prop("targetPath", "string", "Target asset path inside Assets."),
+                        Prop("targetFolder", "string", "Target folder used with assetName/name."),
+                        Prop("assetName", "string", "Target file name used with targetFolder. Alias: name."),
+                        Prop("name", "string", "Alias for assetName."),
+                        Prop("overwrite", "boolean", "Overwrite targetPath if content differs. Defaults to false."),
+                        Prop("dedupeByHash", "boolean", "Skip if the target folder already contains identical image bytes. Defaults to true."),
+                        Prop("applySpritePreset", "boolean", "Apply sprite import settings after import. Defaults to true."),
+                        Prop("preset", "string", "Preset passed to texture/apply-sprite-preset. Defaults to pixel-sprite.")
+                    ));
+                case "build/run-test":
+                    return Schema(Props(
+                        Prop("target", "string", "BuildTarget. Defaults to StandaloneWindows64."),
+                        Prop("outputPath", "string", "Player output executable path."),
+                        Prop("developmentBuild", "boolean", "Build with Development flag."),
+                        Prop("scenes", "array", "Optional scene paths. Defaults to enabled Build Settings scenes."),
+                        Prop("overwrite", "boolean", "Delete existing exe and Data folder before build. Defaults to true."),
+                        Prop("run", "boolean", "Launch the built executable after a successful build. Defaults to true."),
+                        Prop("runSeconds", "number", "Seconds to let the executable run before sampling/termination. Defaults to 5."),
+                        Prop("terminateAfter", "boolean", "Kill the process after sampling. Defaults to true."),
+                        Prop("captureWindow", "boolean", "Capture the built player's main window on Windows. Defaults to false."),
+                        Prop("screenshotPath", "string", "PNG path for captureWindow output."),
+                        Prop("windowWaitMs", "number", "Milliseconds to wait for the main window. Defaults to 5000."),
+                        Prop("logTailLines", "number", "Player.log tail lines to return. Defaults to 120.")
+                    ), "outputPath");
                 default:
                     return new Dictionary<string, object>
                     {
@@ -1503,6 +1584,10 @@ namespace UnityMCP.Editor
                     return MCPInstanceCommands.Resolve(ParseJson(body));
                 case "instance/assert-project":
                     return MCPInstanceCommands.AssertProject(ParseJson(body));
+                case "mcp/health":
+                    return MCPHealthCommands.GetHealth(ParseJson(body));
+                case "mcp/set-autostart":
+                    return MCPHealthCommands.SetServerAutoStart(ParseJson(body));
 
                 // ─── Stable Generic Route ───
                 case "advanced/execute":
@@ -1599,6 +1684,8 @@ namespace UnityMCP.Editor
                 // ─── Build ───
                 case "build/start":
                     return MCPBuildCommands.StartBuild(ParseJson(body));
+                case "build/run-test":
+                    return MCPBuildCommands.BuildAndRunTest(ParseJson(body));
 
                 // ─── Console ───
                 case "console/log":
@@ -2167,6 +2254,10 @@ namespace UnityMCP.Editor
                     return MCPTextureCommands.SetAsSprite(ParseJson(body));
                 case "texture/set-normalmap":
                     return MCPTextureCommands.SetAsNormalMap(ParseJson(body));
+                case "texture/apply-sprite-preset":
+                    return MCPTextureCommands.ApplySpriteImportPreset(ParseJson(body));
+                case "texture/import-image":
+                    return MCPTextureCommands.ImportImage(ParseJson(body));
 
                 // ─── Sprite Atlas ───
                 case "spriteatlas/create":
@@ -2239,6 +2330,8 @@ namespace UnityMCP.Editor
                     return MCPUICommands.RefreshUIToolkit(ParseJson(body));
                 case "uitoolkit/assert-layout":
                     return MCPUICommands.AssertUIToolkitLayout(ParseJson(body));
+                case "uitoolkit/builder-preview":
+                    return MCPUICommands.OpenUIBuilderPreview(ParseJson(body));
 
                 // ─── Package Manager ───
                 case "packages/list":

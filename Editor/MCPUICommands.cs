@@ -874,6 +874,85 @@ namespace UnityMCP.Editor
                 EditorApplication.update += Tick;
         }
 
+        public static void OpenUIBuilderPreview(Dictionary<string, object> args, Action<object> resolve)
+        {
+            string uxmlPath = NormalizeAssetPath(GetString(args, "uxmlPath"), "");
+            if (string.IsNullOrEmpty(uxmlPath))
+                uxmlPath = NormalizeAssetPath(GetString(args, "assetPath"), "");
+            if (string.IsNullOrEmpty(uxmlPath))
+                uxmlPath = NormalizeAssetPath(GetString(args, "path"), "");
+            if (string.IsNullOrEmpty(uxmlPath))
+            {
+                resolve(new { error = "uxmlPath, assetPath, or path is required" });
+                return;
+            }
+
+            var asset = AssetDatabase.LoadAssetAtPath<UnityEngine.UIElements.VisualTreeAsset>(uxmlPath);
+            if (asset == null)
+            {
+                resolve(new { error = $"VisualTreeAsset not found at '{uxmlPath}'" });
+                return;
+            }
+
+            bool opened = AssetDatabase.OpenAsset(asset);
+            int waitFrames = Math.Max(1, GetInt(args, "waitFrames", 8));
+            bool capture = GetBool(args, "capture", true);
+            string screenshotPath = GetString(args, "screenshotPath");
+            if (string.IsNullOrEmpty(screenshotPath))
+            {
+                string safeName = Path.GetFileNameWithoutExtension(uxmlPath).Replace(' ', '_');
+                screenshotPath = "Assets/Screenshots/UIBuilder_" + safeName + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png";
+            }
+
+            int frame = 0;
+            void Tick()
+            {
+                frame++;
+                if (frame < waitFrames)
+                    return;
+
+                EditorApplication.update -= Tick;
+                int repainted = MarkAllUIToolkitDirty();
+                var window = FindUIBuilderWindow();
+                var result = new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "uxmlPath", uxmlPath },
+                    { "opened", opened },
+                    { "waitFrames", waitFrames },
+                    { "repaintedRuntimeDocuments", repainted },
+                    { "windowFound", window != null },
+                    { "window", window == null ? null : BuildWindowInfo(window) },
+                };
+
+                if (args.ContainsKey("zoom"))
+                {
+                    result["requestedZoom"] = GetFloat(args, "zoom", 1);
+                    result["zoomApplied"] = false;
+                    result["zoomNote"] = "UI Builder zoom is not exposed through a stable public Unity API; the window is opened and captured instead.";
+                }
+
+                if (capture)
+                {
+                    result["screenshot"] = MCPScreenshotCommands.CaptureEditorWindow(new Dictionary<string, object>
+                    {
+                        { "window", "UI Builder" },
+                        { "path", screenshotPath },
+                        { "maxDimension", GetInt(args, "maxDimension", 8192) },
+                    });
+                }
+
+                resolve(result);
+            }
+
+            EditorApplication.update += Tick;
+        }
+
+        public static object OpenUIBuilderPreview(Dictionary<string, object> args)
+        {
+            return new { error = "uitoolkit/builder-preview must be executed through the deferred route." };
+        }
+
         public static object AssertUIToolkitLayout(Dictionary<string, object> args)
         {
             var document = FindRuntimeUIDocument(args, out string error);
@@ -1326,6 +1405,31 @@ namespace UnityMCP.Editor
             }
 
             error = $"No EditorWindow matched window='{windowQuery}', windowType='{typeQuery}', title='{titleQuery}'";
+            return null;
+        }
+
+        private static EditorWindow FindUIBuilderWindow()
+        {
+            var windows = Resources.FindObjectsOfTypeAll<EditorWindow>().Where(window => window != null).ToList();
+            foreach (var window in windows)
+            {
+                string title = window.titleContent?.text ?? "";
+                if (string.Equals(title, "UI Builder", StringComparison.OrdinalIgnoreCase))
+                    return window;
+            }
+
+            foreach (var window in windows)
+            {
+                string title = window.titleContent?.text ?? "";
+                string typeName = window.GetType().FullName ?? window.GetType().Name;
+                if (title.IndexOf("UI Builder", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    typeName.IndexOf("UIBuilder", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    typeName.IndexOf("Builder", StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    return window;
+                }
+            }
+
             return null;
         }
 

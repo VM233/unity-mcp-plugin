@@ -1,5 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Security.Cryptography;
 using UnityEditor;
 using UnityEngine;
 
@@ -55,6 +59,13 @@ namespace UnityMCP.Editor
                 {
                     { "x", importer.spritePivot.x },
                     { "y", importer.spritePivot.y },
+                };
+                result["spriteBorder"] = new Dictionary<string, object>
+                {
+                    { "left", importer.spriteBorder.x },
+                    { "bottom", importer.spriteBorder.y },
+                    { "right", importer.spriteBorder.z },
+                    { "top", importer.spriteBorder.w },
                 };
             }
 
@@ -259,6 +270,457 @@ namespace UnityMCP.Editor
                 { "path", path },
                 { "textureType", "NormalMap" },
             };
+        }
+
+        public static object ApplySpriteImportPreset(Dictionary<string, object> args)
+        {
+            string path = GetString(args, "path");
+            if (string.IsNullOrEmpty(path))
+                path = GetString(args, "assetPath");
+            if (string.IsNullOrEmpty(path))
+                return new { error = "path or assetPath is required" };
+
+            var importer = AssetImporter.GetAtPath(path) as TextureImporter;
+            if (importer == null)
+                return new { error = $"No texture importer for '{path}'" };
+
+            var updated = new List<string>();
+            string referencePath = GetString(args, "referencePath");
+            if (string.IsNullOrEmpty(referencePath) == false)
+            {
+                var reference = AssetImporter.GetAtPath(referencePath) as TextureImporter;
+                if (reference == null)
+                    return new { error = $"No texture importer for referencePath '{referencePath}'" };
+
+                CopyTextureImporterSettings(reference, importer);
+                updated.Add("referencePath");
+            }
+
+            string preset = GetString(args, "preset");
+            if (string.IsNullOrEmpty(preset))
+                preset = GetString(args, "importPreset");
+            if (string.Equals(preset, "pixel-sprite", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(preset, "pixelSprite", StringComparison.OrdinalIgnoreCase))
+            {
+                importer.textureType = TextureImporterType.Sprite;
+                importer.spriteImportMode = SpriteImportMode.Single;
+                importer.mipmapEnabled = false;
+                importer.filterMode = FilterMode.Point;
+                importer.textureCompression = TextureImporterCompression.Uncompressed;
+                importer.alphaIsTransparency = true;
+                importer.npotScale = TextureImporterNPOTScale.None;
+                if (!args.ContainsKey("readable") && !args.ContainsKey("isReadable"))
+                    importer.isReadable = true;
+                if (!args.ContainsKey("spritePixelsPerUnit") && !args.ContainsKey("pixelsPerUnit"))
+                    importer.spritePixelsPerUnit = 32;
+                SetDefaultPlatformFormat(importer, TextureImporterFormat.RGBA32,
+                    TextureImporterCompression.Uncompressed);
+                updated.Add("preset");
+            }
+
+            ApplyImporterOverrides(importer, args, updated);
+            importer.SaveAndReimport();
+
+            var info = GetTextureInfo(new Dictionary<string, object> { { "path", path } });
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "path", path },
+                { "updated", updated.Distinct().ToList() },
+                { "info", info },
+            };
+        }
+
+        public static object ImportImage(Dictionary<string, object> args)
+        {
+            string sourcePath = GetString(args, "sourcePath");
+            string sourceUrl = GetString(args, "sourceUrl");
+            if (string.IsNullOrEmpty(sourceUrl))
+                sourceUrl = GetString(args, "url");
+
+            if (string.IsNullOrEmpty(sourcePath) && string.IsNullOrEmpty(sourceUrl))
+                return new { error = "sourcePath, sourceUrl, or url is required" };
+
+            string targetPath = GetString(args, "targetPath");
+            if (string.IsNullOrEmpty(targetPath))
+            {
+                string targetFolder = GetString(args, "targetFolder");
+                string assetName = GetString(args, "assetName");
+                if (string.IsNullOrEmpty(assetName))
+                    assetName = GetString(args, "name");
+                if (string.IsNullOrEmpty(targetFolder) || string.IsNullOrEmpty(assetName))
+                    return new { error = "Pass targetPath, or targetFolder plus assetName/name" };
+
+                if (Path.HasExtension(assetName) == false)
+                    assetName += ".png";
+                targetPath = NormalizeAssetPath(targetFolder.TrimEnd('/', '\\') + "/" + assetName);
+            }
+            else
+            {
+                targetPath = NormalizeAssetPath(targetPath);
+            }
+
+            if (targetPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase) == false)
+                return new { error = "targetPath must be inside Assets/" };
+
+            byte[] bytes;
+            try
+            {
+                bytes = string.IsNullOrEmpty(sourceUrl) == false
+                    ? DownloadBytes(sourceUrl)
+                    : File.ReadAllBytes(ResolveFilePath(sourcePath));
+            }
+            catch (Exception ex)
+            {
+                return new { error = $"Failed to read image source: {ex.Message}" };
+            }
+
+            string projectRoot = GetProjectRoot();
+            string absoluteTargetPath = Path.GetFullPath(Path.Combine(projectRoot, targetPath));
+            string targetDirectory = Path.GetDirectoryName(absoluteTargetPath);
+            if (string.IsNullOrEmpty(targetDirectory) == false)
+                Directory.CreateDirectory(targetDirectory);
+
+            bool overwrite = GetBool(args, "overwrite", false);
+            bool dedupeByHash = GetBool(args, "dedupeByHash", true);
+            string hash = ComputeHash(bytes);
+
+            if (dedupeByHash)
+            {
+                string duplicate = FindDuplicateAssetByHash(Path.GetDirectoryName(targetPath)?.Replace('\\', '/'), hash,
+                    Path.GetExtension(targetPath));
+                if (string.IsNullOrEmpty(duplicate) == false &&
+                    !string.Equals(duplicate, targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new Dictionary<string, object>
+                    {
+                        { "success", true },
+                        { "skipped", true },
+                        { "reason", "duplicate-hash" },
+                        { "path", duplicate },
+                        { "guid", AssetDatabase.AssetPathToGUID(duplicate) },
+                        { "sha256", hash },
+                    };
+                }
+            }
+
+            bool existed = File.Exists(absoluteTargetPath);
+            if (existed)
+            {
+                string existingHash = ComputeHash(File.ReadAllBytes(absoluteTargetPath));
+                if (existingHash == hash)
+                {
+                    AssetDatabase.ImportAsset(targetPath, ImportAssetOptions.ForceUpdate);
+                    if (GetBool(args, "applySpritePreset", true))
+                        ApplySpriteImportPreset(BuildPresetArgs(args, targetPath));
+
+                    return BuildImportResult(targetPath, hash, true, "same-content");
+                }
+
+                if (!overwrite)
+                    return new { error = $"Target asset already exists with different content: {targetPath}" };
+            }
+
+            File.WriteAllBytes(absoluteTargetPath, bytes);
+            AssetDatabase.ImportAsset(targetPath, ImportAssetOptions.ForceUpdate);
+
+            if (GetBool(args, "applySpritePreset", true))
+                ApplySpriteImportPreset(BuildPresetArgs(args, targetPath));
+
+            return BuildImportResult(targetPath, hash, false, existed ? "overwritten" : "imported");
+        }
+
+        private static void ApplyImporterOverrides(TextureImporter importer, Dictionary<string, object> args,
+            List<string> updated)
+        {
+            if (TryParseEnum(args, "textureType", out TextureImporterType textureType))
+            {
+                importer.textureType = textureType;
+                updated.Add("textureType");
+            }
+
+            if (TryParseEnum(args, "spriteMode", out SpriteImportMode spriteMode))
+            {
+                importer.spriteImportMode = spriteMode;
+                updated.Add("spriteMode");
+            }
+
+            if (args.ContainsKey("pixelsPerUnit") || args.ContainsKey("spritePixelsPerUnit"))
+            {
+                importer.spritePixelsPerUnit = GetFloat(args, "spritePixelsPerUnit", GetFloat(args, "pixelsPerUnit", importer.spritePixelsPerUnit));
+                updated.Add("spritePixelsPerUnit");
+            }
+
+            if (TryGetVector2(args, "pivot", out Vector2 pivot) || TryGetVector2(args, "spritePivot", out pivot))
+            {
+                importer.spritePivot = pivot;
+                updated.Add("spritePivot");
+            }
+
+            if (TryGetVector4(args, "border", out Vector4 border) || TryGetVector4(args, "spriteBorder", out border))
+            {
+                importer.spriteBorder = border;
+                updated.Add("spriteBorder");
+            }
+
+            if (TryParseEnum(args, "filterMode", out FilterMode filterMode))
+            {
+                importer.filterMode = filterMode;
+                updated.Add("filterMode");
+            }
+
+            if (TryParseEnum(args, "wrapMode", out TextureWrapMode wrapMode))
+            {
+                importer.wrapMode = wrapMode;
+                updated.Add("wrapMode");
+            }
+
+            if (TryParseEnum(args, "textureCompression", out TextureImporterCompression compression))
+            {
+                importer.textureCompression = compression;
+                updated.Add("textureCompression");
+            }
+
+            if (TryParseEnum(args, "defaultPlatformFormat", out TextureImporterFormat defaultFormat))
+            {
+                var platform = importer.GetDefaultPlatformTextureSettings();
+                platform.format = defaultFormat;
+                importer.SetPlatformTextureSettings(platform);
+                updated.Add("defaultPlatformFormat");
+            }
+
+            if (TryParseEnum(args, "defaultPlatformCompression", out TextureImporterCompression defaultCompression))
+            {
+                var platform = importer.GetDefaultPlatformTextureSettings();
+                platform.textureCompression = defaultCompression;
+                importer.SetPlatformTextureSettings(platform);
+                updated.Add("defaultPlatformCompression");
+            }
+
+            if (args.ContainsKey("readable") || args.ContainsKey("isReadable"))
+            {
+                importer.isReadable = GetBool(args, "readable", GetBool(args, "isReadable", importer.isReadable));
+                updated.Add("readable");
+            }
+
+            if (args.ContainsKey("mipmapEnabled"))
+            {
+                importer.mipmapEnabled = GetBool(args, "mipmapEnabled", importer.mipmapEnabled);
+                updated.Add("mipmapEnabled");
+            }
+
+            if (args.ContainsKey("alphaIsTransparency"))
+            {
+                importer.alphaIsTransparency = GetBool(args, "alphaIsTransparency", importer.alphaIsTransparency);
+                updated.Add("alphaIsTransparency");
+            }
+
+            if (args.ContainsKey("maxTextureSize"))
+            {
+                importer.maxTextureSize = GetInt(args, "maxTextureSize", importer.maxTextureSize);
+                updated.Add("maxTextureSize");
+            }
+        }
+
+        private static void CopyTextureImporterSettings(TextureImporter source, TextureImporter target)
+        {
+            target.textureType = source.textureType;
+            target.spriteImportMode = source.spriteImportMode;
+            target.sRGBTexture = source.sRGBTexture;
+            target.alphaSource = source.alphaSource;
+            target.alphaIsTransparency = source.alphaIsTransparency;
+            target.isReadable = source.isReadable;
+            target.mipmapEnabled = source.mipmapEnabled;
+            target.filterMode = source.filterMode;
+            target.wrapMode = source.wrapMode;
+            target.anisoLevel = source.anisoLevel;
+            target.maxTextureSize = source.maxTextureSize;
+            target.textureCompression = source.textureCompression;
+            target.compressionQuality = source.compressionQuality;
+            target.npotScale = source.npotScale;
+            target.spritePixelsPerUnit = source.spritePixelsPerUnit;
+            target.spritePivot = source.spritePivot;
+            target.spriteBorder = source.spriteBorder;
+            target.SetPlatformTextureSettings(source.GetDefaultPlatformTextureSettings());
+            target.SetPlatformTextureSettings(source.GetPlatformTextureSettings("Standalone"));
+        }
+
+        private static void SetDefaultPlatformFormat(TextureImporter importer, TextureImporterFormat format,
+            TextureImporterCompression compression)
+        {
+            var platform = importer.GetDefaultPlatformTextureSettings();
+            platform.format = format;
+            platform.textureCompression = compression;
+            importer.SetPlatformTextureSettings(platform);
+        }
+
+        private static Dictionary<string, object> BuildPresetArgs(Dictionary<string, object> args, string targetPath)
+        {
+            var copy = new Dictionary<string, object>(args);
+            copy["path"] = targetPath;
+            if (!copy.ContainsKey("preset") && !copy.ContainsKey("referencePath"))
+                copy["preset"] = "pixel-sprite";
+            return copy;
+        }
+
+        private static Dictionary<string, object> BuildImportResult(string path, string hash, bool skipped, string reason)
+        {
+            var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "skipped", skipped },
+                { "reason", reason },
+                { "path", path },
+                { "guid", AssetDatabase.AssetPathToGUID(path) },
+                { "sha256", hash },
+                { "width", texture == null ? 0 : texture.width },
+                { "height", texture == null ? 0 : texture.height },
+            };
+        }
+
+        private static byte[] DownloadBytes(string url)
+        {
+            using (var client = new WebClient())
+                return client.DownloadData(url);
+        }
+
+        private static string FindDuplicateAssetByHash(string folderPath, string hash, string extension)
+        {
+            if (string.IsNullOrEmpty(folderPath) || AssetDatabase.IsValidFolder(folderPath) == false)
+                return "";
+
+            string[] guids = AssetDatabase.FindAssets("t:Texture2D", new[] { folderPath });
+            foreach (string guid in guids)
+            {
+                string assetPath = AssetDatabase.GUIDToAssetPath(guid);
+                if (string.IsNullOrEmpty(extension) == false &&
+                    !assetPath.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                string absolute = ResolveFilePath(assetPath);
+                if (File.Exists(absolute) && ComputeHash(File.ReadAllBytes(absolute)) == hash)
+                    return assetPath;
+            }
+
+            return "";
+        }
+
+        private static string ComputeHash(byte[] bytes)
+        {
+            using (var sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(bytes)).Replace("-", "").ToLowerInvariant();
+        }
+
+        private static string GetString(Dictionary<string, object> args, string key)
+        {
+            return args != null && args.ContainsKey(key) && args[key] != null ? args[key].ToString() : "";
+        }
+
+        private static int GetInt(Dictionary<string, object> args, string key, int defaultValue)
+        {
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return defaultValue;
+
+            return int.TryParse(args[key].ToString(), out int parsed) ? parsed : defaultValue;
+        }
+
+        private static float GetFloat(Dictionary<string, object> args, string key, float defaultValue)
+        {
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return defaultValue;
+
+            return float.TryParse(args[key].ToString(), out float parsed) ? parsed : defaultValue;
+        }
+
+        private static bool GetBool(Dictionary<string, object> args, string key, bool defaultValue)
+        {
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return defaultValue;
+
+            if (args[key] is bool value)
+                return value;
+
+            return bool.TryParse(args[key].ToString(), out bool parsed) ? parsed : defaultValue;
+        }
+
+        private static bool TryParseEnum<T>(Dictionary<string, object> args, string key, out T value) where T : struct
+        {
+            value = default;
+            return args != null && args.ContainsKey(key) && args[key] != null &&
+                   Enum.TryParse(args[key].ToString(), true, out value);
+        }
+
+        private static bool TryGetVector2(Dictionary<string, object> args, string key, out Vector2 value)
+        {
+            value = default;
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return false;
+
+            if (args[key] is Dictionary<string, object> dict)
+            {
+                value = new Vector2(GetFloat(dict, "x", GetFloat(dict, "left", 0.5f)),
+                    GetFloat(dict, "y", GetFloat(dict, "bottom", 0.5f)));
+                return true;
+            }
+
+            if (args[key] is List<object> list && list.Count >= 2)
+            {
+                value = new Vector2(Convert.ToSingle(list[0]), Convert.ToSingle(list[1]));
+                return true;
+            }
+
+            return false;
+        }
+
+        private static bool TryGetVector4(Dictionary<string, object> args, string key, out Vector4 value)
+        {
+            value = default;
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return false;
+
+            if (args[key] is Dictionary<string, object> dict)
+            {
+                value = new Vector4(
+                    GetFloat(dict, "x", GetFloat(dict, "left", 0)),
+                    GetFloat(dict, "y", GetFloat(dict, "bottom", 0)),
+                    GetFloat(dict, "z", GetFloat(dict, "right", 0)),
+                    GetFloat(dict, "w", GetFloat(dict, "top", 0)));
+                return true;
+            }
+
+            if (args[key] is List<object> list && list.Count >= 4)
+            {
+                value = new Vector4(Convert.ToSingle(list[0]), Convert.ToSingle(list[1]),
+                    Convert.ToSingle(list[2]), Convert.ToSingle(list[3]));
+                return true;
+            }
+
+            if (float.TryParse(args[key].ToString(), out float uniform))
+            {
+                value = new Vector4(uniform, uniform, uniform, uniform);
+                return true;
+            }
+
+            return false;
+        }
+
+        private static string NormalizeAssetPath(string path)
+        {
+            return path.Replace('\\', '/');
+        }
+
+        private static string ResolveFilePath(string path)
+        {
+            if (Path.IsPathRooted(path))
+                return Path.GetFullPath(path);
+
+            return Path.GetFullPath(Path.Combine(GetProjectRoot(), NormalizeAssetPath(path)));
+        }
+
+        private static string GetProjectRoot()
+        {
+            return Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
         }
     }
 }
