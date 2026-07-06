@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.Profiling;
 
 namespace UnityMCP.Editor
 {
@@ -54,6 +55,14 @@ namespace UnityMCP.Editor
                         { "privateMemoryBytes", process.PrivateMemorySize64 },
                         { "managedMemoryBytes", GC.GetTotalMemory(false) },
                         { "threadCount", process.Threads.Count },
+                    }
+                },
+                { "profiler", new Dictionary<string, object>
+                    {
+                        { "totalAllocatedMemoryBytes", Profiler.GetTotalAllocatedMemoryLong() },
+                        { "totalReservedMemoryBytes", Profiler.GetTotalReservedMemoryLong() },
+                        { "monoUsedSizeBytes", Profiler.GetMonoUsedSizeLong() },
+                        { "monoHeapSizeBytes", Profiler.GetMonoHeapSizeLong() },
                     }
                 },
                 { "queue", MCPRequestQueue.GetQueueInfo() },
