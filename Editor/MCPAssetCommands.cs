@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
@@ -80,6 +81,94 @@ namespace UnityMCP.Editor
             AssetDatabase.ImportAsset(dest);
 
             return new { success = true, importedPath = dest };
+        }
+
+        public static object ExportUnityPackage(Dictionary<string, object> args)
+        {
+            var assetPaths = GetStringList(args, "assetPaths");
+            if (assetPaths.Count == 0)
+            {
+                string singlePath = GetString(args, "assetPath");
+                if (string.IsNullOrEmpty(singlePath))
+                    singlePath = GetString(args, "path");
+                if (!string.IsNullOrEmpty(singlePath))
+                    assetPaths.Add(singlePath);
+            }
+
+            string outputPath = GetString(args, "outputPath");
+            if (string.IsNullOrEmpty(outputPath))
+                outputPath = GetString(args, "filePath");
+
+            if (assetPaths.Count == 0)
+                return new { error = "assetPaths, assetPath, or path is required" };
+            if (string.IsNullOrEmpty(outputPath))
+                return new { error = "outputPath is required" };
+
+            var normalizedPaths = new List<string>();
+            var missingPaths = new List<string>();
+            foreach (string assetPath in assetPaths)
+            {
+                string normalizedPath = NormalizeAssetPath(assetPath);
+                if (string.IsNullOrEmpty(normalizedPath))
+                    continue;
+
+                if (!AssetExists(normalizedPath))
+                    missingPaths.Add(normalizedPath);
+                else if (!normalizedPaths.Contains(normalizedPath))
+                    normalizedPaths.Add(normalizedPath);
+            }
+
+            if (normalizedPaths.Count == 0)
+                return new { error = "No valid asset paths were provided" };
+            if (missingPaths.Count > 0)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "error", "One or more asset paths were not found" },
+                    { "missingPaths", missingPaths },
+                };
+            }
+
+            string fullOutputPath = NormalizeUnityPackageOutputPath(outputPath);
+            bool overwrite = GetBool(args, "overwrite", false);
+            if (File.Exists(fullOutputPath))
+            {
+                if (!overwrite)
+                    return new { error = $"Output file already exists: '{fullOutputPath}'. Pass overwrite=true to replace it." };
+
+                File.Delete(fullOutputPath);
+            }
+
+            string outputDirectory = Path.GetDirectoryName(fullOutputPath);
+            if (!string.IsNullOrEmpty(outputDirectory) && !Directory.Exists(outputDirectory))
+                Directory.CreateDirectory(outputDirectory);
+
+            bool includeDependencies = GetBool(args, "includeDependencies", true);
+            bool recurse = GetBool(args, "recurse", true);
+            bool interactive = GetBool(args, "interactive", false);
+
+            var options = ExportPackageOptions.Default;
+            if (includeDependencies)
+                options |= ExportPackageOptions.IncludeDependencies;
+            if (recurse)
+                options |= ExportPackageOptions.Recurse;
+            if (interactive)
+                options |= ExportPackageOptions.Interactive;
+
+            AssetDatabase.ExportPackage(normalizedPaths.ToArray(), fullOutputPath, options);
+
+            bool exported = File.Exists(fullOutputPath);
+            long size = exported ? new FileInfo(fullOutputPath).Length : 0;
+            return new Dictionary<string, object>
+            {
+                { "success", exported },
+                { "assetPaths", normalizedPaths },
+                { "outputPath", fullOutputPath },
+                { "size", size },
+                { "includeDependencies", includeDependencies },
+                { "recurse", recurse },
+                { "interactive", interactive },
+            };
         }
 
         public static object Delete(Dictionary<string, object> args)
@@ -335,9 +424,80 @@ namespace UnityMCP.Editor
             return args != null && args.ContainsKey(key) ? args[key]?.ToString() : "";
         }
 
+        private static bool GetBool(Dictionary<string, object> args, string key, bool defaultValue)
+        {
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return defaultValue;
+
+            try
+            {
+                return Convert.ToBoolean(args[key]);
+            }
+            catch
+            {
+                return defaultValue;
+            }
+        }
+
+        private static List<string> GetStringList(Dictionary<string, object> args, string key)
+        {
+            var result = new List<string>();
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return result;
+
+            object value = args[key];
+            if (value is string stringValue)
+            {
+                if (!string.IsNullOrWhiteSpace(stringValue))
+                    result.Add(stringValue);
+                return result;
+            }
+
+            var enumerable = value as IEnumerable;
+            if (enumerable == null)
+                return result;
+
+            foreach (object item in enumerable)
+            {
+                if (item == null)
+                    continue;
+
+                string text = item.ToString();
+                if (!string.IsNullOrWhiteSpace(text))
+                    result.Add(text);
+            }
+
+            return result;
+        }
+
         private static bool AssetExists(string path)
         {
             return AssetDatabase.IsValidFolder(path) || AssetDatabase.LoadMainAssetAtPath(path) != null;
+        }
+
+        private static string NormalizeAssetPath(string path)
+        {
+            if (string.IsNullOrWhiteSpace(path))
+                return "";
+
+            return path.Replace('\\', '/').Trim().Trim('/');
+        }
+
+        private static string NormalizeUnityPackageOutputPath(string outputPath)
+        {
+            string normalized = outputPath.Replace('\\', '/').Trim();
+            if (!string.Equals(Path.GetExtension(normalized), ".unitypackage", StringComparison.OrdinalIgnoreCase))
+                normalized += ".unitypackage";
+
+            if (!Path.IsPathRooted(normalized))
+                normalized = Path.Combine(GetProjectRoot(), normalized);
+
+            return Path.GetFullPath(normalized);
+        }
+
+        private static string GetProjectRoot()
+        {
+            return Directory.GetParent(Application.dataPath).FullName;
         }
 
         private static string NormalizeMoveTargetPath(string sourcePath, string destinationPath)

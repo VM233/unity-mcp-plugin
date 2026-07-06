@@ -217,6 +217,8 @@ namespace UnityMCP.Editor
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
                     return "Safely move a Unity asset using AssetDatabase while preserving its .meta GUID.";
+                case "asset/export-unitypackage":
+                    return "Export one or more Unity assets to a .unitypackage file using AssetDatabase.ExportPackage.";
                 case "console/query":
                     return "Query recent Unity Console entries with time, source, message, stack, and last-Play filters.";
                 case "debug/attach-unity":
@@ -388,6 +390,18 @@ namespace UnityMCP.Editor
                         Prop("expectedProjectName", "string", "Expected Unity project name."),
                         Prop("projectName", "string", "Alias for expectedProjectName.")
                     ));
+                case "asset/export-unitypackage":
+                    return Schema(Props(
+                        Prop("assetPaths", "array", "Unity asset paths to export, e.g. Assets/MyFolder or Assets/MyPrefab.prefab."),
+                        Prop("assetPath", "string", "Single Unity asset path alias."),
+                        Prop("path", "string", "Single Unity asset path alias."),
+                        Prop("outputPath", "string", "Absolute path or project-root-relative path for the .unitypackage output."),
+                        Prop("filePath", "string", "Alias for outputPath."),
+                        Prop("includeDependencies", "boolean", "Include asset dependencies. Defaults to true."),
+                        Prop("recurse", "boolean", "Recursively export folder contents. Defaults to true."),
+                        Prop("overwrite", "boolean", "Replace an existing output file. Defaults to false."),
+                        Prop("interactive", "boolean", "Show Unity's export package UI. Defaults to false.")
+                    ), "outputPath");
                 case "prefab-asset/instantiate-prefab":
                     return Schema(Props(
                         Prop("assetPath", "string", "Target prefab asset path to edit."),
