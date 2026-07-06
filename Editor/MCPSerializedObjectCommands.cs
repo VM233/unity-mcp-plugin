@@ -88,10 +88,9 @@ namespace UnityMCP.Editor
             target = null;
             error = "";
 
-            int instanceId = GetInt(args, "instanceId", 0);
-            if (instanceId != 0)
+            if (TryGetObjectId(args, "instanceId", out object instanceId))
             {
-                target = EditorUtility.InstanceIDToObject(instanceId);
+                target = MCPObjectId.ToObject(instanceId);
                 if (target != null)
                     return true;
 
@@ -249,6 +248,20 @@ namespace UnityMCP.Editor
                 return defaultValue;
 
             return int.TryParse(value.ToString(), out int parsed) ? parsed : defaultValue;
+        }
+
+        private static bool TryGetObjectId(Dictionary<string, object> args, string key, out object id)
+        {
+            id = null;
+            if (args == null || !args.TryGetValue(key, out var value) || value == null)
+                return false;
+
+            string text = value.ToString();
+            if (string.IsNullOrWhiteSpace(text) || text == "0")
+                return false;
+
+            id = value;
+            return true;
         }
     }
 }

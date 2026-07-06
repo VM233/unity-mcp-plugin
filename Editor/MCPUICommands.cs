@@ -1103,7 +1103,7 @@ namespace UnityMCP.Editor
             var root = window.rootVisualElement;
             return new Dictionary<string, object>
             {
-                { "instanceId", window.GetInstanceID() },
+                { "instanceId", MCPObjectId.Get(window) },
                 { "title", window.titleContent?.text ?? "" },
                 { "type", window.GetType().Name },
                 { "fullType", window.GetType().FullName },
@@ -1120,7 +1120,7 @@ namespace UnityMCP.Editor
 
             return new Dictionary<string, object>
             {
-                { "instanceId", document != null ? document.GetInstanceID() : 0 },
+                { "instanceId", document != null ? MCPObjectId.Get(document) : "0" },
                 { "name", document != null ? document.name : "" },
                 { "enabled", document != null && document.enabled },
                 { "gameObjectName", document != null ? document.gameObject.name : "" },
@@ -1152,19 +1152,20 @@ namespace UnityMCP.Editor
         {
             error = "";
             bool includeInactive = GetBool(args, "includeInactive", true);
-            int instanceId = GetInt(args, "documentInstanceId", 0);
-            if (instanceId == 0)
-                instanceId = GetInt(args, "uidocumentInstanceId", 0);
-            if (instanceId == 0)
-                instanceId = GetInt(args, "instanceId", 0);
+            object instanceId = null;
+            if (!TryGetObjectId(args, "documentInstanceId", out instanceId) &&
+                !TryGetObjectId(args, "uidocumentInstanceId", out instanceId))
+            {
+                TryGetObjectId(args, "instanceId", out instanceId);
+            }
 
             string documentName = GetString(args, "documentName");
             string gameObjectPath = GetString(args, "gameObjectPath");
             string gameObjectName = GetString(args, "gameObjectName");
 
-            if (instanceId != 0)
+            if (instanceId != null)
             {
-                var obj = EditorUtility.InstanceIDToObject(instanceId);
+                var obj = MCPObjectId.ToObject(instanceId);
                 if (obj is UnityEngine.UIElements.UIDocument directDocument)
                     return directDocument;
                 if (obj is GameObject go)
@@ -1362,19 +1363,19 @@ namespace UnityMCP.Editor
         private static EditorWindow FindEditorWindow(Dictionary<string, object> args, out string error)
         {
             error = "";
-            int instanceId = GetInt(args, "instanceId", 0);
+            TryGetObjectId(args, "instanceId", out object instanceId);
             string windowQuery = GetString(args, "window");
             string typeQuery = GetString(args, "windowType");
             string titleQuery = GetString(args, "title");
             if (string.IsNullOrEmpty(typeQuery))
                 typeQuery = GetString(args, "type");
 
-            if (instanceId == 0 && int.TryParse(windowQuery, out int parsedId))
-                instanceId = parsedId;
+            if (instanceId == null && IsObjectIdString(windowQuery))
+                instanceId = windowQuery;
 
-            if (instanceId != 0)
+            if (instanceId != null)
             {
-                var obj = EditorUtility.InstanceIDToObject(instanceId) as EditorWindow;
+                var obj = MCPObjectId.ToObject(instanceId) as EditorWindow;
                 if (obj != null)
                     return obj;
 
@@ -2460,7 +2461,7 @@ namespace UnityMCP.Editor
             {
                 { "name", unityObject != null ? unityObject.name : "" },
                 { "type", unityObject != null ? unityObject.GetType().Name : "" },
-                { "instanceId", unityObject != null ? unityObject.GetInstanceID() : 0 },
+                { "instanceId", unityObject != null ? MCPObjectId.Get(unityObject) : "0" },
                 { "assetPath", unityObject != null ? AssetDatabase.GetAssetPath(unityObject) : "" },
             };
         }
@@ -2582,7 +2583,7 @@ namespace UnityMCP.Editor
                 {
                     { "name", unityObject.name },
                     { "type", unityObject.GetType().Name },
-                    { "instanceId", unityObject.GetInstanceID() },
+                    { "instanceId", MCPObjectId.Get(unityObject) },
                     { "assetPath", AssetDatabase.GetAssetPath(unityObject) },
                 };
             }
@@ -2655,6 +2656,28 @@ namespace UnityMCP.Editor
                 return defaultValue;
 
             return int.TryParse(args[key].ToString(), out int parsed) ? parsed : defaultValue;
+        }
+
+        private static bool TryGetObjectId(Dictionary<string, object> args, string key, out object id)
+        {
+            id = null;
+            if (args == null || !args.ContainsKey(key) || args[key] == null)
+                return false;
+
+            string text = args[key].ToString();
+            if (!IsObjectIdString(text))
+                return false;
+
+            id = args[key];
+            return true;
+        }
+
+        private static bool IsObjectIdString(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value == "0")
+                return false;
+
+            return value.All(char.IsDigit);
         }
 
         private static float GetFloat(Dictionary<string, object> args, string key, float defaultValue)
