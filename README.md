@@ -61,12 +61,15 @@ http://127.0.0.1:7890/api/ping
 | UI Toolkit runtime | `unity_uitoolkit_runtime_repaint` | `uitoolkit/runtime-repaint` | Repaint a runtime UIDocument or one selected VisualElement. |
 | UI Toolkit runtime | `unity_uitoolkit_refresh` | `uitoolkit/refresh` | Refresh UI Toolkit assets and repaint runtime and editor panels. |
 | UI Toolkit runtime | `unity_uitoolkit_wait_refresh` | `uitoolkit/wait-refresh` | Refresh UI Toolkit assets, repaint panels, and wait for stable editor frames. |
-| UI Toolkit runtime | `unity_uitoolkit_assert_layout` | `uitoolkit/assert-layout` | Assert runtime layout constraints such as no-gap/no-overlap edge touching, containment, and expected size. |
+| UI Toolkit runtime | `unity_uitoolkit_assert_layout` | `uitoolkit/assert-layout` | Assert runtime layout constraints such as no-gap/no-overlap edge touching, edge alignment, center alignment, containment, and expected size. |
+| UI Toolkit visual QA | `unity_uitoolkit_capture_element` | `uitoolkit/capture-element` | Capture a UI Toolkit element by locating it in an Editor window or runtime UIDocument and cropping its containing window screenshot. |
+| UI Toolkit visual QA | `unity_uitoolkit_resource_audit` | `uitoolkit/resource-audit` | Audit target elements and descendants for resolved background assets, highlighted-state misuse, and missing or forbidden assets. |
 | UI Builder | `unity_uitoolkit_builder_preview` | `uitoolkit/builder-preview` | Open a UXML asset in UI Builder, wait for the preview to settle, and optionally capture the UI Builder window. |
 | Screenshot utilities | `unity_screenshot_crop` | `screenshot/crop` | Crop a screenshot or image file to a PNG for focused visual inspection. |
 | Graphics utilities | `unity_graphics_image_alpha_bounds` | `graphics/image-alpha-bounds` | Inspect a PNG or texture asset and return visible alpha pixel bounds plus transparent margins. |
 | Graphics utilities | `unity_graphics_rect_gap` | `graphics/rect-gap` | Measure a gap or overlap between two rectangles along selected edges. |
 | Graphics utilities | `unity_graphics_annotate_rects` | `graphics/annotate-rects` | Draw rectangle borders onto screenshots or images for visual verification reports. |
+| Graphics utilities | `unity_graphics_compare_images` | `graphics/compare-images` | Compare two screenshots or crop regions, return difference bounds and samples, and optionally write a highlighted diff image. |
 | Sprite pipeline | `unity_sprite_sheet_info` | `sprite/sheet-info` | Inspect a sliced sprite sheet and return texture and sprite metadata. |
 | Sprite pipeline | `unity_sprite_replace_and_slice` | `sprite/replace-and-slice` | Replace a sprite sheet PNG and slice it into numbered sprites while preserving sprite IDs by name. |
 | Sprite pipeline | `unity_sprite_slice_sheet` | `sprite/slice-sheet` | Slice an existing sprite sheet into numbered sprites. |

@@ -276,6 +276,10 @@ namespace UnityMCP.Editor
                     return "Diagnose runtime UI Toolkit elements with VisualElementPath lookup, style, parent/children, background, and pixel-grid data.";
                 case "uitoolkit/visual-check":
                     return "Run runtime UI Toolkit visual checks such as pixel-grid, background scale, and expected size.";
+                case "uitoolkit/capture-element":
+                    return "Capture an Editor or runtime UI Toolkit element by taking its containing window screenshot and cropping to the element bounds.";
+                case "uitoolkit/resource-audit":
+                    return "Audit UI Toolkit elements for resolved background assets, generated child visuals, highlighted-state misuse, and scale metadata.";
                 case "uitoolkit/runtime-repaint":
                     return "Trigger repaint for a runtime UIDocument or one of its elements.";
                 case "uitoolkit/refresh":
@@ -302,6 +306,8 @@ namespace UnityMCP.Editor
                     return "Measure the gap or overlap between two rectangles along an edge pair.";
                 case "graphics/annotate-rects":
                     return "Draw rectangle overlays on a screenshot or image file for visual verification.";
+                case "graphics/compare-images":
+                    return "Compare two screenshots or image files, optionally within crop rects, and return pixel-difference bounds plus an optional diff image.";
                 case "sprite/sheet-info":
                     return "Inspect a sliced sprite sheet and return texture and sprite metadata.";
                 case "sprite/pixel-check":
@@ -759,6 +765,37 @@ namespace UnityMCP.Editor
                         Prop("height", "number", "Expected element height for size checks."),
                         Prop("tolerance", "number", "Allowed pixel delta. Defaults to 0.01.")
                     ));
+                case "uitoolkit/capture-element":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("runtime", "boolean", "Capture a runtime UIDocument element when true; otherwise capture an EditorWindow UI Toolkit element. Defaults to false."),
+                        Prop("window", "string", "EditorWindow type/title to capture. Runtime defaults to Game, editor defaults to the focused/matched window."),
+                        Prop("path", "string", "Element tree path, e.g. root/0/1."),
+                        Prop("treePath", "string", "Alias for path."),
+                        Prop("visualElementPath", "string", "Slash-separated VisualElementPath names."),
+                        Prop("visualElementNames", "array", "VisualElementPath names array."),
+                        Prop("name", "string", "VisualElement.name exact match if path is omitted."),
+                        Prop("className", "string", "USS class name exact match if path is omitted."),
+                        Prop("typeName", "string", "VisualElement type name contains match if path is omitted."),
+                        Prop("text", "string", "TextElement text contains match if path is omitted."),
+                        Prop("outputPath", "string", "Output PNG path for the cropped element screenshot."),
+                        Prop("windowOutputPath", "string", "Output PNG path for the full containing window screenshot."),
+                        Prop("pixelScale", "number", "Scale from UI points to captured pixels. Defaults to EditorGUIUtility.pixelsPerPoint."),
+                        Prop("padding", "number", "Extra crop padding in pixels. Defaults to 0.")
+                    ));
+                case "uitoolkit/resource-audit":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("runtime", "boolean", "Audit runtime UIDocument elements when true; otherwise audit EditorWindow UI Toolkit elements. Defaults to false."),
+                        Prop("window", "string", "EditorWindow type/title for editor audits."),
+                        Prop("queries", "array", "Optional list of element queries. Each accepts path, visualElementPath, name, className, typeName, text, expectedBackgroundContains, forbiddenBackgroundContains, requireBackground."),
+                        Prop("path", "string", "Element tree path if queries is omitted."),
+                        Prop("visualElementPath", "string", "Slash-separated VisualElementPath names if queries is omitted."),
+                        Prop("name", "string", "VisualElement.name exact match if queries is omitted."),
+                        Prop("expectedBackgroundContains", "string", "Expected substring in resolved background asset path or name."),
+                        Prop("forbiddenBackgroundContains", "array", "Substrings that must not appear in the resolved background asset path or name."),
+                        Prop("requireBackground", "boolean", "Warn if the target has no resolved background image."),
+                        Prop("warnHighlighted", "boolean", "Warn when a target appears to use a highlighted asset. Defaults to true."),
+                        Prop("maxDepth", "number", "Descendant depth to scan for background resources. Defaults to 3.")
+                    ));
                 case "uitoolkit/runtime-repaint":
                     return RuntimeUIDocumentSchema(Props(
                         Prop("path", "string", "Optional element tree path from runtime-tree."),
@@ -790,7 +827,7 @@ namespace UnityMCP.Editor
                     ));
                 case "uitoolkit/assert-layout":
                     return RuntimeUIDocumentSchema(Props(
-                        Prop("assertions", "array", "Layout assertions. Supported types: edge-touch, inside, size.")
+                        Prop("assertions", "array", "Layout assertions. Supported types: edge-touch, same-edge, same-center, inside, size.")
                     ), "assertions");
                 case "screenshot/crop":
                     return Schema(Props(
@@ -847,6 +884,20 @@ namespace UnityMCP.Editor
                         Prop("color", "string", "Default HTML color, e.g. #ff00ffff."),
                         Prop("thickness", "number", "Default border thickness in pixels. Defaults to 2.")
                     ), "rects");
+                case "graphics/compare-images":
+                    return Schema(Props(
+                        Prop("expectedPath", "string", "Reference image path. Alias: referencePath."),
+                        Prop("referencePath", "string", "Alias for expectedPath."),
+                        Prop("actualPath", "string", "Current image path. Alias: currentPath."),
+                        Prop("currentPath", "string", "Alias for actualPath."),
+                        Prop("expectedRect", "object", "Optional reference crop rect with x, y, width, height."),
+                        Prop("referenceRect", "object", "Alias for expectedRect."),
+                        Prop("actualRect", "object", "Optional current crop rect with x, y, width, height."),
+                        Prop("currentRect", "object", "Alias for actualRect."),
+                        Prop("tolerance", "number", "Per-channel pixel tolerance, 0-255. Defaults to 0."),
+                        Prop("maxSamples", "number", "Maximum differing pixel samples returned. Defaults to 20."),
+                        Prop("diffOutputPath", "string", "Optional PNG path to write a red-highlight diff image.")
+                    ));
                 case "sprite/sheet-info":
                     return Schema(Props(
                         Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path.")

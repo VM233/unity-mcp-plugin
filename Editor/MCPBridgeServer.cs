@@ -1271,6 +1271,8 @@ namespace UnityMCP.Editor
                     return MCPGraphicsCommands.MeasureRectGap(ParseJson(body));
                 case "graphics/annotate-rects":
                     return MCPGraphicsCommands.AnnotateRects(ParseJson(body));
+                case "graphics/compare-images":
+                    return MCPGraphicsCommands.CompareImages(ParseJson(body));
                 case "graphics/renderer-info":
                     return MCPGraphicsCommands.GetRendererInfo(ParseJson(body));
                 case "graphics/lighting-summary":
@@ -1463,6 +1465,10 @@ namespace UnityMCP.Editor
                     return MCPUICommands.DiagnoseRuntimeUI(ParseJson(body));
                 case "uitoolkit/visual-check":
                     return MCPUICommands.VisualCheckRuntimeUI(ParseJson(body));
+                case "uitoolkit/capture-element":
+                    return MCPUICommands.CaptureUIToolkitElement(ParseJson(body));
+                case "uitoolkit/resource-audit":
+                    return MCPUICommands.AuditUIToolkitResources(ParseJson(body));
                 case "uitoolkit/runtime-repaint":
                     return MCPUICommands.RepaintRuntimeUI(ParseJson(body));
                 case "uitoolkit/refresh":
@@ -1695,6 +1701,7 @@ namespace UnityMCP.Editor
         {
             response.StatusCode = statusCode;
             response.ContentType = "application/json";
+            data = AttachInstanceContext(data);
             string json = MiniJson.Serialize(data);
             byte[] buffer = Encoding.UTF8.GetBytes(json);
 
@@ -1721,6 +1728,25 @@ namespace UnityMCP.Editor
             response.ContentLength64 = buffer.Length;
             response.OutputStream.Write(buffer, 0, buffer.Length);
             response.OutputStream.Close();
+        }
+
+        private static object AttachInstanceContext(object data)
+        {
+            var dictionary = data as Dictionary<string, object>;
+            if (dictionary == null)
+                return data;
+
+            if (dictionary.ContainsKey("mcpInstance") == false)
+            {
+                dictionary["mcpInstance"] = new Dictionary<string, object>
+                {
+                    { "projectPath", MCPInstanceRegistry.CurrentProjectPath },
+                    { "projectName", MCPInstanceRegistry.CurrentProjectName },
+                    { "port", ActivePort },
+                };
+            }
+
+            return dictionary;
         }
 
         private static string GetProjectPath()

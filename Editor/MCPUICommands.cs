@@ -777,6 +777,202 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object CaptureUIToolkitElement(Dictionary<string, object> args)
+        {
+            bool runtime = GetBool(args, "runtime", false);
+            string outputPath = GetString(args, "outputPath");
+            if (string.IsNullOrEmpty(outputPath))
+                outputPath = GetString(args, "pathOutput");
+            if (string.IsNullOrEmpty(outputPath))
+                outputPath = $"Temp/MCP_UIToolkitElement_{DateTime.Now:yyyyMMdd_HHmmss}.png";
+
+            string fullWindowPath = GetString(args, "windowOutputPath");
+            if (string.IsNullOrEmpty(fullWindowPath))
+                fullWindowPath = Path.Combine(Path.GetDirectoryName(outputPath) ?? "Temp",
+                    Path.GetFileNameWithoutExtension(outputPath) + "_window.png").Replace('\\', '/');
+
+            UnityEngine.UIElements.VisualElement root;
+            UnityEngine.UIElements.VisualElement element;
+            string elementPath;
+            string error;
+            string windowName;
+            Dictionary<string, object> context;
+
+            if (runtime)
+            {
+                var document = FindRuntimeUIDocument(args, out error);
+                if (document == null)
+                    return new { error };
+
+                root = document.rootVisualElement;
+                if (root == null)
+                    return new { error = $"UIDocument '{document.name}' has no rootVisualElement" };
+
+                element = FindRuntimeElement(args, document, out elementPath, out error);
+                if (element == null)
+                    return new { error };
+
+                windowName = GetString(args, "window");
+                if (string.IsNullOrEmpty(windowName))
+                    windowName = "Game";
+                context = BuildUIDocumentInfo(document);
+            }
+            else
+            {
+                var window = FindEditorWindow(args, out error);
+                if (window == null)
+                    return new { error };
+
+                root = window.rootVisualElement;
+                if (root == null)
+                    return new { error = $"EditorWindow '{window.GetType().FullName}' has no rootVisualElement" };
+
+                element = FindEditorElement(root, args, out elementPath, out error);
+                if (element == null)
+                    return new { error };
+
+                windowName = window.GetType().FullName;
+                context = BuildWindowInfo(window);
+            }
+
+            Rect rect = element.worldBound;
+            float pixelScale = GetFloat(args, "pixelScale", EditorGUIUtility.pixelsPerPoint);
+            int padding = GetInt(args, "padding", 0);
+            var cropRect = new RectInt(
+                Mathf.Max(0, Mathf.FloorToInt(rect.x * pixelScale) - padding),
+                Mathf.Max(0, Mathf.FloorToInt(rect.y * pixelScale) - padding),
+                Mathf.Max(1, Mathf.CeilToInt(rect.width * pixelScale) + padding * 2),
+                Mathf.Max(1, Mathf.CeilToInt(rect.height * pixelScale) + padding * 2));
+
+            var captureArgs = new Dictionary<string, object>
+            {
+                { "window", windowName },
+                { "path", fullWindowPath },
+            };
+            var capture = MCPScreenshotCommands.CaptureEditorWindow(captureArgs) as Dictionary<string, object>;
+            if (capture == null || GetBool(capture, "success", false) == false)
+                return capture ?? new Dictionary<string, object> { { "success", false }, { "error", "Window capture failed" } };
+
+            var cropArgs = new Dictionary<string, object>
+            {
+                { "sourcePath", fullWindowPath },
+                { "outputPath", outputPath },
+                { "originTopLeft", true },
+                { "rect", new Dictionary<string, object>
+                    {
+                        { "x", cropRect.x },
+                        { "y", cropRect.y },
+                        { "width", cropRect.width },
+                        { "height", cropRect.height },
+                    }
+                },
+            };
+            var crop = MCPScreenshotCommands.CropImage(cropArgs);
+            bool cropSucceeded = crop is Dictionary<string, object> cropDictionary &&
+                                 GetBool(cropDictionary, "success", false);
+
+            return new Dictionary<string, object>
+            {
+                { "success", cropSucceeded },
+                { "runtime", runtime },
+                { "context", context },
+                { "element", BuildElementInfo(element, elementPath, true) },
+                { "pixelScale", SafeFloat(pixelScale) },
+                { "padding", padding },
+                { "cropRect", RectToDictionary(new Rect(cropRect.x, cropRect.y, cropRect.width, cropRect.height)) },
+                { "windowCapture", capture },
+                { "elementCapture", crop },
+                { "error", cropSucceeded ? "" : "Element crop failed. See elementCapture for details." },
+                { "warning", runtime ? "Runtime UI Toolkit coordinates are panel coordinates; verify GameView scale if the crop is offset." : "" },
+            };
+        }
+
+        public static object AuditUIToolkitResources(Dictionary<string, object> args)
+        {
+            bool runtime = GetBool(args, "runtime", false);
+            int maxDepth = GetInt(args, "maxDepth", 3);
+            var queryObjects = GetObjectList(args, "queries");
+            if (queryObjects.Count == 0)
+                queryObjects.Add(args);
+
+            UnityEngine.UIElements.VisualElement root;
+            Dictionary<string, object> context;
+            string setupError;
+            UnityEngine.UIElements.UIDocument document = null;
+            if (runtime)
+            {
+                document = FindRuntimeUIDocument(args, out setupError);
+                if (document == null)
+                    return new { error = setupError };
+
+                root = document.rootVisualElement;
+                if (root == null)
+                    return new { error = $"UIDocument '{document.name}' has no rootVisualElement" };
+
+                context = BuildUIDocumentInfo(document);
+            }
+            else
+            {
+                var window = FindEditorWindow(args, out setupError);
+                if (window == null)
+                    return new { error = setupError };
+
+                root = window.rootVisualElement;
+                if (root == null)
+                    return new { error = $"EditorWindow '{window.GetType().FullName}' has no rootVisualElement" };
+
+                context = BuildWindowInfo(window);
+            }
+
+            var audits = new List<Dictionary<string, object>>();
+            bool valid = true;
+            for (int i = 0; i < queryObjects.Count; i++)
+            {
+                var query = AsDictionary(queryObjects[i]);
+                UnityEngine.UIElements.VisualElement element;
+                string path;
+                string error;
+                if (runtime)
+                    element = FindRuntimeElement(query, document, out path, out error);
+                else
+                    element = FindEditorElement(root, query, out path, out error);
+
+                var audit = new Dictionary<string, object>
+                {
+                    { "index", i },
+                    { "query", query },
+                    { "found", element != null },
+                    { "path", path },
+                    { "error", element == null ? error : "" },
+                };
+
+                if (element == null)
+                {
+                    valid = false;
+                    audits.Add(audit);
+                    continue;
+                }
+
+                audit["element"] = BuildElementInfo(element, path, true);
+                audit["resources"] = CollectElementResources(root, element, path, maxDepth);
+                audit["warnings"] = BuildResourceWarnings(element, query);
+                if (((List<string>)audit["warnings"]).Count > 0)
+                    valid = false;
+
+                audits.Add(audit);
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "valid", valid },
+                { "runtime", runtime },
+                { "context", context },
+                { "count", audits.Count },
+                { "audits", audits },
+            };
+        }
+
         public static object RepaintRuntimeUI(Dictionary<string, object> args)
         {
             var document = FindRuntimeUIDocument(args, out string error);
@@ -1110,6 +1306,163 @@ namespace UnityMCP.Editor
                 { "hasRootVisualElement", root != null },
                 { "rootChildCount", root?.childCount ?? 0 },
             };
+        }
+
+        private static UnityEngine.UIElements.VisualElement FindEditorElement(
+            UnityEngine.UIElements.VisualElement root, Dictionary<string, object> args,
+            out string elementPath, out string error)
+        {
+            elementPath = "root";
+            error = "";
+
+            if (root == null)
+            {
+                error = "EditorWindow has no rootVisualElement";
+                return null;
+            }
+
+            string path = GetString(args, "path");
+            if (string.IsNullOrEmpty(path))
+                path = GetString(args, "treePath");
+            if (string.IsNullOrEmpty(path) == false)
+            {
+                var element = GetElementByFlexiblePath(root, path);
+                if (element != null)
+                {
+                    elementPath = GetElementPath(root, element);
+                    return element;
+                }
+
+                error = $"UI Toolkit element path '{path}' was not found";
+                return null;
+            }
+
+            var visualElementPath = GetVisualElementPathNames(args, "");
+            if (visualElementPath.Count > 0)
+            {
+                var element = GetElementByVisualElementPath(root, visualElementPath);
+                if (element != null)
+                {
+                    elementPath = GetElementPath(root, element);
+                    return element;
+                }
+
+                error = $"VisualElementPath '{string.Join("/", visualElementPath)}' was not found";
+                return null;
+            }
+
+            string name = GetString(args, "name");
+            string className = GetString(args, "className");
+            string typeName = GetString(args, "typeName");
+            string text = GetString(args, "text");
+            if (string.IsNullOrEmpty(name) && string.IsNullOrEmpty(className) &&
+                string.IsNullOrEmpty(typeName) && string.IsNullOrEmpty(text))
+                return root;
+
+            var results = new List<Dictionary<string, object>>();
+            QueryElements(root, "root", name, className, typeName, text, false, 1, results);
+            if (results.Count == 0)
+            {
+                error = "No UI Toolkit element matched the supplied query filters";
+                return null;
+            }
+
+            elementPath = results[0]["path"].ToString();
+            return GetElementByPath(root, elementPath);
+        }
+
+        private static List<Dictionary<string, object>> CollectElementResources(
+            UnityEngine.UIElements.VisualElement root, UnityEngine.UIElements.VisualElement element,
+            string elementPath, int maxDepth)
+        {
+            var results = new List<Dictionary<string, object>>();
+            CollectElementResources(root, element, elementPath, 0, Math.Max(0, maxDepth), results);
+            return results;
+        }
+
+        private static void CollectElementResources(
+            UnityEngine.UIElements.VisualElement root, UnityEngine.UIElements.VisualElement element,
+            string elementPath, int depth, int maxDepth, List<Dictionary<string, object>> results)
+        {
+            if (element == null)
+                return;
+
+            var backgroundObject = GetBackgroundObject(element);
+            bool hasBackground = backgroundObject != null;
+            if (hasBackground || depth == 0)
+            {
+                results.Add(new Dictionary<string, object>
+                {
+                    { "path", string.IsNullOrEmpty(elementPath) ? GetElementPath(root, element) : elementPath },
+                    { "name", element.name ?? "" },
+                    { "type", element.GetType().Name },
+                    { "classes", element.GetClasses().ToList() },
+                    { "text", GetElementText(element) },
+                    { "worldBound", RectToDictionary(element.worldBound) },
+                    { "hasBackground", hasBackground },
+                    { "background", hasBackground ? BuildUnityObjectInfo(backgroundObject) : null },
+                    { "backgroundScale", BuildBackgroundScaleInfo(element) },
+                    { "pickingMode", element.pickingMode.ToString() },
+                    { "display", element.resolvedStyle.display.ToString() },
+                    { "visibility", element.resolvedStyle.visibility.ToString() },
+                    { "opacity", SafeFloat(element.resolvedStyle.opacity) },
+                });
+            }
+
+            if (depth >= maxDepth)
+                return;
+
+            int childIndex = 0;
+            foreach (var child in element.Children())
+            {
+                string childPath = string.IsNullOrEmpty(elementPath)
+                    ? GetElementPath(root, child)
+                    : $"{elementPath}/{childIndex}";
+                CollectElementResources(root, child, childPath, depth + 1, maxDepth, results);
+                childIndex++;
+            }
+        }
+
+        private static List<string> BuildResourceWarnings(
+            UnityEngine.UIElements.VisualElement element, Dictionary<string, object> args)
+        {
+            var warnings = new List<string>();
+            var backgroundObject = GetBackgroundObject(element);
+            string backgroundPath = backgroundObject != null ? AssetDatabase.GetAssetPath(backgroundObject) : "";
+            string backgroundName = backgroundObject != null ? backgroundObject.name : "";
+
+            string expectedContains = GetString(args, "expectedBackgroundContains");
+            if (string.IsNullOrEmpty(expectedContains) == false &&
+                backgroundPath.IndexOf(expectedContains, StringComparison.OrdinalIgnoreCase) < 0 &&
+                backgroundName.IndexOf(expectedContains, StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                warnings.Add($"Background does not contain expected text '{expectedContains}'. Actual='{backgroundPath}' '{backgroundName}'");
+            }
+
+            foreach (string forbidden in GetStringList(args, "forbiddenBackgroundContains", "forbiddenBackgroundContains"))
+            {
+                if (string.IsNullOrEmpty(forbidden))
+                    continue;
+
+                if (backgroundPath.IndexOf(forbidden, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    backgroundName.IndexOf(forbidden, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    warnings.Add($"Background contains forbidden text '{forbidden}'. Actual='{backgroundPath}' '{backgroundName}'");
+                }
+            }
+
+            bool requireBackground = GetBool(args, "requireBackground", false);
+            if (requireBackground && backgroundObject == null)
+                warnings.Add("Element has no resolved background image.");
+
+            if (GetBool(args, "warnHighlighted", true) &&
+                (backgroundPath.IndexOf("highlight", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                 backgroundName.IndexOf("highlight", StringComparison.OrdinalIgnoreCase) >= 0))
+            {
+                warnings.Add($"Element appears to use a highlighted background in normal state: '{backgroundPath}' '{backgroundName}'");
+            }
+
+            return warnings;
         }
 
         private static Dictionary<string, object> BuildUIDocumentInfo(UnityEngine.UIElements.UIDocument document)
@@ -1727,6 +2080,14 @@ namespace UnityMCP.Editor
                     case "touch":
                     case "no-gap-no-overlap":
                         return BuildEdgeTouchAssertion(root, assertion, index, type);
+                    case "same-edge":
+                    case "align-edge":
+                    case "edge-align":
+                        return BuildEdgeAlignAssertion(root, assertion, index, type);
+                    case "same-center":
+                    case "align-center":
+                    case "center-align":
+                        return BuildCenterAlignAssertion(root, assertion, index, type);
                     case "inside":
                     case "contained":
                         return BuildInsideAssertion(root, assertion, index, type);
@@ -1803,6 +2164,98 @@ namespace UnityMCP.Editor
                 { "delta", SafeFloat(delta) },
                 { "gap", SafeFloat(delta > tolerance ? delta : 0) },
                 { "overlap", SafeFloat(delta < -tolerance ? -delta : 0) },
+                { "tolerance", SafeFloat(tolerance) },
+                { "firstRect", RectToDictionary(first.worldBound) },
+                { "secondRect", RectToDictionary(second.worldBound) },
+            };
+        }
+
+        private static Dictionary<string, object> BuildEdgeAlignAssertion(
+            UnityEngine.UIElements.VisualElement root, Dictionary<string, object> assertion, int index, string type)
+        {
+            var first = FindAssertionElement(root, assertion, "first", out string firstPath, out string firstError);
+            var second = FindAssertionElement(root, assertion, "second", out string secondPath, out string secondError);
+            float tolerance = GetFloat(assertion, "tolerance", 0.5f);
+
+            if (first == null || second == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "index", index },
+                    { "type", type },
+                    { "passed", false },
+                    { "error", first == null ? firstError : secondError },
+                };
+            }
+
+            string edge = GetString(assertion, "edge");
+            if (string.IsNullOrEmpty(edge))
+                edge = GetString(assertion, "firstEdge");
+            if (string.IsNullOrEmpty(edge))
+                edge = "bottom";
+            string secondEdge = GetString(assertion, "secondEdge");
+            if (string.IsNullOrEmpty(secondEdge))
+                secondEdge = edge;
+
+            float firstValue = GetRectEdge(first.worldBound, edge);
+            float secondValue = GetRectEdge(second.worldBound, secondEdge);
+            float delta = secondValue - firstValue;
+
+            return new Dictionary<string, object>
+            {
+                { "index", index },
+                { "type", type },
+                { "passed", Math.Abs(delta) <= tolerance },
+                { "firstPath", firstPath },
+                { "secondPath", secondPath },
+                { "firstEdge", edge },
+                { "secondEdge", secondEdge },
+                { "firstValue", SafeFloat(firstValue) },
+                { "secondValue", SafeFloat(secondValue) },
+                { "delta", SafeFloat(delta) },
+                { "tolerance", SafeFloat(tolerance) },
+                { "firstRect", RectToDictionary(first.worldBound) },
+                { "secondRect", RectToDictionary(second.worldBound) },
+            };
+        }
+
+        private static Dictionary<string, object> BuildCenterAlignAssertion(
+            UnityEngine.UIElements.VisualElement root, Dictionary<string, object> assertion, int index, string type)
+        {
+            var first = FindAssertionElement(root, assertion, "first", out string firstPath, out string firstError);
+            var second = FindAssertionElement(root, assertion, "second", out string secondPath, out string secondError);
+            float tolerance = GetFloat(assertion, "tolerance", 0.5f);
+
+            if (first == null || second == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "index", index },
+                    { "type", type },
+                    { "passed", false },
+                    { "error", first == null ? firstError : secondError },
+                };
+            }
+
+            string axis = GetString(assertion, "axis").ToLowerInvariant();
+            if (axis != "y")
+                axis = "x";
+
+            float firstValue = axis == "x" ? first.worldBound.center.x : first.worldBound.center.y;
+            float secondValue = axis == "x" ? second.worldBound.center.x : second.worldBound.center.y;
+            float delta = secondValue - firstValue;
+
+            return new Dictionary<string, object>
+            {
+                { "index", index },
+                { "type", type },
+                { "passed", Math.Abs(delta) <= tolerance },
+                { "axis", axis },
+                { "firstPath", firstPath },
+                { "secondPath", secondPath },
+                { "firstValue", SafeFloat(firstValue) },
+                { "secondValue", SafeFloat(secondValue) },
+                { "delta", SafeFloat(delta) },
                 { "tolerance", SafeFloat(tolerance) },
                 { "firstRect", RectToDictionary(first.worldBound) },
                 { "secondRect", RectToDictionary(second.worldBound) },

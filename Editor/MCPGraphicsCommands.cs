@@ -962,6 +962,159 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object CompareImages(Dictionary<string, object> args)
+        {
+            string expectedPath = GetString(args, "expectedPath");
+            if (string.IsNullOrEmpty(expectedPath))
+                expectedPath = GetString(args, "referencePath");
+            string actualPath = GetString(args, "actualPath");
+            if (string.IsNullOrEmpty(actualPath))
+                actualPath = GetString(args, "currentPath");
+
+            if (string.IsNullOrEmpty(expectedPath) || string.IsNullOrEmpty(actualPath))
+                return new { error = "expectedPath/referencePath and actualPath/currentPath are required" };
+
+            string expectedAbsolute = ResolveAbsolutePath(expectedPath);
+            string actualAbsolute = ResolveAbsolutePath(actualPath);
+            if (File.Exists(expectedAbsolute) == false)
+                return new { error = $"Expected/reference image not found: '{expectedPath}'" };
+            if (File.Exists(actualAbsolute) == false)
+                return new { error = $"Actual/current image not found: '{actualPath}'" };
+
+            Texture2D expected = null;
+            Texture2D actual = null;
+            Texture2D diff = null;
+            try
+            {
+                expected = LoadImageFile(expectedAbsolute);
+                actual = LoadImageFile(actualAbsolute);
+
+                Rect expectedRect = new Rect(0, 0, expected.width, expected.height);
+                Rect actualRect = new Rect(0, 0, actual.width, actual.height);
+                if (TryGetRect(args, "expectedRect", out var suppliedExpectedRect))
+                    expectedRect = suppliedExpectedRect;
+                if (TryGetRect(args, "referenceRect", out suppliedExpectedRect))
+                    expectedRect = suppliedExpectedRect;
+                if (TryGetRect(args, "actualRect", out var suppliedActualRect))
+                    actualRect = suppliedActualRect;
+                if (TryGetRect(args, "currentRect", out suppliedActualRect))
+                    actualRect = suppliedActualRect;
+
+                int width = Mathf.Min(Mathf.RoundToInt(expectedRect.width), Mathf.RoundToInt(actualRect.width));
+                int height = Mathf.Min(Mathf.RoundToInt(expectedRect.height), Mathf.RoundToInt(actualRect.height));
+                if (width <= 0 || height <= 0)
+                    return new { error = "Comparison rects must have positive overlapping size" };
+
+                int tolerance = Mathf.Clamp(Mathf.RoundToInt(GetFloat(args, "tolerance", 0)), 0, 255);
+                int maxSamples = Mathf.Max(0, Mathf.RoundToInt(GetFloat(args, "maxSamples", 20)));
+                string diffOutputPath = GetString(args, "diffOutputPath");
+                bool writeDiff = string.IsNullOrEmpty(diffOutputPath) == false;
+                if (writeDiff)
+                    diff = new Texture2D(width, height, TextureFormat.RGBA32, false);
+
+                int differentPixels = 0;
+                int minX = width;
+                int minY = height;
+                int maxX = -1;
+                int maxY = -1;
+                long totalDelta = 0;
+                int maxDelta = 0;
+                var samples = new List<Dictionary<string, object>>();
+
+                for (int y = 0; y < height; y++)
+                {
+                    for (int x = 0; x < width; x++)
+                    {
+                        var expectedColor = expected.GetPixel(
+                            Mathf.Clamp(Mathf.RoundToInt(expectedRect.x) + x, 0, expected.width - 1),
+                            Mathf.Clamp(Mathf.RoundToInt(expectedRect.y) + y, 0, expected.height - 1));
+                        var actualColor = actual.GetPixel(
+                            Mathf.Clamp(Mathf.RoundToInt(actualRect.x) + x, 0, actual.width - 1),
+                            Mathf.Clamp(Mathf.RoundToInt(actualRect.y) + y, 0, actual.height - 1));
+
+                        int delta = ColorDelta(expectedColor, actualColor);
+                        bool different = delta > tolerance;
+                        if (different)
+                        {
+                            differentPixels++;
+                            totalDelta += delta;
+                            maxDelta = Math.Max(maxDelta, delta);
+                            minX = Math.Min(minX, x);
+                            minY = Math.Min(minY, y);
+                            maxX = Math.Max(maxX, x);
+                            maxY = Math.Max(maxY, y);
+
+                            if (samples.Count < maxSamples)
+                            {
+                                samples.Add(new Dictionary<string, object>
+                                {
+                                    { "x", x },
+                                    { "y", y },
+                                    { "delta", delta },
+                                    { "expected", ColorToDict(expectedColor) },
+                                    { "actual", ColorToDict(actualColor) },
+                                });
+                            }
+                        }
+
+                        if (writeDiff)
+                            diff.SetPixel(x, y, different ? Color.red : new Color(actualColor.r, actualColor.g, actualColor.b, 0.25f));
+                    }
+                }
+
+                string absoluteDiffOutput = "";
+                if (writeDiff)
+                {
+                    diff.Apply();
+                    absoluteDiffOutput = ResolveAbsolutePath(diffOutputPath);
+                    string directory = Path.GetDirectoryName(absoluteDiffOutput);
+                    if (string.IsNullOrEmpty(directory) == false)
+                        Directory.CreateDirectory(directory);
+                    File.WriteAllBytes(absoluteDiffOutput, diff.EncodeToPNG());
+                    RefreshAssetIfNeeded(absoluteDiffOutput);
+                }
+
+                int totalPixels = width * height;
+                var result = new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "expectedPath", expectedPath },
+                    { "actualPath", actualPath },
+                    { "expectedSize", new Dictionary<string, object> { { "width", expected.width }, { "height", expected.height } } },
+                    { "actualSize", new Dictionary<string, object> { { "width", actual.width }, { "height", actual.height } } },
+                    { "comparedWidth", width },
+                    { "comparedHeight", height },
+                    { "tolerance", tolerance },
+                    { "differentPixels", differentPixels },
+                    { "totalPixels", totalPixels },
+                    { "differentRatio", totalPixels > 0 ? Math.Round(differentPixels / (double)totalPixels, 6) : 0 },
+                    { "averageDelta", differentPixels > 0 ? Math.Round(totalDelta / (double)differentPixels, 3) : 0 },
+                    { "maxDelta", maxDelta },
+                    { "samples", samples },
+                };
+
+                if (differentPixels > 0)
+                    result["differenceBounds"] = RectToDictionary(new Rect(minX, minY, maxX - minX + 1, maxY - minY + 1));
+
+                if (writeDiff)
+                {
+                    result["diffOutputPath"] = diffOutputPath;
+                    result["absoluteDiffOutputPath"] = absoluteDiffOutput;
+                }
+
+                return result;
+            }
+            finally
+            {
+                if (expected != null)
+                    UnityEngine.Object.DestroyImmediate(expected);
+                if (actual != null)
+                    UnityEngine.Object.DestroyImmediate(actual);
+                if (diff != null)
+                    UnityEngine.Object.DestroyImmediate(diff);
+            }
+        }
+
         private static Texture2D CopyToReadableTexture(Texture texture)
         {
             RenderTexture rt = null;
@@ -1089,6 +1242,35 @@ namespace UnityMCP.Editor
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
             return Path.GetFullPath(Path.Combine(projectRoot, path));
+        }
+
+        private static Texture2D LoadImageFile(string absolutePath)
+        {
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            if (texture.LoadImage(File.ReadAllBytes(absolutePath)) == false)
+            {
+                UnityEngine.Object.DestroyImmediate(texture);
+                throw new InvalidOperationException($"Could not decode image '{absolutePath}'");
+            }
+
+            return texture;
+        }
+
+        private static int ColorDelta(Color a, Color b)
+        {
+            int dr = Mathf.Abs(Mathf.RoundToInt(a.r * 255f) - Mathf.RoundToInt(b.r * 255f));
+            int dg = Mathf.Abs(Mathf.RoundToInt(a.g * 255f) - Mathf.RoundToInt(b.g * 255f));
+            int db = Mathf.Abs(Mathf.RoundToInt(a.b * 255f) - Mathf.RoundToInt(b.b * 255f));
+            int da = Mathf.Abs(Mathf.RoundToInt(a.a * 255f) - Mathf.RoundToInt(b.a * 255f));
+            return Math.Max(Math.Max(dr, dg), Math.Max(db, da));
+        }
+
+        private static void RefreshAssetIfNeeded(string absolutePath)
+        {
+            string normalized = absolutePath.Replace('\\', '/');
+            string assetsRoot = Application.dataPath.Replace('\\', '/');
+            if (normalized.StartsWith(assetsRoot, StringComparison.OrdinalIgnoreCase))
+                AssetDatabase.Refresh();
         }
 
         private static Color ParseColor(string value, Color defaultColor)
