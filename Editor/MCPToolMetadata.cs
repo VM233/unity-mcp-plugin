@@ -216,6 +216,8 @@ namespace UnityMCP.Editor
                     return "Read serialized properties from a scene object, component, or asset via SerializedObject.";
                 case "serialized-object/set":
                     return "Set one serialized property on a scene object, component, or asset via SerializedObject.";
+                case "asset/refresh":
+                    return "Refresh AssetDatabase, optionally forcing update or importing specific asset paths.";
                 case "asset/rename":
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
@@ -532,6 +534,14 @@ namespace UnityMCP.Editor
                         Prop("newName", "string", "New file or folder name. Do not include a directory path."),
                         Prop("name", "string", "Alias for newName."),
                         Prop("dryRun", "boolean", "Validate and return expected paths without renaming.")
+                    ));
+                case "asset/refresh":
+                    return Schema(Props(
+                        Prop("assetPaths", "array", "Optional Unity asset paths to import individually."),
+                        Prop("assetPath", "string", "Single asset path alias."),
+                        Prop("path", "string", "Single asset path alias."),
+                        Prop("forceUpdate", "boolean", "Use ImportAssetOptions.ForceUpdate. Defaults to true."),
+                        Prop("saveAssets", "boolean", "Call AssetDatabase.SaveAssets after refresh/import. Defaults to false.")
                     ));
                 case "asset/move":
                     return Schema(Props(

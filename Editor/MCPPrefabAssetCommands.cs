@@ -1533,15 +1533,23 @@ namespace UnityMCP.Editor
         public static void BatchEditDeferred(Dictionary<string, object> args, Action<object> resolve)
         {
             var componentTypes = CollectBatchEditComponentTypes(args);
+            bool refreshAssets = GetBool(args, "refreshAssets", true);
             if (GetBool(args, "waitForTypes", true) == false || componentTypes.Count == 0)
             {
-                resolve(BatchEdit(args));
+                if (refreshAssets)
+                {
+                    RefreshAssetsThen(args, resolve, () => BatchEdit(args));
+                }
+                else
+                {
+                    resolve(BatchEdit(args));
+                }
+
                 return;
             }
 
             int timeoutMs = Math.Max(1, GetInt(args, "typeResolveTimeoutMs", 30000));
             int stableMs = Math.Max(0, GetInt(args, "typeResolveStableMs", 500));
-            bool refreshAssets = GetBool(args, "refreshAssets", true);
             double startTime = EditorApplication.timeSinceStartup;
             double stableStartTime = -1;
             bool refreshRequested = false;
@@ -1561,7 +1569,7 @@ namespace UnityMCP.Editor
                     if (refreshAssets && refreshRequested == false)
                     {
                         refreshRequested = true;
-                        AssetDatabase.Refresh();
+                        RefreshAssetDatabase(args);
                     }
 
                     bool editorBusy = EditorApplication.isCompiling || EditorApplication.isUpdating;
@@ -1618,6 +1626,85 @@ namespace UnityMCP.Editor
         }
 
         // ─── Helpers ───
+
+        private static void RefreshAssetsThen(Dictionary<string, object> args, Action<object> resolve,
+            Func<object> action)
+        {
+            int timeoutMs = Math.Max(1, GetInt(args, "assetRefreshTimeoutMs", GetInt(args, "typeResolveTimeoutMs", 30000)));
+            int stableMs = Math.Max(0, GetInt(args, "assetRefreshStableMs", GetInt(args, "typeResolveStableMs", 500)));
+            double startTime = EditorApplication.timeSinceStartup;
+            double stableStartTime = -1;
+            bool refreshRequested = false;
+
+            EditorApplication.CallbackFunction tick = null;
+            Action<object> complete = result =>
+            {
+                if (tick != null)
+                    EditorApplication.update -= tick;
+                resolve(result);
+            };
+
+            tick = () =>
+            {
+                try
+                {
+                    if (refreshRequested == false)
+                    {
+                        refreshRequested = true;
+                        RefreshAssetDatabase(args);
+                    }
+
+                    bool editorBusy = EditorApplication.isCompiling || EditorApplication.isUpdating;
+                    if (editorBusy == false)
+                    {
+                        if (stableStartTime < 0)
+                            stableStartTime = EditorApplication.timeSinceStartup;
+
+                        double stableElapsedMs = (EditorApplication.timeSinceStartup - stableStartTime) * 1000d;
+                        if (stableElapsedMs >= stableMs)
+                        {
+                            complete(action());
+                            return;
+                        }
+                    }
+                    else
+                    {
+                        stableStartTime = -1;
+                    }
+
+                    double elapsedMs = (EditorApplication.timeSinceStartup - startTime) * 1000d;
+                    if (elapsedMs >= timeoutMs)
+                    {
+                        complete(new Dictionary<string, object>
+                        {
+                            { "error", $"Asset refresh did not finish after waiting {timeoutMs} ms" },
+                            { "assetRefresh", new Dictionary<string, object>
+                                {
+                                    { "elapsedMs", (int)elapsedMs },
+                                    { "timeoutMs", timeoutMs },
+                                    { "isCompiling", EditorApplication.isCompiling },
+                                    { "isUpdating", EditorApplication.isUpdating },
+                                }
+                            },
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    complete(new { error = $"Failed while waiting for asset refresh: {ex.Message}", stackTrace = ex.StackTrace });
+                }
+            };
+
+            EditorApplication.update += tick;
+            tick();
+        }
+
+        private static void RefreshAssetDatabase(Dictionary<string, object> args)
+        {
+            bool forceUpdate = GetBool(args, "forceAssetRefreshUpdate", GetBool(args, "forceUpdate", true));
+            var options = forceUpdate ? ImportAssetOptions.ForceUpdate : ImportAssetOptions.Default;
+            AssetDatabase.Refresh(options);
+        }
 
         private static GameObject FindInPrefab(GameObject root, string prefabPath)
         {

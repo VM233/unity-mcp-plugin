@@ -83,6 +83,51 @@ namespace UnityMCP.Editor
             return new { success = true, importedPath = dest };
         }
 
+        public static object Refresh(Dictionary<string, object> args)
+        {
+            bool forceUpdate = GetBool(args, "forceUpdate", true);
+            bool saveAssets = GetBool(args, "saveAssets", false);
+            var assetPaths = GetStringList(args, "assetPaths");
+
+            string singlePath = GetFirstString(args, "assetPath", "path");
+            if (!string.IsNullOrEmpty(singlePath))
+                assetPaths.Add(singlePath);
+
+            var options = forceUpdate ? ImportAssetOptions.ForceUpdate : ImportAssetOptions.Default;
+            var importedPaths = new List<string>();
+
+            if (assetPaths.Count > 0)
+            {
+                foreach (string rawPath in assetPaths)
+                {
+                    string path = NormalizeAssetPath(rawPath);
+                    if (string.IsNullOrEmpty(path))
+                        continue;
+
+                    AssetDatabase.ImportAsset(path, options);
+                    importedPaths.Add(path);
+                }
+            }
+            else
+            {
+                AssetDatabase.Refresh(options);
+            }
+
+            if (saveAssets)
+                AssetDatabase.SaveAssets();
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "forceUpdate", forceUpdate },
+                { "saveAssets", saveAssets },
+                { "importedPaths", importedPaths },
+                { "refreshedAllAssets", importedPaths.Count == 0 },
+                { "isUpdating", EditorApplication.isUpdating },
+                { "isCompiling", EditorApplication.isCompiling },
+            };
+        }
+
         public static object ExportUnityPackage(Dictionary<string, object> args)
         {
             var assetPaths = GetStringList(args, "assetPaths");

@@ -763,6 +763,8 @@ namespace UnityMCP.Editor
                     return MCPAssetCommands.List(ParseJson(body));
                 case "asset/import":
                     return MCPAssetCommands.Import(ParseJson(body));
+                case "asset/refresh":
+                    return MCPAssetCommands.Refresh(ParseJson(body));
                 case "asset/export-unitypackage":
                     return MCPAssetCommands.ExportUnityPackage(ParseJson(body));
                 case "asset/delete":
