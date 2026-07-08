@@ -666,6 +666,11 @@ namespace UnityMCP.Editor
                 return new { error = $"Category '{category}' is currently disabled. Enable it in Window > AB Unity MCP." };
             }
 
+            if (MCPProjectToolCommands.TryExecuteDirectRoute(path, ParseJson(body), out var projectToolResult))
+            {
+                return projectToolResult;
+            }
+
             switch (path)
             {
                 // ─── Ping ───

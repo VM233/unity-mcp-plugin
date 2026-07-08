@@ -97,7 +97,9 @@ using UnityMCP.Editor;
 
 public static class ProjectMcpTools
 {
-    [MCPProjectTool("battleidle/add-property", Description = "Create and register a BattleIdle property.")]
+    [MCPProjectTool("battleidle/add-property",
+        Description = "Create and register a BattleIdle property.",
+        InputSchemaJson = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}")]
     public static object AddProperty(Dictionary<string, object> args)
     {
         // Project-specific AssetDatabase / prefab / settings edits go here.
@@ -106,7 +108,25 @@ public static class ProjectMcpTools
 }
 ```
 
-Call `project-tools/list` to discover tools, then `project-tools/execute` with:
+Project tools are exposed in metadata as first-class concrete routes and tool names, using their declared schema:
+
+```json
+{
+  "route": "project-tools/call/battleidle/add-property",
+  "toolName": "unity_project_tool_battleidle_add_property",
+  "inputSchema": {
+    "type": "object",
+    "properties": {
+      "id": {
+        "type": "string"
+      }
+    },
+    "required": ["id"]
+  }
+}
+```
+
+Older clients can still call `project-tools/list` to discover tools and `project-tools/execute` with:
 
 ```json
 {
@@ -117,7 +137,7 @@ Call `project-tools/list` to discover tools, then `project-tools/execute` with:
 }
 ```
 
-If an MCP client has stale tool metadata, use `advanced/execute` with `route` set to a raw route such as `project-tools/execute`. The route runs through the same editor-side dispatcher and category checks as normal tools.
+If an MCP client has stale tool metadata, use the concrete direct route `project-tools/call/battleidle/add-property` first. Use `advanced/execute` only as a fallback for clients that cannot call newly exposed routes yet.
 
 ## Notes
 

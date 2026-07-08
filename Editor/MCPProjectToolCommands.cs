@@ -12,6 +12,8 @@ namespace UnityMCP.Editor
 
         public string Description { get; set; }
 
+        public string InputSchemaJson { get; set; }
+
         public MCPProjectToolAttribute(string toolName)
         {
             ToolName = toolName;
@@ -25,18 +27,72 @@ namespace UnityMCP.Editor
 
     public static class MCPProjectToolCommands
     {
+        public const string DirectRoutePrefix = "project-tools/call/";
+
         public static object List(Dictionary<string, object> args)
         {
-            var tools = DiscoverTools()
-                .OrderBy(tool => tool.ToolName, StringComparer.OrdinalIgnoreCase)
-                .Select(tool => tool.ToDictionary())
-                .ToList();
+            var tools = GetToolDictionaries(false);
 
             return new Dictionary<string, object>
             {
                 { "tools", tools },
                 { "totalTools", tools.Count }
             };
+        }
+
+        public static List<Dictionary<string, object>> GetToolDictionaries(bool validOnly)
+        {
+            return DiscoverTools()
+                .Where(tool => validOnly == false || string.IsNullOrEmpty(tool.ValidationError))
+                .OrderBy(tool => tool.ToolName, StringComparer.OrdinalIgnoreCase)
+                .Select(tool => tool.ToDictionary())
+                .ToList();
+        }
+
+        public static List<string> GetDirectRoutePaths()
+        {
+            return DiscoverTools()
+                .Where(tool => string.IsNullOrEmpty(tool.ValidationError))
+                .OrderBy(tool => tool.ToolName, StringComparer.OrdinalIgnoreCase)
+                .Select(tool => GetDirectRoute(tool.ToolName))
+                .ToList();
+        }
+
+        public static bool TryGetToolDictionaryForDirectRoute(string path, out Dictionary<string, object> tool)
+        {
+            tool = null;
+
+            if (TryGetToolNameFromDirectRoute(path, out var toolName) == false)
+                return false;
+
+            var descriptor = FindTool(toolName);
+            if (descriptor == null || string.IsNullOrEmpty(descriptor.ValidationError) == false)
+                return false;
+
+            tool = descriptor.ToDictionary();
+            return true;
+        }
+
+        public static bool TryExecuteDirectRoute(string path, Dictionary<string, object> args, out object result)
+        {
+            result = null;
+
+            if (TryGetToolNameFromDirectRoute(path, out var toolName) == false)
+                return false;
+
+            if (string.IsNullOrEmpty(toolName))
+            {
+                result = new { error = "Project tool route is missing a tool name." };
+                return true;
+            }
+
+            result = ExecuteTool(toolName, args ?? new Dictionary<string, object>());
+            return true;
+        }
+
+        public static string GetDirectRoute(string toolName)
+        {
+            return DirectRoutePrefix + (toolName ?? "").TrimStart('/');
         }
 
         public static object Execute(Dictionary<string, object> args)
@@ -48,6 +104,16 @@ namespace UnityMCP.Editor
             if (string.IsNullOrEmpty(toolName))
                 return new { error = "toolName is required" };
 
+            var toolArgs = GetDictionary(args, "args")
+                ?? GetDictionary(args, "arguments")
+                ?? GetDictionary(args, "parameters")
+                ?? new Dictionary<string, object>();
+
+            return ExecuteTool(toolName, toolArgs);
+        }
+
+        private static object ExecuteTool(string toolName, Dictionary<string, object> toolArgs)
+        {
             var matches = DiscoverTools()
                 .Where(tool => string.Equals(tool.ToolName, toolName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
@@ -74,11 +140,6 @@ namespace UnityMCP.Editor
             if (!string.IsNullOrEmpty(descriptor.ValidationError))
                 return new { error = descriptor.ValidationError, tool = descriptor.ToDictionary() };
 
-            var toolArgs = GetDictionary(args, "args")
-                ?? GetDictionary(args, "arguments")
-                ?? GetDictionary(args, "parameters")
-                ?? new Dictionary<string, object>();
-
             try
             {
                 object result = descriptor.Invoke(toolArgs);
@@ -98,6 +159,24 @@ namespace UnityMCP.Editor
             {
                 return new { error = ex.Message, stackTrace = ex.StackTrace, toolName = descriptor.ToolName };
             }
+        }
+
+        private static ProjectToolDescriptor FindTool(string toolName)
+        {
+            return DiscoverTools()
+                .FirstOrDefault(tool => string.Equals(tool.ToolName, toolName, StringComparison.OrdinalIgnoreCase));
+        }
+
+        private static bool TryGetToolNameFromDirectRoute(string path, out string toolName)
+        {
+            toolName = null;
+
+            if (string.IsNullOrEmpty(path) || path.StartsWith(DirectRoutePrefix, StringComparison.Ordinal) == false)
+                return false;
+
+            var encodedToolName = path.Substring(DirectRoutePrefix.Length);
+            toolName = Uri.UnescapeDataString(encodedToolName);
+            return true;
         }
 
         private static List<ProjectToolDescriptor> DiscoverTools()
@@ -168,6 +247,7 @@ namespace UnityMCP.Editor
             public string Description;
             public string Source;
             public string ValidationError;
+            public Dictionary<string, object> InputSchema;
 
             private MethodInfo method;
             private Type type;
@@ -183,6 +263,8 @@ namespace UnityMCP.Editor
                 };
 
                 descriptor.ValidationError = descriptor.ValidateMethod();
+                descriptor.ValidationError = CombineValidationErrors(descriptor.ValidationError,
+                    descriptor.TrySetInputSchema(attribute.InputSchemaJson));
                 return descriptor;
             }
 
@@ -197,6 +279,8 @@ namespace UnityMCP.Editor
                 };
 
                 descriptor.ValidationError = descriptor.ValidateType();
+                descriptor.ValidationError = CombineValidationErrors(descriptor.ValidationError,
+                    descriptor.TrySetInputSchema(attribute.InputSchemaJson));
                 return descriptor;
             }
 
@@ -224,9 +308,31 @@ namespace UnityMCP.Editor
                     { "toolName", ToolName },
                     { "description", Description },
                     { "source", Source },
+                    { "route", GetDirectRoute(ToolName) },
+                    { "inputSchema", InputSchema ?? CreateDefaultInputSchema() },
                     { "valid", string.IsNullOrEmpty(ValidationError) },
                     { "validationError", ValidationError ?? "" }
                 };
+            }
+
+            private string TrySetInputSchema(string inputSchemaJson)
+            {
+                if (string.IsNullOrEmpty(inputSchemaJson))
+                {
+                    InputSchema = CreateDefaultInputSchema();
+                    return null;
+                }
+
+                try
+                {
+                    InputSchema = MiniJson.Deserialize(inputSchemaJson) as Dictionary<string, object>;
+                    return InputSchema == null ? "InputSchemaJson must deserialize to a JSON object." : null;
+                }
+                catch (Exception ex)
+                {
+                    InputSchema = CreateDefaultInputSchema();
+                    return $"InputSchemaJson is invalid JSON: {ex.Message}";
+                }
             }
 
             private string ValidateMethod()
@@ -262,6 +368,27 @@ namespace UnityMCP.Editor
                     return $"Project tool type '{Source}' must have a public parameterless constructor.";
 
                 return null;
+            }
+
+            private static Dictionary<string, object> CreateDefaultInputSchema()
+            {
+                return new Dictionary<string, object>
+                {
+                    { "type", "object" },
+                    { "properties", new Dictionary<string, object>() },
+                    { "additionalProperties", true }
+                };
+            }
+
+            private static string CombineValidationErrors(string first, string second)
+            {
+                if (string.IsNullOrEmpty(first))
+                    return second;
+
+                if (string.IsNullOrEmpty(second))
+                    return first;
+
+                return first + " " + second;
             }
         }
     }

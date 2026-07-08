@@ -69,6 +69,7 @@ namespace UnityMCP.Editor
         {
             var routes = ExtractRouteCasesFromSource();
             routes.AddRange(MCPBridgeServer.DeferredRouteNames);
+            routes.AddRange(MCPProjectToolCommands.GetDirectRoutePaths());
             return routes
                 .Where(route => !string.IsNullOrEmpty(route))
                 .Distinct()
@@ -161,6 +162,9 @@ namespace UnityMCP.Editor
 
         private static Dictionary<string, object> BuildToolMetadata(string route)
         {
+            if (MCPProjectToolCommands.TryGetToolDictionaryForDirectRoute(route, out var projectTool))
+                return BuildProjectToolMetadata(route, projectTool);
+
             return new Dictionary<string, object>
             {
                 { "route", route },
@@ -171,9 +175,47 @@ namespace UnityMCP.Editor
             };
         }
 
+        private static Dictionary<string, object> BuildProjectToolMetadata(string route,
+            Dictionary<string, object> projectTool)
+        {
+            var projectToolName = projectTool.TryGetValue("toolName", out var name) ? name?.ToString() : "";
+            var description = projectTool.TryGetValue("description", out var desc) ? desc?.ToString() : "";
+            var inputSchema = projectTool.TryGetValue("inputSchema", out var schema)
+                ? schema
+                : new Dictionary<string, object>
+                {
+                    { "type", "object" },
+                    { "properties", new Dictionary<string, object>() },
+                    { "additionalProperties", true }
+                };
+
+            return new Dictionary<string, object>
+            {
+                { "route", route },
+                { "toolName", ProjectToolNameToToolName(projectToolName) },
+                { "category", "project-tools" },
+                { "description", string.IsNullOrEmpty(description) ? $"Project MCP tool: {projectToolName}" : description },
+                { "inputSchema", inputSchema },
+                { "projectToolName", projectToolName },
+                { "source", projectTool.TryGetValue("source", out var source) ? source : "" }
+            };
+        }
+
         private static string RouteToToolName(string route)
         {
             return "unity_" + route.Replace("/", "_").Replace("-", "_");
+        }
+
+        private static string ProjectToolNameToToolName(string projectToolName)
+        {
+            var normalized = Regex.Replace(projectToolName ?? "", "[^A-Za-z0-9]+", "_")
+                .Trim('_')
+                .ToLowerInvariant();
+
+            if (string.IsNullOrEmpty(normalized))
+                normalized = "tool";
+
+            return "unity_project_tool_" + normalized;
         }
 
         private static string GetToolDescription(string route)
