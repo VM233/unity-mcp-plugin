@@ -777,6 +777,36 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object LocateUIToolkitElement(Dictionary<string, object> args)
+        {
+            bool runtime = GetBool(args, "runtime", false);
+            var resolved = ResolveUIToolkitElement(args, runtime);
+            if (resolved.Error != null)
+                return new { error = resolved.Error };
+
+            float pixelScale = GetFloat(args, "pixelScale", EditorGUIUtility.pixelsPerPoint);
+            int padding = GetInt(args, "padding", 0);
+            Rect rect = resolved.Element.worldBound;
+            var cropRect = new RectInt(
+                Mathf.Max(0, Mathf.FloorToInt(rect.x * pixelScale) - padding),
+                Mathf.Max(0, Mathf.FloorToInt(rect.y * pixelScale) - padding),
+                Mathf.Max(1, Mathf.CeilToInt(rect.width * pixelScale) + padding * 2),
+                Mathf.Max(1, Mathf.CeilToInt(rect.height * pixelScale) + padding * 2));
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "runtime", runtime },
+                { "context", resolved.Context },
+                { "element", BuildElementInfo(resolved.Element, resolved.ElementPath, true) },
+                { "pixelScale", SafeFloat(pixelScale) },
+                { "padding", padding },
+                { "cropRect", RectToDictionary(new Rect(cropRect.x, cropRect.y, cropRect.width, cropRect.height)) },
+                { "panelRect", RectToDictionary(resolved.Root.worldBound) },
+                { "window", resolved.WindowName },
+            };
+        }
+
         public static object CaptureUIToolkitElement(Dictionary<string, object> args)
         {
             bool runtime = GetBool(args, "runtime", false);
@@ -884,6 +914,97 @@ namespace UnityMCP.Editor
                 { "elementCapture", crop },
                 { "error", cropSucceeded ? "" : "Element crop failed. See elementCapture for details." },
                 { "warning", runtime ? "Runtime UI Toolkit coordinates are panel coordinates; verify GameView scale if the crop is offset." : "" },
+            };
+        }
+
+        public static object CompareUIToolkitElement(Dictionary<string, object> args)
+        {
+            string referencePath = GetString(args, "referencePath");
+            if (string.IsNullOrEmpty(referencePath))
+                referencePath = GetString(args, "expectedPath");
+            if (string.IsNullOrEmpty(referencePath))
+                return new { error = "referencePath or expectedPath is required" };
+
+            string actualPath = GetString(args, "actualPath");
+            if (string.IsNullOrEmpty(actualPath))
+                actualPath = GetString(args, "outputPath");
+            if (string.IsNullOrEmpty(actualPath))
+                actualPath = $"Temp/MCP_UIToolkitCompare_{DateTime.Now:yyyyMMdd_HHmmss}.png";
+
+            var captureArgs = new Dictionary<string, object>(args)
+            {
+                ["outputPath"] = actualPath,
+            };
+            var capture = CaptureUIToolkitElement(captureArgs) as Dictionary<string, object>;
+            if (capture == null || GetBool(capture, "success", false) == false)
+                return capture ?? new Dictionary<string, object> { { "success", false }, { "error", "Element capture failed" } };
+
+            var compareArgs = new Dictionary<string, object>
+            {
+                { "referencePath", referencePath },
+                { "actualPath", actualPath },
+                { "tolerance", GetFloat(args, "tolerance", 0) },
+                { "maxSamples", GetInt(args, "maxSamples", 20) },
+            };
+
+            string diffOutputPath = GetString(args, "diffOutputPath");
+            if (string.IsNullOrEmpty(diffOutputPath) == false)
+                compareArgs["diffOutputPath"] = diffOutputPath;
+
+            if (args.TryGetValue("referenceRect", out object referenceRect))
+                compareArgs["referenceRect"] = referenceRect;
+            if (args.TryGetValue("expectedRect", out object expectedRect))
+                compareArgs["expectedRect"] = expectedRect;
+            if (args.TryGetValue("actualRect", out object actualRect))
+                compareArgs["actualRect"] = actualRect;
+
+            var comparison = MCPGraphicsCommands.CompareImages(compareArgs);
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "referencePath", referencePath },
+                { "actualPath", actualPath },
+                { "capture", capture },
+                { "comparison", comparison },
+            };
+        }
+
+        public static object InspectUIToolkitGeneratedChildren(Dictionary<string, object> args)
+        {
+            bool runtime = GetBool(args, "runtime", false);
+            var resolved = ResolveUIToolkitElement(args, runtime);
+            if (resolved.Error != null)
+                return new { error = resolved.Error };
+
+            int maxDepth = Math.Max(1, GetInt(args, "maxDepth", 4));
+            bool includeAll = GetBool(args, "includeAll", false);
+            var forbiddenClassContains = GetStringList(args, "forbiddenClassContains", "forbiddenClassContains")
+                .Where(value => string.IsNullOrEmpty(value) == false)
+                .ToList();
+            var forbiddenTypeContains = GetStringList(args, "forbiddenTypeContains", "forbiddenTypeContains")
+                .Where(value => string.IsNullOrEmpty(value) == false)
+                .ToList();
+
+            var children = new List<Dictionary<string, object>>();
+            CollectGeneratedChildren(resolved.Root, resolved.Element, resolved.ElementPath, 0, maxDepth,
+                includeAll, forbiddenClassContains, forbiddenTypeContains, children);
+
+            int generatedCount = children.Count(child => GetBool(child, "generated", false));
+            int warningCount = children.Count(child => ((List<string>)child["warnings"]).Count > 0);
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "valid", warningCount == 0 },
+                { "runtime", runtime },
+                { "context", resolved.Context },
+                { "element", BuildElementInfo(resolved.Element, resolved.ElementPath, true) },
+                { "maxDepth", maxDepth },
+                { "includeAll", includeAll },
+                { "childCount", children.Count },
+                { "generatedCount", generatedCount },
+                { "warningCount", warningCount },
+                { "children", children },
             };
         }
 
@@ -1308,6 +1429,75 @@ namespace UnityMCP.Editor
             };
         }
 
+        private sealed class ResolvedUIToolkitElement
+        {
+            public UnityEngine.UIElements.VisualElement Root;
+            public UnityEngine.UIElements.VisualElement Element;
+            public string ElementPath;
+            public string WindowName;
+            public Dictionary<string, object> Context;
+            public string Error;
+        }
+
+        private static ResolvedUIToolkitElement ResolveUIToolkitElement(Dictionary<string, object> args, bool runtime)
+        {
+            var resolved = new ResolvedUIToolkitElement();
+            if (runtime)
+            {
+                var document = FindRuntimeUIDocument(args, out string error);
+                if (document == null)
+                {
+                    resolved.Error = error;
+                    return resolved;
+                }
+
+                resolved.Root = document.rootVisualElement;
+                if (resolved.Root == null)
+                {
+                    resolved.Error = $"UIDocument '{document.name}' has no rootVisualElement";
+                    return resolved;
+                }
+
+                resolved.Element = FindRuntimeElement(args, document, out resolved.ElementPath, out error);
+                if (resolved.Element == null)
+                {
+                    resolved.Error = error;
+                    return resolved;
+                }
+
+                resolved.WindowName = GetString(args, "window");
+                if (string.IsNullOrEmpty(resolved.WindowName))
+                    resolved.WindowName = "Game";
+                resolved.Context = BuildUIDocumentInfo(document);
+                return resolved;
+            }
+
+            var window = FindEditorWindow(args, out string editorError);
+            if (window == null)
+            {
+                resolved.Error = editorError;
+                return resolved;
+            }
+
+            resolved.Root = window.rootVisualElement;
+            if (resolved.Root == null)
+            {
+                resolved.Error = $"EditorWindow '{window.GetType().FullName}' has no rootVisualElement";
+                return resolved;
+            }
+
+            resolved.Element = FindEditorElement(resolved.Root, args, out resolved.ElementPath, out editorError);
+            if (resolved.Element == null)
+            {
+                resolved.Error = editorError;
+                return resolved;
+            }
+
+            resolved.WindowName = window.GetType().FullName;
+            resolved.Context = BuildWindowInfo(window);
+            return resolved;
+        }
+
         private static UnityEngine.UIElements.VisualElement FindEditorElement(
             UnityEngine.UIElements.VisualElement root, Dictionary<string, object> args,
             out string elementPath, out string error)
@@ -1463,6 +1653,139 @@ namespace UnityMCP.Editor
             }
 
             return warnings;
+        }
+
+        private static void CollectGeneratedChildren(
+            UnityEngine.UIElements.VisualElement root,
+            UnityEngine.UIElements.VisualElement element,
+            string elementPath,
+            int depth,
+            int maxDepth,
+            bool includeAll,
+            List<string> forbiddenClassContains,
+            List<string> forbiddenTypeContains,
+            List<Dictionary<string, object>> results)
+        {
+            if (element == null || depth >= maxDepth)
+                return;
+
+            int childIndex = 0;
+            foreach (var child in element.Children())
+            {
+                string childPath = $"{elementPath}/{childIndex}";
+                var generatedReasons = GetGeneratedChildReasons(child);
+                var warnings = GetGeneratedChildWarnings(child, forbiddenClassContains, forbiddenTypeContains);
+                bool generated = generatedReasons.Count > 0;
+
+                if (includeAll || generated || warnings.Count > 0)
+                {
+                    var info = BuildElementInfo(child, childPath, true);
+                    info["depth"] = depth + 1;
+                    info["generated"] = generated;
+                    info["generatedReasons"] = generatedReasons;
+                    info["warnings"] = warnings;
+                    info["resources"] = CollectElementResources(root, child, childPath, 1);
+                    results.Add(info);
+                }
+
+                CollectGeneratedChildren(root, child, childPath, depth + 1, maxDepth, includeAll,
+                    forbiddenClassContains, forbiddenTypeContains, results);
+                childIndex++;
+            }
+        }
+
+        private static List<string> GetGeneratedChildReasons(UnityEngine.UIElements.VisualElement element)
+        {
+            var reasons = new List<string>();
+            var classes = element.GetClasses().ToList();
+            string typeName = element.GetType().Name;
+            string fullTypeName = element.GetType().FullName ?? "";
+
+            if (string.IsNullOrEmpty(element.name) && classes.Any(className =>
+                    className.StartsWith("unity-", StringComparison.OrdinalIgnoreCase)))
+            {
+                reasons.Add("unnamed-unity-class");
+            }
+
+            if (classes.Any(className => className.Contains("__")))
+                reasons.Add("unity-subpart-class");
+
+            if (fullTypeName.StartsWith("UnityEngine.UIElements.", StringComparison.Ordinal) &&
+                IsKnownGeneratedUIToolkitType(typeName))
+            {
+                reasons.Add("known-generated-type");
+            }
+
+            if (classes.Any(IsKnownGeneratedIndicatorClass))
+                reasons.Add("known-generated-indicator-class");
+
+            return reasons.Distinct().ToList();
+        }
+
+        private static List<string> GetGeneratedChildWarnings(UnityEngine.UIElements.VisualElement element,
+            List<string> forbiddenClassContains, List<string> forbiddenTypeContains)
+        {
+            var warnings = new List<string>();
+            var classes = element.GetClasses().ToList();
+            string typeName = element.GetType().Name;
+            string fullTypeName = element.GetType().FullName ?? "";
+
+            foreach (string forbidden in forbiddenClassContains)
+            {
+                if (classes.Any(className => className.IndexOf(forbidden, StringComparison.OrdinalIgnoreCase) >= 0))
+                    warnings.Add($"Class contains forbidden text '{forbidden}'");
+            }
+
+            foreach (string forbidden in forbiddenTypeContains)
+            {
+                if (typeName.IndexOf(forbidden, StringComparison.OrdinalIgnoreCase) >= 0 ||
+                    fullTypeName.IndexOf(forbidden, StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    warnings.Add($"Type contains forbidden text '{forbidden}'");
+                }
+            }
+
+            return warnings;
+        }
+
+        private static bool IsKnownGeneratedUIToolkitType(string typeName)
+        {
+            if (string.IsNullOrEmpty(typeName))
+                return false;
+
+            string[] fragments =
+            {
+                "Scroller",
+                "Slider",
+                "Tab",
+                "Toggle",
+                "Dropdown",
+                "Popup",
+                "Foldout",
+                "ScrollView",
+            };
+
+            return fragments.Any(fragment => typeName.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private static bool IsKnownGeneratedIndicatorClass(string className)
+        {
+            if (string.IsNullOrEmpty(className))
+                return false;
+
+            string[] fragments =
+            {
+                "arrow",
+                "checkmark",
+                "input",
+                "dragger",
+                "low-button",
+                "high-button",
+                "unity-scroller",
+                "unity-tab",
+            };
+
+            return fragments.Any(fragment => className.IndexOf(fragment, StringComparison.OrdinalIgnoreCase) >= 0);
         }
 
         private static Dictionary<string, object> BuildUIDocumentInfo(UnityEngine.UIElements.UIDocument document)
@@ -3170,6 +3493,9 @@ namespace UnityMCP.Editor
                     if (item != null)
                         results.Add(item.ToString());
                 }
+
+                if (string.Equals(arrayKey, singleKey, StringComparison.Ordinal))
+                    return results;
             }
 
             string singleValue = GetString(args, singleKey);

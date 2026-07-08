@@ -481,6 +481,41 @@ namespace UnityMCP.Editor
             };
         }
 
+        public static object CheckUIImportSettings(Dictionary<string, object> args)
+        {
+            var checkArgs = new Dictionary<string, object>(args)
+            {
+                ["preset"] = string.IsNullOrEmpty(GetString(args, "preset"))
+                    ? "pixel-sprite"
+                    : GetString(args, "preset"),
+                ["requirePixelSprite"] = true,
+            };
+
+            var checkResult = CheckImportSettings(checkArgs) as Dictionary<string, object>;
+            if (checkResult == null || checkResult.ContainsKey("error"))
+                return checkResult ?? new Dictionary<string, object> { { "error", "UI import settings check failed" } };
+
+            bool includeMatching = GetBool(args, "includeMatching", false);
+            if (checkResult.TryGetValue("results", out object rawResults) &&
+                rawResults is List<Dictionary<string, object>> results)
+            {
+                foreach (var result in results)
+                    AddUIImportComparisons(result, args, includeMatching);
+
+                checkResult["valid"] = results.All(result => GetBool(result, "valid", false));
+            }
+
+            checkResult["uiPreset"] = "pixel-sprite";
+            checkResult["checks"] = new List<string>
+            {
+                "TextureImporter pixel sprite settings",
+                "Optional expectedWidth/expectedHeight",
+                "Optional expectedBorder/border/spriteBorder",
+                "Optional maxTextureSize",
+            };
+            return checkResult;
+        }
+
         private static void ApplyImporterOverrides(TextureImporter importer, Dictionary<string, object> args,
             List<string> updated)
         {
@@ -628,6 +663,81 @@ namespace UnityMCP.Editor
                 { "width", texture == null ? 0 : texture.width },
                 { "height", texture == null ? 0 : texture.height },
             };
+        }
+
+        private static void AddUIImportComparisons(Dictionary<string, object> result,
+            Dictionary<string, object> args, bool includeMatching)
+        {
+            var comparisons = result.TryGetValue("comparisons", out object rawComparisons) &&
+                              rawComparisons is List<Dictionary<string, object>> list
+                ? list
+                : new List<Dictionary<string, object>>();
+            result["comparisons"] = comparisons;
+
+            string path = result.TryGetValue("assetPath", out object assetPathObject)
+                ? assetPathObject?.ToString() ?? ""
+                : "";
+            var importer = string.IsNullOrEmpty(path) ? null : AssetImporter.GetAtPath(path) as TextureImporter;
+
+            if (args.ContainsKey("expectedWidth") && result.ContainsKey("textureWidth"))
+                AddConditionalIntComparison(comparisons, "textureWidth", GetInt(args, "expectedWidth", 0),
+                    Convert.ToInt32(result["textureWidth"]), includeMatching);
+            if (args.ContainsKey("expectedHeight") && result.ContainsKey("textureHeight"))
+                AddConditionalIntComparison(comparisons, "textureHeight", GetInt(args, "expectedHeight", 0),
+                    Convert.ToInt32(result["textureHeight"]), includeMatching);
+            if (args.ContainsKey("maxTextureSize") && importer != null)
+                AddConditionalIntComparison(comparisons, "maxTextureSize", GetInt(args, "maxTextureSize", 0),
+                    importer.maxTextureSize, includeMatching);
+
+            if (importer != null &&
+                (TryGetVector4(args, "expectedBorder", out Vector4 expectedBorder) ||
+                 TryGetVector4(args, "spriteBorder", out expectedBorder) ||
+                 TryGetVector4(args, "border", out expectedBorder)))
+            {
+                AddConditionalVector4Comparison(comparisons, "spriteBorder", expectedBorder,
+                    importer.spriteBorder, GetFloat(args, "tolerance", 0.001f), includeMatching);
+            }
+
+            var mismatches = comparisons.Where(comparison => GetBool(comparison, "matches", false) == false).ToList();
+            result["comparisonCount"] = comparisons.Count;
+            result["mismatchCount"] = mismatches.Count;
+            result["valid"] = mismatches.Count == 0;
+        }
+
+        private static void AddConditionalIntComparison(List<Dictionary<string, object>> comparisons,
+            string name, int expected, int actual, bool includeMatching)
+        {
+            bool matches = expected == actual;
+            if (!includeMatching && matches)
+                return;
+
+            comparisons.Add(new Dictionary<string, object>
+            {
+                { "name", name },
+                { "matches", matches },
+                { "expected", expected },
+                { "actual", actual },
+            });
+        }
+
+        private static void AddConditionalVector4Comparison(List<Dictionary<string, object>> comparisons,
+            string name, Vector4 expected, Vector4 actual, float tolerance, bool includeMatching)
+        {
+            bool matches = Math.Abs(expected.x - actual.x) <= tolerance &&
+                           Math.Abs(expected.y - actual.y) <= tolerance &&
+                           Math.Abs(expected.z - actual.z) <= tolerance &&
+                           Math.Abs(expected.w - actual.w) <= tolerance;
+            if (!includeMatching && matches)
+                return;
+
+            comparisons.Add(new Dictionary<string, object>
+            {
+                { "name", name },
+                { "matches", matches },
+                { "expected", Vector4ToDictionary(expected) },
+                { "actual", Vector4ToDictionary(actual) },
+                { "tolerance", tolerance },
+            });
         }
 
         private static Dictionary<string, object> BuildImportCheckResult(string path, TextureImporter importer,

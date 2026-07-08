@@ -62,7 +62,10 @@ http://127.0.0.1:7890/api/ping
 | UI Toolkit runtime | `unity_uitoolkit_refresh` | `uitoolkit/refresh` | Refresh UI Toolkit assets and repaint runtime and editor panels. |
 | UI Toolkit runtime | `unity_uitoolkit_wait_refresh` | `uitoolkit/wait-refresh` | Refresh UI Toolkit assets, repaint panels, and wait for stable editor frames. |
 | UI Toolkit runtime | `unity_uitoolkit_assert_layout` | `uitoolkit/assert-layout` | Assert runtime layout constraints such as no-gap/no-overlap edge touching, edge alignment, center alignment, containment, and expected size. |
+| UI Toolkit visual QA | `unity_uitoolkit_locate_element` | `uitoolkit/locate-element` | Locate an Editor or runtime UI Toolkit element and return bounds, crop rect, and context for later screenshots or pixel checks. |
 | UI Toolkit visual QA | `unity_uitoolkit_capture_element` | `uitoolkit/capture-element` | Capture a UI Toolkit element by locating it in an Editor window or runtime UIDocument and cropping its containing window screenshot. |
+| UI Toolkit visual QA | `unity_uitoolkit_compare_element` | `uitoolkit/compare-element` | Capture a UI Toolkit element and compare the crop with a reference image, optionally writing a diff image. |
+| UI Toolkit visual QA | `unity_uitoolkit_generated_children` | `uitoolkit/generated-children` | Inspect generated UI Toolkit children such as arrows, checkmarks, scrollers, TabView internals, and unnamed `unity-*` subparts. |
 | UI Toolkit visual QA | `unity_uitoolkit_resource_audit` | `uitoolkit/resource-audit` | Audit target elements and descendants for resolved background assets, highlighted-state misuse, and missing or forbidden assets. |
 | UI Builder | `unity_uitoolkit_builder_preview` | `uitoolkit/builder-preview` | Open a UXML asset in UI Builder, wait for the preview to settle, and optionally capture the UI Builder window. |
 | Screenshot utilities | `unity_screenshot_crop` | `screenshot/crop` | Crop a screenshot or image file to a PNG for focused visual inspection. |
@@ -77,6 +80,7 @@ http://127.0.0.1:7890/api/ping
 | Sprite pipeline | `unity_sprite_replace_slice_update_clip` | `sprite/replace-slice-update-clip` | Replace a sheet, slice it, and update an AnimationClip in one call. |
 | Texture pipeline | `unity_texture_apply_sprite_preset` | `texture/apply-sprite-preset` | Apply high-level TextureImporter/Sprite settings, including pixel sprite preset, PPU, pivot, border, and reference settings. |
 | Texture pipeline | `unity_texture_import_image` | `texture/import-image` | Import an image from a URL or local file into Assets, dedupe by hash, and apply sprite import settings. |
+| Texture pipeline | `unity_texture_check_ui_import_settings` | `texture/check-ui-import-settings` | Check UI pixel-art image import settings, including pixel sprite defaults plus optional expected dimensions, border, and max texture size. |
 | Build testing | `unity_build_run_test` | `build/run-test` | Overwrite/build a player, launch it, sample Player.log, optionally capture its window, and terminate it. |
 | Package management | `unity_packages_update_git` | `packages/update-git` | Update a Git package through a deferred route; same-commit updates skip Unity Package Manager resolve by default. |
 | Project extensions | `unity_project_tools_list` | `project-tools/list` | List project-defined extension tools from loaded Unity editor assemblies. |
@@ -121,6 +125,7 @@ If an MCP client has stale tool metadata, use `advanced/execute` with `route` se
 - `unity_wait_editor_idle` waits for both consecutive idle editor frames and a continuous idle time window (`stableMs`, default `500`) to avoid returning before a delayed compile or asset import starts.
 - `mcp/health` is intended for diagnosing editor slowdown caused by MCP usage. It does not stop the bridge; use `mcp/set-autostart` to prevent the bridge from coming back automatically after reload.
 - `texture/import-image` is the preferred route for Figma/exported UI images: pass `sourceUrl` or `sourcePath`, `targetPath` or `targetFolder` + `assetName`, then use `preset=pixel-sprite` and `border` when needed.
+- For UI visual QA, use `uitoolkit/locate-element` first to confirm the measured semantic target, then `uitoolkit/capture-element` or `uitoolkit/compare-element` for local crops. Use `uitoolkit/generated-children` when controls such as `TabView`, `DropdownField`, `Scroller`, or `ToggleButtonGroup` may be drawing default child indicators.
 - Prefab asset mutation tools return `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it, adjust `prefabFileDiffMaxLines`, or use `prefabFileDiffMode=summary/minimal` plus ignore filters to reduce unrelated YAML noise.
 - `uitoolkit/builder-preview` opens and screenshots UI Builder. Unity does not expose a stable public UI Builder zoom API, so the route records requested zoom values but does not use reflection to force the viewport zoom.
 - `build/run-test` is a high-level test loop for local player builds. Keep `overwrite=true` for repeat tests so output folders do not accumulate.

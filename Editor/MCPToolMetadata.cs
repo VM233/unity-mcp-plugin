@@ -276,8 +276,14 @@ namespace UnityMCP.Editor
                     return "Diagnose runtime UI Toolkit elements with VisualElementPath lookup, style, parent/children, background, and pixel-grid data.";
                 case "uitoolkit/visual-check":
                     return "Run runtime UI Toolkit visual checks such as pixel-grid, background scale, and expected size.";
+                case "uitoolkit/locate-element":
+                    return "Locate an Editor or runtime UI Toolkit element and return its VisualElementPath, world bounds, crop rect, and context.";
                 case "uitoolkit/capture-element":
                     return "Capture an Editor or runtime UI Toolkit element by taking its containing window screenshot and cropping to the element bounds.";
+                case "uitoolkit/compare-element":
+                    return "Capture a UI Toolkit element and compare the cropped image against a reference image.";
+                case "uitoolkit/generated-children":
+                    return "Inspect generated UI Toolkit child elements such as arrows, checkmarks, scrollers, TabView internals, and unnamed unity-* subparts.";
                 case "uitoolkit/resource-audit":
                     return "Audit UI Toolkit elements for resolved background assets, generated child visuals, highlighted-state misuse, and scale metadata.";
                 case "uitoolkit/runtime-repaint":
@@ -326,6 +332,8 @@ namespace UnityMCP.Editor
                     return "Import an external image from a URL or local path into Assets, optionally dedupe, then apply sprite import settings.";
                 case "texture/check-import-settings":
                     return "Check TextureImporter settings against a reference texture or a pixel-sprite preset without modifying assets.";
+                case "texture/check-ui-import-settings":
+                    return "Check UI pixel-art image import settings, including pixel sprite defaults plus optional expected dimensions, border, and max texture size.";
                 case "build/run-test":
                     return "Build the player, launch the built executable, sample Player.log, optionally capture its window, and terminate it.";
                 case "animation/set-object-reference-curve":
@@ -765,6 +773,21 @@ namespace UnityMCP.Editor
                         Prop("height", "number", "Expected element height for size checks."),
                         Prop("tolerance", "number", "Allowed pixel delta. Defaults to 0.01.")
                     ));
+                case "uitoolkit/locate-element":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("runtime", "boolean", "Locate a runtime UIDocument element when true; otherwise locate an EditorWindow UI Toolkit element. Defaults to false."),
+                        Prop("window", "string", "EditorWindow type/title. Runtime defaults to Game when capture uses it later."),
+                        Prop("path", "string", "Element tree path, e.g. root/0/1."),
+                        Prop("treePath", "string", "Alias for path."),
+                        Prop("visualElementPath", "string", "Slash-separated VisualElementPath names."),
+                        Prop("visualElementNames", "array", "VisualElementPath names array."),
+                        Prop("name", "string", "VisualElement.name exact match if path is omitted."),
+                        Prop("className", "string", "USS class name exact match if path is omitted."),
+                        Prop("typeName", "string", "VisualElement type name contains match if path is omitted."),
+                        Prop("text", "string", "TextElement text contains match if path is omitted."),
+                        Prop("pixelScale", "number", "Scale from UI points to captured pixels. Defaults to EditorGUIUtility.pixelsPerPoint."),
+                        Prop("padding", "number", "Extra crop padding in pixels. Defaults to 0.")
+                    ));
                 case "uitoolkit/capture-element":
                     return RuntimeUIDocumentSchema(Props(
                         Prop("runtime", "boolean", "Capture a runtime UIDocument element when true; otherwise capture an EditorWindow UI Toolkit element. Defaults to false."),
@@ -781,6 +804,38 @@ namespace UnityMCP.Editor
                         Prop("windowOutputPath", "string", "Output PNG path for the full containing window screenshot."),
                         Prop("pixelScale", "number", "Scale from UI points to captured pixels. Defaults to EditorGUIUtility.pixelsPerPoint."),
                         Prop("padding", "number", "Extra crop padding in pixels. Defaults to 0.")
+                    ));
+                case "uitoolkit/compare-element":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("runtime", "boolean", "Capture a runtime UIDocument element when true; otherwise capture an EditorWindow UI Toolkit element. Defaults to false."),
+                        Prop("window", "string", "EditorWindow type/title to capture. Runtime defaults to Game."),
+                        Prop("path", "string", "Element tree path, e.g. root/0/1."),
+                        Prop("visualElementPath", "string", "Slash-separated VisualElementPath names."),
+                        Prop("name", "string", "VisualElement.name exact match if path is omitted."),
+                        Prop("className", "string", "USS class name exact match if path is omitted."),
+                        Prop("typeName", "string", "VisualElement type name contains match if path is omitted."),
+                        Prop("referencePath", "string", "Reference PNG path. Alias: expectedPath."),
+                        Prop("expectedPath", "string", "Alias for referencePath."),
+                        Prop("actualPath", "string", "Output path for captured current element PNG."),
+                        Prop("diffOutputPath", "string", "Optional output path for diff PNG."),
+                        Prop("referenceRect", "object", "Optional comparison rect in reference image."),
+                        Prop("actualRect", "object", "Optional comparison rect in captured image."),
+                        Prop("tolerance", "number", "Allowed per-channel pixel delta. Defaults to 0."),
+                        Prop("padding", "number", "Extra capture padding in pixels. Defaults to 0.")
+                    ));
+                case "uitoolkit/generated-children":
+                    return RuntimeUIDocumentSchema(Props(
+                        Prop("runtime", "boolean", "Inspect a runtime UIDocument element when true; otherwise inspect an EditorWindow UI Toolkit element. Defaults to false."),
+                        Prop("window", "string", "EditorWindow type/title for editor inspection."),
+                        Prop("path", "string", "Element tree path, e.g. root/0/1."),
+                        Prop("visualElementPath", "string", "Slash-separated VisualElementPath names."),
+                        Prop("name", "string", "VisualElement.name exact match if path is omitted."),
+                        Prop("className", "string", "USS class name exact match if path is omitted."),
+                        Prop("typeName", "string", "VisualElement type name contains match if path is omitted."),
+                        Prop("maxDepth", "number", "Descendant depth to inspect. Defaults to 4."),
+                        Prop("includeAll", "boolean", "Return all descendants, not only generated-looking children. Defaults to false."),
+                        Prop("forbiddenClassContains", "array", "Class substrings that should produce warnings when found."),
+                        Prop("forbiddenTypeContains", "array", "Type-name substrings that should produce warnings when found.")
                     ));
                 case "uitoolkit/resource-audit":
                     return RuntimeUIDocumentSchema(Props(
@@ -992,6 +1047,21 @@ namespace UnityMCP.Editor
                         Prop("preset", "string", "Optional high-level preset to check. Supported: pixel-sprite."),
                         Prop("requirePixelSprite", "boolean", "Shortcut for preset=pixel-sprite. Defaults to true when referencePath is omitted."),
                         Prop("includeMatching", "boolean", "Include passing comparisons in the returned comparisons list. Defaults to false.")
+                    ));
+                case "texture/check-ui-import-settings":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Texture asset path to check."),
+                        Prop("assetPaths", "array", "Texture asset paths to check."),
+                        Prop("folderPath", "string", "Folder to scan recursively for Texture2D assets."),
+                        Prop("referencePath", "string", "Optional texture asset whose importer settings are treated as expected."),
+                        Prop("includeMatching", "boolean", "Include passing comparisons in the returned comparisons list. Defaults to false."),
+                        Prop("expectedWidth", "number", "Optional exact texture width check."),
+                        Prop("expectedHeight", "number", "Optional exact texture height check."),
+                        Prop("expectedBorder", "object", "Optional sprite border check. Accepts object with left/bottom/right/top or x/y/z/w."),
+                        Prop("border", "object", "Alias for expectedBorder."),
+                        Prop("spriteBorder", "object", "Alias for expectedBorder."),
+                        Prop("maxTextureSize", "number", "Optional exact TextureImporter maxTextureSize check."),
+                        Prop("tolerance", "number", "Float tolerance for border/PPU checks. Defaults to 0.001.")
                     ));
                 case "build/run-test":
                     return Schema(Props(

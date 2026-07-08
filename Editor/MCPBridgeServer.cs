@@ -1399,6 +1399,8 @@ namespace UnityMCP.Editor
                     return MCPTextureCommands.ImportImage(ParseJson(body));
                 case "texture/check-import-settings":
                     return MCPTextureCommands.CheckImportSettings(ParseJson(body));
+                case "texture/check-ui-import-settings":
+                    return MCPTextureCommands.CheckUIImportSettings(ParseJson(body));
 
                 // ─── Sprite Atlas ───
                 case "spriteatlas/create":
@@ -1465,8 +1467,14 @@ namespace UnityMCP.Editor
                     return MCPUICommands.DiagnoseRuntimeUI(ParseJson(body));
                 case "uitoolkit/visual-check":
                     return MCPUICommands.VisualCheckRuntimeUI(ParseJson(body));
+                case "uitoolkit/locate-element":
+                    return MCPUICommands.LocateUIToolkitElement(ParseJson(body));
                 case "uitoolkit/capture-element":
                     return MCPUICommands.CaptureUIToolkitElement(ParseJson(body));
+                case "uitoolkit/compare-element":
+                    return MCPUICommands.CompareUIToolkitElement(ParseJson(body));
+                case "uitoolkit/generated-children":
+                    return MCPUICommands.InspectUIToolkitGeneratedChildren(ParseJson(body));
                 case "uitoolkit/resource-audit":
                     return MCPUICommands.AuditUIToolkitResources(ParseJson(body));
                 case "uitoolkit/runtime-repaint":
