@@ -601,12 +601,17 @@ namespace UnityMCP.Editor
             if (main == IntPtr.Zero) return Err("Could not resolve the main editor window handle.");
 
             bool floating = IsFloating(win);
+            bool restoreFocus = false;
             EditorWindow prevFocus = EditorWindow.focusedWindow;
             try
             {
                 // Only the docked path needs the tab activated; a floating window is captured by
                 // its own HWND, so it is never raised/focused (keeps the occlusion-proof promise).
-                if (!floating) win.Focus();
+                if (!floating)
+                {
+                    win.Focus();
+                    restoreFocus = true;
+                }
                 win.Repaint();
                 RepaintImmediately(win);
 
@@ -615,9 +620,25 @@ namespace UnityMCP.Editor
                 {
                     hwnd = FindHwndByTitleExact(win, pid, main, out int n);
                     if (hwnd == IntPtr.Zero)
-                        return Err(n > 1 ? "Ambiguous floating-window HWND (" + n + " matches)."
-                                         : "Floating-window HWND not found (minimized or on another virtual desktop?).");
-                    whole = true;
+                    {
+                        if (n > 1)
+                            return Err("Ambiguous floating-window HWND (" + n + " matches).");
+
+                        win.Focus();
+                        restoreFocus = true;
+                        floating = false;
+                        hwnd = main;
+                        whole = false;
+                        float ppp = EditorGUIUtility.pixelsPerPoint;
+                        var rp = win.position;
+                        px = (int)Math.Round(rp.x * ppp); py = (int)Math.Round(rp.y * ppp);
+                        pw = (int)Math.Round(rp.width * ppp); ph = (int)Math.Round(rp.height * ppp);
+                        if (pw <= 0 || ph <= 0) return Err("Bad panel rect " + pw + "x" + ph);
+                    }
+                    else
+                    {
+                        whole = true;
+                    }
                 }
                 else
                 {
@@ -634,7 +655,7 @@ namespace UnityMCP.Editor
             finally
             {
                 // Restore the user's previously-focused tab (only the docked path changed it).
-                if (!floating && prevFocus != null && prevFocus != win)
+                if (restoreFocus && prevFocus != null && prevFocus != win)
                     try { prevFocus.Focus(); } catch { }
             }
 #else
