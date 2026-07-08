@@ -666,11 +666,22 @@ namespace UnityMCP.Editor
             if (winW <= 0 || winH <= 0) return Err("Bad window rect " + winW + "x" + winH);
 
             int cropX, cropY, cropW, cropH;
+            string cropWarning = "";
             if (wholeWindow) { cropX = 0; cropY = 0; cropW = winW; cropH = winH; }
             else
             {
                 cropX = panelX - wr.left; cropY = panelY - wr.top;
-                if (cropX < 0 || cropY < 0) return Err("Panel offscreen (crop " + cropX + "," + cropY + "); DPI / multi-monitor mismatch?");
+                if (cropX < 0 || cropY < 0 || cropX >= winW || cropY >= winH)
+                {
+                    int localCropX = panelX;
+                    int localCropY = panelY;
+                    if (localCropX < 0 || localCropY < 0 || localCropX >= winW || localCropY >= winH)
+                        return Err("Panel offscreen (crop " + cropX + "," + cropY + ", local " + localCropX + "," + localCropY + "); DPI / multi-monitor mismatch?");
+
+                    cropWarning = "Used local EditorWindow coordinates because OS-relative crop was outside the captured window.";
+                    cropX = localCropX;
+                    cropY = localCropY;
+                }
                 cropW = panelW; cropH = panelH;
                 if (cropX + cropW > winW) cropW = winW - cropX;
                 if (cropY + cropH > winH) cropH = winH - cropY;
@@ -748,6 +759,7 @@ namespace UnityMCP.Editor
                     { "sizeBytes", png.Length },
                     { "window", win.GetType().FullName },
                     { "floating", floating },
+                    { "warning", cropWarning },
                 };
             }
             finally
