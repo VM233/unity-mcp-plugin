@@ -12,7 +12,6 @@ namespace UnityMCP.Editor
     {
         private static readonly HashSet<string> FirstClassRoutes = new HashSet<string>(StringComparer.Ordinal)
         {
-            "advanced/execute",
             "packages/update-git",
             "mcp/health",
             "mcp/set-autostart",
@@ -21,14 +20,28 @@ namespace UnityMCP.Editor
             "instance/list",
             "instance/resolve",
             "instance/assert-project",
+            "scene/instantiate-prefab",
+            "serialized-object/get",
+            "serialized-object/set",
             "prefab-asset/add-component",
+            "prefab-asset/add-gameobject",
             "prefab-asset/batch-edit",
+            "prefab-asset/get-properties",
+            "prefab-asset/hierarchy",
+            "prefab-asset/instantiate-child-prefab",
             "prefab-asset/instantiate-prefab",
             "prefab-asset/move-gameobject",
             "prefab-asset/find",
+            "prefab-asset/remove-component",
+            "prefab-asset/remove-gameobject",
+            "prefab-asset/set-property",
+            "prefab-asset/set-reference",
+            "prefab-asset/transaction-edit",
             "asset/refresh",
             "asset/rename",
             "asset/move",
+            "asset/export-unitypackage",
+            "compilation/errors",
             "console/query",
             "animation/transition-info",
             "animation/update-state",
@@ -103,6 +116,10 @@ namespace UnityMCP.Editor
         {
             var routes = GetRegisteredRouteList();
             var tools = routes.Select(BuildToolMetadata).ToList();
+            var firstClassTools = tools.Where(IsFirstClassTool).ToList();
+            var fallbackTools = tools.Where(tool =>
+                string.Equals(tool.TryGetValue("exposure", out var exposure) ? exposure?.ToString() : "",
+                    "fallback", StringComparison.Ordinal)).ToList();
 
             var grouped = new Dictionary<string, List<string>>();
             foreach (var tool in tools)
@@ -117,9 +134,16 @@ namespace UnityMCP.Editor
             {
                 { "routes", routes },
                 { "tools", tools },
+                { "firstClassTools", firstClassTools },
+                { "fallbackTools", fallbackTools },
                 { "categories", grouped },
                 { "totalTools", tools.Count }
             };
+        }
+
+        private static bool IsFirstClassTool(Dictionary<string, object> tool)
+        {
+            return tool.TryGetValue("firstClass", out var value) && value is bool boolValue && boolValue;
         }
 
         private static List<string> GetRegisteredRouteList()
@@ -230,6 +254,8 @@ namespace UnityMCP.Editor
                 { "description", GetToolDescription(route) },
                 { "inputSchema", GetToolInputSchema(route) },
                 { "firstClass", IsFirstClassRoute(route) },
+                { "exposure", GetToolExposure(route) },
+                { "preferred", IsFirstClassRoute(route) },
             };
         }
 
@@ -256,6 +282,8 @@ namespace UnityMCP.Editor
                 { "inputSchema", inputSchema },
                 { "projectToolName", projectToolName },
                 { "firstClass", true },
+                { "exposure", "first-class" },
+                { "preferred", true },
                 { "source", projectTool.TryGetValue("source", out var source) ? source : "" }
             };
         }
@@ -263,6 +291,17 @@ namespace UnityMCP.Editor
         private static bool IsFirstClassRoute(string route)
         {
             return FirstClassRoutes.Contains(route);
+        }
+
+        private static string GetToolExposure(string route)
+        {
+            if (IsFirstClassRoute(route))
+                return "first-class";
+
+            if (route == "advanced/execute" || route == "project-tools/execute")
+                return "fallback";
+
+            return "lazy";
         }
 
         private static string RouteToToolName(string route)
@@ -291,7 +330,7 @@ namespace UnityMCP.Editor
                 case "packages/status":
                     return "Read Package Manager manifest and lock status for one package or all Git packages.";
                 case "advanced/execute":
-                    return "Stable generic entrypoint that executes any Unity route by route name and arguments.";
+                    return "Fallback generic entrypoint for routes that do not have a concrete tool yet. Prefer route-specific unity_* tools first.";
                 case "packages/lint-metas":
                     return "Lint a Unity package root for missing .meta files.";
                 case "wait/editor-idle":
@@ -308,12 +347,30 @@ namespace UnityMCP.Editor
                     return "Resolve one Unity Editor MCP instance by project path, project name, or port.";
                 case "instance/assert-project":
                     return "Assert that this MCP request reached the expected Unity project.";
+                case "scene/instantiate-prefab":
+                case "asset/instantiate-prefab":
+                    return "Instantiate a prefab asset into the currently open scene.";
                 case "prefab-asset/add-component":
                     return "Add a component to a prefab asset after waiting for a newly compiled script type to become available.";
+                case "prefab-asset/add-gameobject":
+                    return "Create a child GameObject inside a prefab asset.";
                 case "prefab-asset/instantiate-prefab":
+                case "prefab-asset/instantiate-child-prefab":
                     return "Instantiate a prefab asset as a child inside another prefab asset.";
+                case "prefab-asset/hierarchy":
+                    return "Get the full hierarchy tree of a prefab asset directly from disk.";
+                case "prefab-asset/get-properties":
+                    return "Read serialized properties from a component on a GameObject inside a prefab asset.";
+                case "prefab-asset/set-property":
+                    return "Set a serialized property on a component inside a prefab asset.";
+                case "prefab-asset/set-reference":
+                    return "Set an ObjectReference property on a component inside a prefab asset.";
                 case "prefab-asset/move-gameobject":
                     return "Move or reorder a GameObject inside a prefab asset.";
+                case "prefab-asset/remove-component":
+                    return "Remove a component from a GameObject inside a prefab asset.";
+                case "prefab-asset/remove-gameobject":
+                    return "Remove a child GameObject from inside a prefab asset.";
                 case "prefab-asset/find":
                     return "Find GameObjects inside a prefab asset by name/path, component type, and serialized property value.";
                 case "prefab-asset/batch-edit":
@@ -544,7 +601,53 @@ namespace UnityMCP.Editor
                         Prop("overwrite", "boolean", "Replace an existing output file. Defaults to false."),
                         Prop("interactive", "boolean", "Show Unity's export package UI. Defaults to false.")
                     ), "outputPath");
+                case "scene/instantiate-prefab":
+                case "asset/instantiate-prefab":
+                    return Schema(Props(
+                        Prop("prefabPath", "string", "Prefab asset path to instantiate into the currently open scene."),
+                        Prop("name", "string", "Optional name for the created scene instance."),
+                        Prop("parent", "string", "Optional scene GameObject name used as the parent."),
+                        Prop("position", "object", "Optional world position object with x/y/z."),
+                        Prop("rotation", "object", "Optional world Euler rotation object with x/y/z.")
+                    ), "prefabPath");
+                case "prefab-asset/hierarchy":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to inspect."),
+                        Prop("maxDepth", "number", "Maximum hierarchy depth to return. Defaults to 10.")
+                    ), "assetPath");
+                case "prefab-asset/get-properties":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to inspect."),
+                        Prop("prefabPath", "string", "Path of the GameObject inside the prefab. Empty means root."),
+                        Prop("componentType", "string", "Component type name or full name.")
+                    ), "assetPath", "componentType");
+                case "prefab-asset/set-property":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("prefabPath", "string", "Path of the GameObject inside the prefab. Empty means root."),
+                        Prop("componentType", "string", "Component type name or full name."),
+                        Prop("propertyName", "string", "Serialized property name or property path to set."),
+                        Prop("value", "object", "Serialized value to assign."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                        Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
+                        Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                    ), "assetPath", "componentType", "propertyName", "value");
+                case "prefab-asset/set-reference":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("prefabPath", "string", "Path of the GameObject inside the prefab. Empty means root."),
+                        Prop("componentType", "string", "Component type name or full name. Optional when propertyName can identify the component."),
+                        Prop("propertyName", "string", "ObjectReference serialized property name or property path."),
+                        Prop("referenceAssetPath", "string", "Project asset path to assign."),
+                        Prop("referencePrefabPath", "string", "Path of a GameObject inside the same prefab to assign."),
+                        Prop("referenceComponentType", "string", "When using referencePrefabPath, assign this component instead of the GameObject."),
+                        Prop("clear", "boolean", "Clear the ObjectReference."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                    ), "assetPath", "propertyName");
                 case "prefab-asset/instantiate-prefab":
+                case "prefab-asset/instantiate-child-prefab":
                     return Schema(Props(
                         Prop("assetPath", "string", "Target prefab asset path to edit."),
                         Prop("sourcePrefabPath", "string", "Prefab asset path to instantiate into the target prefab."),
@@ -555,6 +658,18 @@ namespace UnityMCP.Editor
                         Prop("rotation", "object", "Optional local Euler rotation object with x/y/z."),
                         Prop("scale", "object", "Optional local scale object with x/y/z.")
                     ), "assetPath", "sourcePrefabPath");
+                case "prefab-asset/add-gameobject":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("parentPrefabPath", "string", "Parent path inside the prefab. Empty means root."),
+                        Prop("name", "string", "Name of the new child GameObject."),
+                        Prop("primitiveType", "string", "Optional Unity PrimitiveType to create, e.g. Cube or Sphere."),
+                        Prop("position", "object", "Optional local position object with x/y/z."),
+                        Prop("rotation", "object", "Optional local Euler rotation object with x/y/z."),
+                        Prop("scale", "object", "Optional local scale object with x/y/z."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                    ), "assetPath", "name");
                 case "prefab-asset/add-component":
                     return Schema(Props(
                         Prop("assetPath", "string", "Prefab asset path to edit."),
@@ -571,6 +686,15 @@ namespace UnityMCP.Editor
                         Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
                         Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
                     ), "assetPath", "componentType");
+                case "prefab-asset/remove-component":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("prefabPath", "string", "Path of the GameObject inside the prefab. Empty means root."),
+                        Prop("componentType", "string", "Component type name or full name."),
+                        Prop("index", "number", "Component index when multiple components of the same type exist. Defaults to 0."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                    ), "assetPath", "componentType");
                 case "prefab-asset/move-gameobject":
                     return Schema(Props(
                         Prop("assetPath", "string", "Prefab asset path to edit."),
@@ -578,6 +702,13 @@ namespace UnityMCP.Editor
                         Prop("newParentPrefabPath", "string", "New parent path inside the prefab. Empty means root."),
                         Prop("siblingIndex", "number", "Optional sibling index under the new parent."),
                         Prop("worldPositionStays", "boolean", "Preserve world transform while reparenting. Defaults to false.")
+                    ), "assetPath", "prefabPath");
+                case "prefab-asset/remove-gameobject":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("prefabPath", "string", "Path of the child GameObject to remove. Cannot be root."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
                     ), "assetPath", "prefabPath");
                 case "prefab-asset/find":
                     return Schema(Props(
@@ -591,27 +722,9 @@ namespace UnityMCP.Editor
                         Prop("maxResults", "number", "Maximum returned matches. Defaults to 50.")
                     ), "assetPath");
                 case "prefab-asset/batch-edit":
-                    return Schema(Props(
-                        Prop("assetPath", "string", "Prefab asset path to edit."),
-                        Prop("operations", "array", "Ordered operations. Supported type values: addComponent, setProperty, setReference, addGameObject, instantiatePrefab, removeComponent, removeGameObject, moveGameObject."),
-                        Prop("waitForTypes", "boolean", "Wait for all referenced component types before editing. Defaults to true."),
-                        Prop("typeResolveTimeoutMs", "number", "Maximum type wait time in milliseconds. Defaults to 30000."),
-                        Prop("typeResolveStableMs", "number", "Continuous idle time after type resolution before editing. Defaults to 500."),
-                        Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh once before waiting. Defaults to true."),
-                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
-                        Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
-                        Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
-                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full."),
-                        Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
-                        Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
-                    ), "assetPath", "operations");
+                    return PrefabAssetBatchEditSchema(false);
                 case "prefab-asset/transaction-edit":
-                    return Schema(Props(
-                        Prop("assetPath", "string", "Prefab asset path to edit."),
-                        Prop("operations", "array", "Ordered operations. Same operation format as prefab-asset/batch-edit."),
-                        Prop("prefabFileDiffMode", "string", "Diff return mode. Defaults to summary for this high-level transaction route."),
-                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true.")
-                    ), "assetPath", "operations");
+                    return PrefabAssetBatchEditSchema(true);
                 case "serialized-object/get":
                     return Schema(Props(
                         Prop("instanceId", "number", "Target Unity object instance id."),
@@ -1204,6 +1317,153 @@ namespace UnityMCP.Editor
                         { "additionalProperties", true }
                     };
             }
+        }
+
+        private static Dictionary<string, object> PrefabAssetBatchEditSchema(bool transactionDefaults)
+        {
+            var properties = Props(
+                Prop("assetPath", "string", "Prefab asset path to edit."),
+                Prop("waitForTypes", "boolean", "Wait for all referenced component types before editing. Defaults to true."),
+                Prop("typeResolveTimeoutMs", "number", "Maximum type wait time in milliseconds. Defaults to 30000."),
+                Prop("typeResolveStableMs", "number", "Continuous idle time after type resolution before editing. Defaults to 500."),
+                Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh once before waiting. Defaults to true."),
+                Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
+                Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
+                Prop("prefabFileDiffMode", "string", transactionDefaults
+                    ? "Diff return mode. Defaults to summary for transaction-edit."
+                    : "Diff return mode: full, minimal, or summary. Defaults to full."),
+                Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
+                Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
+            );
+
+            properties["operations"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "Ordered prefab asset edit operations. Use type values: addComponent, setProperty, setReference, addGameObject, instantiatePrefab, removeComponent, removeGameObject, moveGameObject." },
+                { "items", new Dictionary<string, object>
+                    {
+                        { "oneOf", new List<object>
+                            {
+                                BatchOperationSchema("addComponent", "Add a component to a GameObject inside the prefab.",
+                                    Props(
+                                        OperationTypeProp("addComponent"),
+                                        PrefabPathProp("Target GameObject path. Empty means root."),
+                                        Prop("componentType", "string", "Component type name or full name."),
+                                        Prop("properties", "object", "Optional serialized properties to set on the new component.")
+                                    ), "type", "componentType"),
+                                BatchOperationSchema("setProperty", "Set serialized properties on an existing component.",
+                                    Props(
+                                        OperationTypeProp("setProperty"),
+                                        PrefabPathProp("Target GameObject path. Empty means root."),
+                                        Prop("componentType", "string", "Component type name or full name."),
+                                        Prop("componentIndex", "number", "Component index when multiple components of this type exist. Defaults to 0."),
+                                        Prop("index", "number", "Alias for componentIndex."),
+                                        Prop("propertyName", "string", "Single serialized property name or path to set."),
+                                        Prop("value", "object", "Value for propertyName."),
+                                        Prop("properties", "object", "Map of serialized property names to values.")
+                                    ), "type", "componentType"),
+                                BatchOperationSchema("setReference", "Set an ObjectReference property on an existing component.",
+                                    Props(
+                                        OperationTypeProp("setReference"),
+                                        PrefabPathProp("Target GameObject path. Empty means root."),
+                                        Prop("componentType", "string", "Component type name or full name. Optional when propertyName can identify the component."),
+                                        Prop("componentIndex", "number", "Component index when multiple components of this type exist. Defaults to 0."),
+                                        Prop("index", "number", "Alias for componentIndex."),
+                                        Prop("propertyName", "string", "ObjectReference serialized property name or path."),
+                                        Prop("referenceAssetPath", "string", "Project asset path to assign."),
+                                        Prop("referencePrefabPath", "string", "Path of a GameObject inside the same prefab to assign."),
+                                        Prop("referenceComponentType", "string", "When using referencePrefabPath, assign this component instead of the GameObject."),
+                                        Prop("clear", "boolean", "Clear the ObjectReference.")
+                                    ), "type", "propertyName"),
+                                BatchOperationSchema("addGameObject", "Create a new child GameObject inside the prefab.",
+                                    Props(
+                                        OperationTypeProp("addGameObject"),
+                                        Prop("parentPrefabPath", "string", "Parent path inside the prefab. Empty means root."),
+                                        Prop("name", "string", "Name of the new child GameObject."),
+                                        Prop("primitiveType", "string", "Optional Unity PrimitiveType to create, e.g. Cube or Sphere."),
+                                        TransformPositionProp(),
+                                        TransformRotationProp(),
+                                        TransformScaleProp()
+                                    ), "type", "name"),
+                                BatchOperationSchema("instantiatePrefab", "Instantiate a prefab asset as a child inside the target prefab asset.",
+                                    Props(
+                                        OperationTypeProp("instantiatePrefab"),
+                                        Prop("sourcePrefabPath", "string", "Prefab asset path to instantiate into the target prefab."),
+                                        Prop("parentPrefabPath", "string", "Parent path inside the target prefab. Empty means root."),
+                                        Prop("name", "string", "Optional name override for the created GameObject."),
+                                        Prop("siblingIndex", "number", "Optional sibling index under the parent."),
+                                        TransformPositionProp(),
+                                        TransformRotationProp(),
+                                        TransformScaleProp()
+                                    ), "type", "sourcePrefabPath"),
+                                BatchOperationSchema("removeComponent", "Remove a component from a GameObject inside the prefab.",
+                                    Props(
+                                        OperationTypeProp("removeComponent"),
+                                        PrefabPathProp("Target GameObject path. Empty means root."),
+                                        Prop("componentType", "string", "Component type name or full name."),
+                                        Prop("componentIndex", "number", "Component index when multiple components of this type exist. Defaults to 0."),
+                                        Prop("index", "number", "Alias for componentIndex.")
+                                    ), "type", "componentType"),
+                                BatchOperationSchema("removeGameObject", "Remove a child GameObject from inside the prefab. The root cannot be removed.",
+                                    Props(
+                                        OperationTypeProp("removeGameObject"),
+                                        PrefabPathProp("Child GameObject path to remove.")
+                                    ), "type", "prefabPath"),
+                                BatchOperationSchema("moveGameObject", "Move or reorder a child GameObject inside the prefab.",
+                                    Props(
+                                        OperationTypeProp("moveGameObject"),
+                                        PrefabPathProp("GameObject path to move."),
+                                        Prop("newParentPrefabPath", "string", "New parent path inside the prefab. Empty means root."),
+                                        Prop("siblingIndex", "number", "Optional sibling index under the new parent."),
+                                        Prop("worldPositionStays", "boolean", "Preserve world transform while reparenting. Defaults to false.")
+                                    ), "type", "prefabPath")
+                            }
+                        }
+                    }
+                }
+            };
+
+            return Schema(properties, "assetPath", "operations");
+        }
+
+        private static Dictionary<string, object> BatchOperationSchema(string operationType, string description,
+            Dictionary<string, object> properties, params string[] required)
+        {
+            var schema = Schema(properties, required);
+            schema["description"] = description;
+            schema["additionalProperties"] = true;
+            return schema;
+        }
+
+        private static KeyValuePair<string, object> OperationTypeProp(string operationType)
+        {
+            return new KeyValuePair<string, object>("type", new Dictionary<string, object>
+            {
+                { "type", "string" },
+                { "enum", new List<object> { operationType } },
+                { "description", "Operation type. The runtime also accepts op or action, but type is preferred." },
+            });
+        }
+
+        private static KeyValuePair<string, object> PrefabPathProp(string description)
+        {
+            return Prop("prefabPath", "string", description);
+        }
+
+        private static KeyValuePair<string, object> TransformPositionProp()
+        {
+            return Prop("position", "object", "Optional local position object with x/y/z.");
+        }
+
+        private static KeyValuePair<string, object> TransformRotationProp()
+        {
+            return Prop("rotation", "object", "Optional local Euler rotation object with x/y/z.");
+        }
+
+        private static KeyValuePair<string, object> TransformScaleProp()
+        {
+            return Prop("scale", "object", "Optional local scale object with x/y/z.");
         }
 
         private static Dictionary<string, object> EditorWindowSchema(Dictionary<string, object> extraProps)

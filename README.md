@@ -33,7 +33,7 @@ http://127.0.0.1:7890/api/ping
 
 | Area | MCP tool name | HTTP route | Purpose |
 |------|---------------|------------|---------|
-| Stable entrypoint | `unity_advanced_execute` | `advanced/execute` | Execute any Unity route through one stable route when MCP client tool metadata is stale. |
+| Fallback entrypoint | `unity_advanced_execute` | `advanced/execute` | Fallback route for commands that do not have a concrete tool yet. Prefer route-specific `unity_*` tools first. |
 | MCP diagnostics | `unity_mcp_health` | `mcp/health` | Inspect bridge state, queue state, sessions, process memory, recent actions, and slow requests. |
 | MCP diagnostics | `unity_mcp_set_autostart` | `mcp/set-autostart` | Enable or disable bridge auto-start for the current Unity Editor instance. |
 | Editor stability | `unity_wait_editor_idle` | `wait/editor-idle` | Wait for compilation, package refresh, domain reload, and asset import to settle before issuing the next command. |
@@ -42,14 +42,26 @@ http://127.0.0.1:7890/api/ping
 | Multi-editor safety | `unity_instance_resolve` | `instance/resolve` | Resolve exactly one Editor MCP instance by project path, project name, or port. |
 | Multi-editor safety | `unity_instance_assert_project` | `instance/assert-project` | Verify that a request reached the expected Unity project. |
 | Prefab asset editing | `unity_prefab_asset_add_component` | `prefab-asset/add-component` | Add a component after waiting for a newly compiled script type to become available; returns prefab YAML diff by default. |
+| Prefab asset editing | `unity_prefab_asset_add_gameobject` | `prefab-asset/add-gameobject` | Create a child GameObject inside a prefab asset. |
 | Prefab asset editing | `unity_prefab_asset_batch_edit` | `prefab-asset/batch-edit` | Apply ordered prefab asset edits in one load/save transaction, such as adding a component and setting its fields before a single save. |
 | Prefab asset editing | `unity_prefab_asset_instantiate_prefab` | `prefab-asset/instantiate-prefab` | Instantiate one prefab asset inside another prefab asset under a selected child path. |
+| Prefab asset editing | `unity_prefab_asset_instantiate_child_prefab` | `prefab-asset/instantiate-child-prefab` | Clearer alias for `prefab-asset/instantiate-prefab`; use this when editing a prefab asset, not the scene. |
 | Prefab asset editing | `unity_prefab_asset_move_gameobject` | `prefab-asset/move-gameobject` | Move or reorder a GameObject inside a prefab asset without opening Prefab Mode manually. |
+| Prefab asset editing | `unity_prefab_asset_remove_component` | `prefab-asset/remove-component` | Remove a component from a GameObject inside a prefab asset. |
+| Prefab asset editing | `unity_prefab_asset_remove_gameobject` | `prefab-asset/remove-gameobject` | Remove a child GameObject from inside a prefab asset. |
+| Prefab asset editing | `unity_prefab_asset_set_property` | `prefab-asset/set-property` | Set a serialized property on a component inside a prefab asset. |
+| Prefab asset editing | `unity_prefab_asset_set_reference` | `prefab-asset/set-reference` | Set an ObjectReference property on a component inside a prefab asset. |
 | Prefab asset search | `unity_prefab_asset_find` | `prefab-asset/find` | Find prefab children by name/path, component type, and serialized property value. |
+| Prefab asset search | `unity_prefab_asset_hierarchy` | `prefab-asset/hierarchy` | Read a prefab asset hierarchy directly from disk. |
+| Prefab asset search | `unity_prefab_asset_get_properties` | `prefab-asset/get-properties` | Read serialized component properties inside a prefab asset. |
+| Scene editing | `unity_scene_instantiate_prefab` | `scene/instantiate-prefab` | Instantiate a prefab asset into the currently open scene. |
 | Safe assets | `unity_asset_refresh` | `asset/refresh` | Refresh AssetDatabase, optionally forcing update or importing specific asset paths before prefab/package operations. |
 | Safe assets | `unity_asset_rename` | `asset/rename` | Rename an asset through `AssetDatabase.RenameAsset`, preserving `.meta`, GUID, and references. |
 | Safe assets | `unity_asset_move` | `asset/move` | Move an asset through `AssetDatabase.MoveAsset`, preserving `.meta`, GUID, and references. |
+| Serialization | `unity_serialized_object_get` | `serialized-object/get` | Read serialized properties from a scene object, component, or asset. |
+| Serialization | `unity_serialized_object_set` | `serialized-object/set` | Set one serialized property on a scene object, component, or asset. |
 | Console inspection | `unity_console_query` | `console/query` | Filter recent console entries by time, log type, message, source stack frame, full stack text, or only entries after the last Play transition. |
+| Compilation inspection | `unity_compilation_errors` | `compilation/errors` | Return tracked Unity compilation errors. |
 | Animator editing | `unity_animation_transition_info` | `animation/transition-info` | Read full Animator transition details, including conditions, exit time, duration, offset, and interruption settings. |
 | Animator editing | `unity_animation_update_state` | `animation/update-state` | Modify an existing Animator state, including motion, speed, tag, position, write defaults, and default state. |
 | Animator editing | `unity_animation_update_transition` | `animation/update-transition` | Modify an existing transition and add, update, remove, or replace transition conditions. |
@@ -147,7 +159,7 @@ If an MCP client has stale tool metadata, use the concrete direct route `project
 - `mcp/health` is intended for diagnosing editor slowdown caused by MCP usage. It does not stop the bridge; use `mcp/set-autostart` to prevent the bridge from coming back automatically after reload.
 - `texture/import-image` is the preferred route for Figma/exported UI images: pass `sourceUrl` or `sourcePath`, `targetPath` or `targetFolder` + `assetName`, then use `preset=pixel-sprite` and `border` when needed.
 - For UI visual QA, use `uitoolkit/locate-element` first to confirm the measured semantic target, then `uitoolkit/capture-element` or `uitoolkit/compare-element` for local crops. Use `uitoolkit/generated-children` when controls such as `TabView`, `DropdownField`, `Scroller`, or `ToggleButtonGroup` may be drawing default child indicators.
-- Prefab asset mutation tools return `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it, adjust `prefabFileDiffMaxLines`, or use `prefabFileDiffMode=summary/minimal` plus ignore filters to reduce unrelated YAML noise.
+- Prefab asset mutation tools return `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it, adjust `prefabFileDiffMaxLines`, or use `prefabFileDiffMode=summary/minimal` plus ignore filters to reduce unrelated YAML noise. For multi-step edits, `unity_prefab_asset_batch_edit` exposes an operation-level schema for `addComponent`, `setProperty`, `setReference`, `addGameObject`, `instantiatePrefab`, `removeComponent`, `removeGameObject`, and `moveGameObject`.
 - `uitoolkit/builder-preview` opens and screenshots UI Builder. Unity does not expose a stable public UI Builder zoom API, so the route records requested zoom values but does not use reflection to force the viewport zoom.
 - `build/run-test` is a high-level test loop for local player builds. Keep `overwrite=true` for repeat tests so output folders do not accumulate.
 - `unity_packages_update_git` defaults to `skipIfResolved=true`. When the requested ref is a commit hash already recorded in `packages-lock.json`, the tool returns `skipped=true` without asking Unity Package Manager to resolve again. Pass `force=true` to force a resolve.

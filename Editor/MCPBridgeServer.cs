@@ -730,6 +730,8 @@ namespace UnityMCP.Editor
                     return MCPSceneCommands.NewScene();
                 case "scene/hierarchy":
                     return MCPSceneCommands.GetHierarchy(ParseJson(body));
+                case "scene/instantiate-prefab":
+                    return MCPAssetCommands.InstantiatePrefab(ParseJson(body));
 
                 // ─── GameObject ───
                 case "gameobject/create":
@@ -941,6 +943,7 @@ namespace UnityMCP.Editor
                 case "prefab-asset/add-gameobject":
                     return MCPPrefabAssetCommands.AddGameObject(ParseJson(body));
                 case "prefab-asset/instantiate-prefab":
+                case "prefab-asset/instantiate-child-prefab":
                     return MCPPrefabAssetCommands.InstantiatePrefab(ParseJson(body));
                 case "prefab-asset/remove-gameobject":
                     return MCPPrefabAssetCommands.RemoveGameObject(ParseJson(body));
