@@ -77,7 +77,6 @@ namespace UnityMCP.Editor
             "texture/check-ui-import-settings",
             "build/run-test",
             "project-tools/list",
-            "project-tools/execute",
         };
 
         private static string ExtractCategory(string path)
@@ -143,7 +142,8 @@ namespace UnityMCP.Editor
 
         private static bool IsFirstClassTool(Dictionary<string, object> tool)
         {
-            return tool.TryGetValue("firstClass", out var value) && value is bool boolValue && boolValue;
+            return string.Equals(tool.TryGetValue("exposure", out var exposure) ? exposure?.ToString() : "",
+                "first-class", StringComparison.Ordinal);
         }
 
         private static List<string> GetRegisteredRouteList()
@@ -246,6 +246,8 @@ namespace UnityMCP.Editor
             if (MCPProjectToolCommands.TryGetToolDictionaryForDirectRoute(route, out var projectTool))
                 return BuildProjectToolMetadata(route, projectTool);
 
+            string exposure = GetToolExposure(route);
+            bool isFirstClass = string.Equals(exposure, "first-class", StringComparison.Ordinal);
             return new Dictionary<string, object>
             {
                 { "route", route },
@@ -253,9 +255,9 @@ namespace UnityMCP.Editor
                 { "category", ExtractCategory(route) },
                 { "description", GetToolDescription(route) },
                 { "inputSchema", GetToolInputSchema(route) },
-                { "firstClass", IsFirstClassRoute(route) },
-                { "exposure", GetToolExposure(route) },
-                { "preferred", IsFirstClassRoute(route) },
+                { "firstClass", isFirstClass },
+                { "exposure", exposure },
+                { "preferred", isFirstClass },
             };
         }
 
