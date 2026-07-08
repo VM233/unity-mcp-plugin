@@ -7,6 +7,7 @@ All notable changes to this package will be documented in this file.
 ### Added
 - **Multi-editor project routing safety** — new `instance/current`, `instance/list`, `instance/resolve`, and `instance/assert-project` routes expose the shared Unity MCP instance registry so clients can resolve the correct Editor by `projectPath` before sending commands. Requests can also include `expectedProjectPath` / `targetProjectPath` / `unityProjectPath` or the `X-UnityMCP-Expected-Project-Path` header; if a command reaches the wrong Unity project, the bridge returns `wrong_unity_project` before executing Unity API work.
 - **First-class project tools** — `MCPProjectToolAttribute` now supports `InputSchemaJson`, `project-tools/list` returns schemas and direct routes, and `_meta/tools` exposes each valid project tool as a concrete `unity_project_tool_*` tool routed through `project-tools/call/<toolName>`.
+- **First-class route metadata** — stable routes advertised in the README now include `firstClass=true` in `_meta/tools`, so MCP clients can expose concrete tools with route-owned schemas and descriptions instead of routing them through the generic advanced entry.
 
 ### Fixed
 - **Deferred route direct-call timeout** — direct calls to deferred routes such as `advanced/execute` now wait on a deferred queue ticket instead of wrapping another main-thread wait, preventing 30s timeouts when the route is used as the stable generic entry.

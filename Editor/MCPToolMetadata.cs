@@ -10,6 +10,63 @@ namespace UnityMCP.Editor
 {
     internal static class MCPToolMetadata
     {
+        private static readonly HashSet<string> FirstClassRoutes = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "advanced/execute",
+            "packages/update-git",
+            "mcp/health",
+            "mcp/set-autostart",
+            "wait/editor-idle",
+            "instance/current",
+            "instance/list",
+            "instance/resolve",
+            "instance/assert-project",
+            "prefab-asset/add-component",
+            "prefab-asset/batch-edit",
+            "prefab-asset/instantiate-prefab",
+            "prefab-asset/move-gameobject",
+            "prefab-asset/find",
+            "asset/refresh",
+            "asset/rename",
+            "asset/move",
+            "console/query",
+            "animation/transition-info",
+            "animation/update-state",
+            "animation/update-transition",
+            "animation/connect-states",
+            "uitoolkit/asset-inspect",
+            "uitoolkit/runtime-documents",
+            "uitoolkit/runtime-tree",
+            "uitoolkit/runtime-query",
+            "uitoolkit/runtime-style",
+            "uitoolkit/runtime-repaint",
+            "uitoolkit/refresh",
+            "uitoolkit/wait-refresh",
+            "uitoolkit/assert-layout",
+            "uitoolkit/locate-element",
+            "uitoolkit/capture-element",
+            "uitoolkit/compare-element",
+            "uitoolkit/generated-children",
+            "uitoolkit/resource-audit",
+            "uitoolkit/builder-preview",
+            "screenshot/crop",
+            "graphics/image-alpha-bounds",
+            "graphics/rect-gap",
+            "graphics/annotate-rects",
+            "graphics/compare-images",
+            "sprite/sheet-info",
+            "sprite/replace-and-slice",
+            "sprite/slice-sheet",
+            "sprite/update-animation-clip",
+            "sprite/replace-slice-update-clip",
+            "texture/apply-sprite-preset",
+            "texture/import-image",
+            "texture/check-ui-import-settings",
+            "build/run-test",
+            "project-tools/list",
+            "project-tools/execute",
+        };
+
         private static string ExtractCategory(string path)
         {
             int slash = path.IndexOf('/');
@@ -172,6 +229,7 @@ namespace UnityMCP.Editor
                 { "category", ExtractCategory(route) },
                 { "description", GetToolDescription(route) },
                 { "inputSchema", GetToolInputSchema(route) },
+                { "firstClass", IsFirstClassRoute(route) },
             };
         }
 
@@ -197,8 +255,14 @@ namespace UnityMCP.Editor
                 { "description", string.IsNullOrEmpty(description) ? $"Project MCP tool: {projectToolName}" : description },
                 { "inputSchema", inputSchema },
                 { "projectToolName", projectToolName },
+                { "firstClass", true },
                 { "source", projectTool.TryGetValue("source", out var source) ? source : "" }
             };
+        }
+
+        private static bool IsFirstClassRoute(string route)
+        {
+            return FirstClassRoutes.Contains(route);
         }
 
         private static string RouteToToolName(string route)
@@ -244,6 +308,8 @@ namespace UnityMCP.Editor
                     return "Resolve one Unity Editor MCP instance by project path, project name, or port.";
                 case "instance/assert-project":
                     return "Assert that this MCP request reached the expected Unity project.";
+                case "prefab-asset/add-component":
+                    return "Add a component to a prefab asset after waiting for a newly compiled script type to become available.";
                 case "prefab-asset/instantiate-prefab":
                     return "Instantiate a prefab asset as a child inside another prefab asset.";
                 case "prefab-asset/move-gameobject":
