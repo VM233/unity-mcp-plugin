@@ -866,13 +866,9 @@ namespace UnityMCP.Editor
             }
 
             Rect rect = element.worldBound;
+            Rect rootRect = root.worldBound;
             float pixelScale = GetFloat(args, "pixelScale", EditorGUIUtility.pixelsPerPoint);
             int padding = GetInt(args, "padding", 0);
-            var cropRect = new RectInt(
-                Mathf.Max(0, Mathf.FloorToInt(rect.x * pixelScale) - padding),
-                Mathf.Max(0, Mathf.FloorToInt(rect.y * pixelScale) - padding),
-                Mathf.Max(1, Mathf.CeilToInt(rect.width * pixelScale) + padding * 2),
-                Mathf.Max(1, Mathf.CeilToInt(rect.height * pixelScale) + padding * 2));
 
             var captureArgs = new Dictionary<string, object>
             {
@@ -882,6 +878,31 @@ namespace UnityMCP.Editor
             var capture = MCPScreenshotCommands.CaptureEditorWindow(captureArgs) as Dictionary<string, object>;
             if (capture == null || GetBool(capture, "success", false) == false)
                 return capture ?? new Dictionary<string, object> { { "success", false }, { "error", "Window capture failed" } };
+
+            int captureWidth = GetInt(capture, "width", 0);
+            int captureHeight = GetInt(capture, "height", 0);
+            RectInt cropRect;
+            string cropMode;
+            if (captureWidth > 0 && captureHeight > 0 && rootRect.width > 0 && rootRect.height > 0)
+            {
+                float scaleX = captureWidth / rootRect.width;
+                float scaleY = captureHeight / rootRect.height;
+                cropRect = new RectInt(
+                    Mathf.Max(0, Mathf.FloorToInt((rect.x - rootRect.x) * scaleX) - padding),
+                    Mathf.Max(0, Mathf.FloorToInt((rect.y - rootRect.y) * scaleY) - padding),
+                    Mathf.Max(1, Mathf.CeilToInt(rect.width * scaleX) + padding * 2),
+                    Mathf.Max(1, Mathf.CeilToInt(rect.height * scaleY) + padding * 2));
+                cropMode = "root-relative";
+            }
+            else
+            {
+                cropRect = new RectInt(
+                    Mathf.Max(0, Mathf.FloorToInt(rect.x * pixelScale) - padding),
+                    Mathf.Max(0, Mathf.FloorToInt(rect.y * pixelScale) - padding),
+                    Mathf.Max(1, Mathf.CeilToInt(rect.width * pixelScale) + padding * 2),
+                    Mathf.Max(1, Mathf.CeilToInt(rect.height * pixelScale) + padding * 2));
+                cropMode = "absolute";
+            }
 
             var cropArgs = new Dictionary<string, object>
             {
@@ -909,6 +930,7 @@ namespace UnityMCP.Editor
                 { "element", BuildElementInfo(element, elementPath, true) },
                 { "pixelScale", SafeFloat(pixelScale) },
                 { "padding", padding },
+                { "cropMode", cropMode },
                 { "cropRect", RectToDictionary(new Rect(cropRect.x, cropRect.y, cropRect.width, cropRect.height)) },
                 { "windowCapture", capture },
                 { "elementCapture", crop },
