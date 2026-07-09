@@ -449,7 +449,7 @@ namespace UnityMCP.Editor
                     TargetPath = targetPath,
                     OldGuid = AssetDatabase.AssetPathToGUID(path),
                     OldMetaPath = GetMetaPath(path),
-                    OldMetaExists = File.Exists(GetAbsolutePath(GetMetaPath(path)));
+                    OldMetaExists = File.Exists(GetAbsolutePath(GetMetaPath(path))),
                 });
             }
 
