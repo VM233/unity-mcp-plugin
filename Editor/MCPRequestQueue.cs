@@ -42,9 +42,11 @@ namespace UnityMCP.Editor
 
             // Deferred work whose result arrives via callback (async Unity APIs)
             internal Action<Action<object>> DeferredAction { get; set; }
+            internal Action<Action<object>, Action<object>> ProgressiveDeferredAction { get; set; }
 
             // Result / error
             public object Result       { get; set; }
+            public object Progress     { get; set; }
             public string ErrorMessage { get; set; }
             public string ErrorCode    { get; set; }
             public bool   Retryable    { get; set; }
@@ -161,6 +163,12 @@ namespace UnityMCP.Editor
         public static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
             Action<Action<object>> deferredAction)
         {
+            return SubmitDeferredRequest(agentId, actionName, (resolve, _) => deferredAction(resolve));
+        }
+
+        public static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
+            Action<Action<object>, Action<object>> deferredAction)
+        {
             EnsurePersistentSnapshotsLoaded();
             if (string.IsNullOrEmpty(agentId)) agentId = "anonymous";
 
@@ -171,7 +179,7 @@ namespace UnityMCP.Editor
                 ActionName     = actionName,
                 Status         = RequestStatus.Queued,
                 SubmittedAt    = DateTime.UtcNow,
-                DeferredAction = deferredAction,
+                ProgressiveDeferredAction = deferredAction,
             };
 
             lock (_queueLock)
@@ -205,6 +213,12 @@ namespace UnityMCP.Editor
 
         public static object ExecuteDeferredWithTracking(string agentId, string actionName,
             Action<Action<object>> deferredAction)
+        {
+            return ExecuteDeferredWithTracking(agentId, actionName, (resolve, _) => deferredAction(resolve));
+        }
+
+        public static object ExecuteDeferredWithTracking(string agentId, string actionName,
+            Action<Action<object>, Action<object>> deferredAction)
         {
             var ticket = SubmitDeferredRequest(agentId, actionName, deferredAction);
             return WaitForTicket(ticket);
@@ -287,7 +301,10 @@ namespace UnityMCP.Editor
             List<RequestTicket> batch;
             lock (_queueLock)
             {
-                batch = DequeueNextBatch();
+                if (HasExecutingWriteLocked())
+                    return;
+
+                batch = DequeueNextBatch(allowWrites: _executingTickets.Count == 0);
                 if (batch == null || batch.Count == 0) return;
 
                 // Mark all as executing and track in-flight
@@ -305,12 +322,12 @@ namespace UnityMCP.Editor
                 int undoGroupBefore = UnityEditor.Undo.GetCurrentGroup();
 
                 // Deferred actions complete via callback on a future editor frame.
-                if (ticket.DeferredAction != null)
+                if (ticket.DeferredAction != null || ticket.ProgressiveDeferredAction != null)
                 {
                     var deferredTicket = ticket; // capture for closure
                     try
                     {
-                        deferredTicket.DeferredAction(result =>
+                        Action<object> resolve = result =>
                         {
                             CompleteTicketFromResult(deferredTicket, result);
 
@@ -324,7 +341,21 @@ namespace UnityMCP.Editor
                                     s.IncrementCompletedRequest(deferredTicket.ExecutionTimeMs);
                                 PersistTicketSnapshotsLocked();
                             }
-                        });
+                        };
+
+                        Action<object> progress = progressValue =>
+                        {
+                            lock (_queueLock)
+                            {
+                                deferredTicket.Progress = progressValue;
+                                PersistTicketSnapshotsLocked();
+                            }
+                        };
+
+                        if (deferredTicket.ProgressiveDeferredAction != null)
+                            deferredTicket.ProgressiveDeferredAction(resolve, progress);
+                        else
+                            deferredTicket.DeferredAction(resolve);
                     }
                     catch (Exception ex)
                     {
@@ -418,12 +449,14 @@ namespace UnityMCP.Editor
 
             ticket.Result = result;
             ticket.Status = RequestStatus.Completed;
+            ticket.Progress = null;
             ticket.ErrorMessage = null;
             ticket.ErrorCode = null;
             ticket.Retryable = false;
             ticket.CompletedAt = DateTime.UtcNow;
             ticket.Action = null;
             ticket.DeferredAction = null;
+            ticket.ProgressiveDeferredAction = null;
         }
 
         private static void FailTicket(RequestTicket ticket, string message, string errorCode, bool retryable,
@@ -437,6 +470,7 @@ namespace UnityMCP.Editor
             ticket.CompletedAt = DateTime.UtcNow;
             ticket.Action = null;
             ticket.DeferredAction = null;
+            ticket.ProgressiveDeferredAction = null;
         }
 
         // ═══════════════════════════════════════════════════════
@@ -553,7 +587,7 @@ namespace UnityMCP.Editor
         /// Fair round-robin dequeue. Returns 1 write OR up to MaxReadBatchSize reads.
         /// Must be called under _queueLock.
         /// </summary>
-        private static List<RequestTicket> DequeueNextBatch()
+        private static List<RequestTicket> DequeueNextBatch(bool allowWrites)
         {
             if (_rrOrder.Count == 0) return null;
 
@@ -586,6 +620,9 @@ namespace UnityMCP.Editor
 
             if (!IsReadOperation(first.ActionName))
             {
+                if (allowWrites == false)
+                    return null;
+
                 // Single write request
                 _agentQueues[firstAgent].Dequeue();
                 batch.Add(first);
@@ -615,6 +652,17 @@ namespace UnityMCP.Editor
 
             PurgeEmptyQueues();
             return batch;
+        }
+
+        private static bool HasExecutingWriteLocked()
+        {
+            foreach (var ticket in _executingTickets.Values)
+            {
+                if (!IsReadOperation(ticket.ActionName))
+                    return true;
+            }
+
+            return false;
         }
 
         private static bool IsReadOperation(string actionName)
@@ -810,6 +858,9 @@ namespace UnityMCP.Editor
                 { "retryable", ticket.Retryable },
             };
 
+            if (ticket.Progress != null)
+                snapshot["progress"] = ticket.Progress;
+
             if (ticket.CompletedAt.HasValue)
                 snapshot["completedAt"] = ticket.CompletedAt.Value.ToString("O");
 
@@ -876,6 +927,9 @@ namespace UnityMCP.Editor
                 { "errorCode",       t.ErrorCode ?? "" },
                 { "retryable",       t.Retryable },
             };
+
+            if (t.Progress != null)
+                dict["progress"] = t.Progress;
 
             if (t.CompletedAt.HasValue)
                 dict["completedAt"] = t.CompletedAt.Value.ToString("O");

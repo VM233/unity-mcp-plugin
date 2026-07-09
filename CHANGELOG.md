@@ -16,6 +16,9 @@ All notable changes to this package will be documented in this file.
 - **First-class route metadata** — stable routes advertised in the README now include `firstClass=true` in `_meta/tools`, so MCP clients can expose concrete tools with route-owned schemas and descriptions instead of routing them through the generic advanced entry.
 
 ### Fixed
+- **Prefab batch edit reliability** - `prefab-asset/batch-edit` now applies operations incrementally across editor frames with progress snapshots, configurable `batchEditTimeoutMs` / per-frame budgets, structured timeout failures, and explicit persistence state (`saved`, `saveAttempted`, `partialPersistedKnown`, `persistedState`) so long or complex prefab edits do not disappear behind queue polling timeouts.
+- **Serialized complex fields** - component property read/write now expands and accepts serialized arrays/lists plus generic child objects instead of reporting complex list fields only as `Generic`.
+- **Deferred write exclusivity** - multi-frame write requests now block later writes from leaving the queue until the active write completes, preventing interleaved asset edits while a deferred prefab batch is still applying.
 - **Queue failure status details** - `queue/status` now includes top-level `success=false`, `error`, and `message` fields for failed tickets so MCP clients can preserve validation and project-tool errors.
 - **Package meta lint false positives** - `packages/lint-metas` now skips hidden dotfiles and dot directories such as `.gitattributes`, `.gitignore`, and `.github`, matching Unity's non-imported file behavior.
 - **Error result consistency** - bridge and queue paths now normalize error payloads with `success=false`, `errorCode`, `message`, and `retryable` while keeping existing successful result payloads backward-compatible.

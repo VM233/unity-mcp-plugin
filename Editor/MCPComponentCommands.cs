@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using UnityEditor;
@@ -513,6 +514,17 @@ namespace UnityMCP.Editor
 
         internal static object GetSerializedValue(SerializedProperty prop)
         {
+            return GetSerializedValue(prop, 0, 4, 256);
+        }
+
+        private static object GetSerializedValue(SerializedProperty prop, int depth, int maxDepth, int maxArrayElements)
+        {
+            if (prop == null)
+                return null;
+
+            if (prop.isArray && prop.propertyType != SerializedPropertyType.String)
+                return GetSerializedArrayValue(prop, depth, maxDepth, maxArrayElements);
+
             switch (prop.propertyType)
             {
                 case SerializedPropertyType.Integer: return prop.intValue;
@@ -543,11 +555,9 @@ namespace UnityMCP.Editor
                             { "type", refObj.GetType().Name },
                             { "instanceId", MCPObjectId.Get(refObj) },
                         };
-                        // Add asset path for project assets
                         string assetPath = AssetDatabase.GetAssetPath(refObj);
                         if (!string.IsNullOrEmpty(assetPath))
                             info["assetPath"] = assetPath;
-                        // Add GameObject path for scene objects
                         if (refObj is GameObject refGo)
                             info["path"] = GetGameObjectPath(refGo);
                         else if (refObj is Component refComp)
@@ -570,6 +580,12 @@ namespace UnityMCP.Editor
                         { "center", new Dictionary<string, object> { { "x", b.center.x }, { "y", b.center.y }, { "z", b.center.z } } },
                         { "size", new Dictionary<string, object> { { "x", b.size.x }, { "y", b.size.y }, { "z", b.size.z } } },
                     };
+                case SerializedPropertyType.Generic:
+                    return GetSerializedGenericValue(prop, depth, maxDepth, maxArrayElements);
+#if UNITY_2020_1_OR_NEWER
+                case SerializedPropertyType.ManagedReference:
+                    return GetSerializedGenericValue(prop, depth, maxDepth, maxArrayElements);
+#endif
                 default:
                     return prop.propertyType.ToString();
             }
@@ -577,6 +593,12 @@ namespace UnityMCP.Editor
 
         internal static void SetSerializedValue(SerializedProperty prop, object value)
         {
+            if (prop.isArray && prop.propertyType != SerializedPropertyType.String)
+            {
+                SetSerializedArrayValue(prop, value);
+                return;
+            }
+
             switch (prop.propertyType)
             {
                 case SerializedPropertyType.Integer:
@@ -650,9 +672,126 @@ namespace UnityMCP.Editor
                 case SerializedPropertyType.ObjectReference:
                     prop.objectReferenceValue = ResolveObjectReference(value);
                     break;
+                case SerializedPropertyType.Generic:
+                    SetSerializedGenericValue(prop, value);
+                    break;
+#if UNITY_2020_1_OR_NEWER
+                case SerializedPropertyType.ManagedReference:
+                    SetSerializedGenericValue(prop, value);
+                    break;
+#endif
                 default:
                     throw new NotSupportedException($"Cannot set property type: {prop.propertyType}");
             }
+        }
+
+        private static object GetSerializedArrayValue(SerializedProperty prop, int depth, int maxDepth, int maxArrayElements)
+        {
+            var items = new List<object>();
+            int count = Mathf.Min(prop.arraySize, maxArrayElements);
+            for (int i = 0; i < count; i++)
+            {
+                var element = prop.GetArrayElementAtIndex(i);
+                items.Add(GetSerializedValue(element, depth + 1, maxDepth, maxArrayElements));
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "arraySize", prop.arraySize },
+                { "items", items },
+                { "truncated", prop.arraySize > count },
+                { "maxItems", maxArrayElements },
+            };
+        }
+
+        private static object GetSerializedGenericValue(SerializedProperty prop, int depth, int maxDepth, int maxArrayElements)
+        {
+            if (depth >= maxDepth)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "type", prop.propertyType.ToString() },
+                    { "childrenTruncated", true },
+                    { "maxDepth", maxDepth },
+                };
+            }
+
+            var result = new Dictionary<string, object>();
+            var iterator = prop.Copy();
+            var end = iterator.GetEndProperty();
+            bool enterChildren = true;
+            while (iterator.NextVisible(enterChildren) && !SerializedProperty.EqualContents(iterator, end))
+            {
+                enterChildren = false;
+                string relativePath = GetRelativePropertyPath(prop.propertyPath, iterator.propertyPath);
+                if (string.IsNullOrEmpty(relativePath) || relativePath.Contains("."))
+                    continue;
+
+                result[relativePath] = GetSerializedValue(iterator, depth + 1, maxDepth, maxArrayElements);
+            }
+
+            return result;
+        }
+
+        private static void SetSerializedArrayValue(SerializedProperty prop, object value)
+        {
+            var items = ExtractSerializedArrayItems(value);
+            if (items == null)
+                throw new NotSupportedException($"Array property '{prop.propertyPath}' expects a JSON array or an object with an items array.");
+
+            prop.arraySize = items.Count;
+            for (int i = 0; i < items.Count; i++)
+            {
+                var element = prop.GetArrayElementAtIndex(i);
+                SetSerializedValue(element, items[i]);
+            }
+        }
+
+        private static List<object> ExtractSerializedArrayItems(object value)
+        {
+            if (value is Dictionary<string, object> dict && dict.TryGetValue("items", out var rawItems))
+                value = rawItems;
+
+            if (value is List<object> list)
+                return list;
+
+            if (value is IList rawList && !(value is string))
+            {
+                var list = new List<object>();
+                foreach (var item in rawList)
+                    list.Add(item);
+                return list;
+            }
+
+            return null;
+        }
+
+        private static void SetSerializedGenericValue(SerializedProperty prop, object value)
+        {
+            var values = value as Dictionary<string, object>;
+            if (values == null)
+                throw new NotSupportedException($"Generic property '{prop.propertyPath}' expects a JSON object.");
+
+            foreach (var pair in values)
+            {
+                if (pair.Key == "type" || pair.Key == "childrenTruncated" || pair.Key == "maxDepth")
+                    continue;
+
+                var child = prop.FindPropertyRelative(pair.Key);
+                if (child == null)
+                    throw new ArgumentException($"Child property '{pair.Key}' not found under '{prop.propertyPath}'.");
+
+                SetSerializedValue(child, pair.Value);
+            }
+        }
+
+        private static string GetRelativePropertyPath(string parentPath, string childPath)
+        {
+            if (string.IsNullOrEmpty(parentPath))
+                return childPath;
+            if (string.IsNullOrEmpty(childPath) || !childPath.StartsWith(parentPath + ".", StringComparison.Ordinal))
+                return childPath;
+            return childPath.Substring(parentPath.Length + 1);
         }
 
         /// <summary>

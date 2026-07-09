@@ -1558,6 +1558,9 @@ namespace UnityMCP.Editor
                 Prop("typeResolveTimeoutMs", "number", "Maximum type wait time in milliseconds. Defaults to 30000."),
                 Prop("typeResolveStableMs", "number", "Continuous idle time after type resolution before editing. Defaults to 500."),
                 Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh once before waiting. Defaults to true."),
+                Prop("batchEditTimeoutMs", "number", "Maximum deferred batch edit time before returning a structured timeout with partial progress. Defaults to 90000."),
+                Prop("operationsPerFrame", "number", "Maximum operations to apply per editor frame in deferred batch mode. Defaults to 25."),
+                Prop("operationFrameBudgetMs", "number", "Soft per-frame operation budget in milliseconds in deferred batch mode. Defaults to 8."),
                 Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                 Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
                 Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
@@ -1581,7 +1584,7 @@ namespace UnityMCP.Editor
                                         OperationTypeProp("addComponent"),
                                         PrefabPathProp("Target GameObject path. Empty means root."),
                                         Prop("componentType", "string", "Component type name or full name."),
-                                        Prop("properties", "object", "Optional serialized properties to set on the new component.")
+                                        Prop("properties", "object", "Optional serialized properties to set on the new component. Array/list fields accept either a JSON array or { items: [...] }; Generic fields accept child-field objects.")
                                     ), "type", "componentType"),
                                 BatchOperationSchema("setProperty", "Set serialized properties on an existing component.",
                                     Props(
@@ -1591,8 +1594,8 @@ namespace UnityMCP.Editor
                                         Prop("componentIndex", "number", "Component index when multiple components of this type exist. Defaults to 0."),
                                         Prop("index", "number", "Alias for componentIndex."),
                                         Prop("propertyName", "string", "Single serialized property name or path to set."),
-                                        Prop("value", "object", "Value for propertyName."),
-                                        Prop("properties", "object", "Map of serialized property names to values.")
+                                        Prop("value", "object", "Value for propertyName. Array/list fields accept either a JSON array or { items: [...] }; Generic fields accept child-field objects."),
+                                        Prop("properties", "object", "Map of serialized property names to values. Array/list fields accept either a JSON array or { items: [...] }; Generic fields accept child-field objects.")
                                     ), "type", "componentType"),
                                 BatchOperationSchema("setReference", "Set an ObjectReference property on an existing component.",
                                     Props(

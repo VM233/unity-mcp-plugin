@@ -1532,17 +1532,24 @@ namespace UnityMCP.Editor
 
         public static void BatchEditDeferred(Dictionary<string, object> args, Action<object> resolve)
         {
+            BatchEditDeferred(args, resolve, _ => { });
+        }
+
+        public static void BatchEditDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
+        {
             var componentTypes = CollectBatchEditComponentTypes(args);
             bool refreshAssets = GetBool(args, "refreshAssets", true);
             if (GetBool(args, "waitForTypes", true) == false || componentTypes.Count == 0)
             {
                 if (refreshAssets)
                 {
-                    RefreshAssetsThen(args, resolve, () => BatchEdit(args));
+                    RefreshAssetsThenDeferred(args, resolve,
+                        () => StartBatchEditDeferred(args, resolve, progress));
                 }
                 else
                 {
-                    resolve(BatchEdit(args));
+                    StartBatchEditDeferred(args, resolve, progress);
                 }
 
                 return;
@@ -1585,7 +1592,9 @@ namespace UnityMCP.Editor
                         double stableElapsedMs = (EditorApplication.timeSinceStartup - stableStartTime) * 1000d;
                         if (stableElapsedMs >= stableMs)
                         {
-                            complete(BatchEdit(args));
+                            if (tick != null)
+                                EditorApplication.update -= tick;
+                            StartBatchEditDeferred(args, resolve, progress);
                             return;
                         }
                     }
@@ -1625,10 +1634,271 @@ namespace UnityMCP.Editor
             tick();
         }
 
+        private sealed class BatchEditDeferredState
+        {
+            public string AssetPath;
+            public List<Dictionary<string, object>> Operations;
+            public string BeforeSnapshot;
+            public GameObject Root;
+            public readonly List<Dictionary<string, object>> Summaries = new List<Dictionary<string, object>>();
+            public int NextOperationIndex;
+            public double StartedAt;
+            public int TimeoutMs;
+            public int OperationsPerFrame;
+            public int FrameBudgetMs;
+            public bool SaveAttempted;
+            public bool Saved;
+        }
+
+        private static void StartBatchEditDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
+        {
+            string assetPath = GetString(args, "assetPath");
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                resolve(new Dictionary<string, object>
+                {
+                    { "error", "assetPath is required" },
+                    { "success", false },
+                    { "saved", false },
+                    { "saveAttempted", false },
+                    { "partialPersisted", false },
+                    { "partialPersistedKnown", true },
+                    { "persistedState", "none" },
+                });
+                return;
+            }
+
+            var operations = GetDictionaryList(args, "operations");
+            if (operations.Count == 0)
+            {
+                resolve(new Dictionary<string, object>
+                {
+                    { "error", "operations must contain at least one operation" },
+                    { "success", false },
+                    { "saved", false },
+                    { "saveAttempted", false },
+                    { "partialPersisted", false },
+                    { "partialPersistedKnown", true },
+                    { "persistedState", "none" },
+                });
+                return;
+            }
+
+            var state = new BatchEditDeferredState
+            {
+                AssetPath = assetPath,
+                Operations = operations,
+                BeforeSnapshot = CaptureAssetText(assetPath),
+                StartedAt = EditorApplication.timeSinceStartup,
+                TimeoutMs = Math.Max(1, GetInt(args, "batchEditTimeoutMs", 90000)),
+                OperationsPerFrame = Math.Max(1, GetInt(args, "operationsPerFrame", 25)),
+                FrameBudgetMs = Math.Max(1, GetInt(args, "operationFrameBudgetMs", 8)),
+            };
+
+            try
+            {
+                state.Root = PrefabUtility.LoadPrefabContents(assetPath);
+            }
+            catch (Exception ex)
+            {
+                resolve(new Dictionary<string, object>
+                {
+                    { "error", $"Failed to load prefab at '{assetPath}': {ex.Message}" },
+                    { "success", false },
+                    { "saved", false },
+                    { "saveAttempted", false },
+                    { "partialPersisted", false },
+                    { "partialPersistedKnown", true },
+                    { "persistedState", "none" },
+                });
+                return;
+            }
+
+            if (state.Root == null)
+            {
+                resolve(new Dictionary<string, object>
+                {
+                    { "error", $"Failed to load prefab at '{assetPath}'" },
+                    { "success", false },
+                    { "saved", false },
+                    { "saveAttempted", false },
+                    { "partialPersisted", false },
+                    { "partialPersistedKnown", true },
+                    { "persistedState", "none" },
+                });
+                return;
+            }
+
+            EditorApplication.CallbackFunction tick = null;
+            Action<object> complete = result =>
+            {
+                if (tick != null)
+                    EditorApplication.update -= tick;
+
+                if (state.Root != null)
+                {
+                    PrefabUtility.UnloadPrefabContents(state.Root);
+                    state.Root = null;
+                }
+
+                resolve(result);
+            };
+
+            tick = () =>
+            {
+                try
+                {
+                    double now = EditorApplication.timeSinceStartup;
+                    int elapsedMs = (int)((now - state.StartedAt) * 1000d);
+                    if (elapsedMs >= state.TimeoutMs)
+                    {
+                        complete(BuildBatchEditFailure(state, args,
+                            $"Batch edit timed out after {state.TimeoutMs} ms before saving.",
+                            "batch_edit_timeout", true, elapsedMs, state.NextOperationIndex));
+                        return;
+                    }
+
+                    double frameStartedAt = EditorApplication.timeSinceStartup;
+                    int processedThisFrame = 0;
+                    while (state.NextOperationIndex < state.Operations.Count)
+                    {
+                        int operationIndex = state.NextOperationIndex;
+                        if (!TryApplyBatchOperation(state.Root, state.Operations[operationIndex], operationIndex,
+                                out var summary, out string error))
+                        {
+                            complete(BuildBatchEditFailure(state, args, error, "batch_operation_failed",
+                                false, elapsedMs, operationIndex, state.Operations[operationIndex]));
+                            return;
+                        }
+
+                        state.Summaries.Add(summary);
+                        state.NextOperationIndex++;
+                        processedThisFrame++;
+
+                        progress?.Invoke(BuildBatchEditProgress(state, elapsedMs, "applying"));
+
+                        double frameElapsedMs = (EditorApplication.timeSinceStartup - frameStartedAt) * 1000d;
+                        if (processedThisFrame >= state.OperationsPerFrame ||
+                            frameElapsedMs >= state.FrameBudgetMs)
+                        {
+                            return;
+                        }
+
+                        elapsedMs = (int)((EditorApplication.timeSinceStartup - state.StartedAt) * 1000d);
+                        if (elapsedMs >= state.TimeoutMs)
+                            break;
+                    }
+
+                    if (state.NextOperationIndex < state.Operations.Count)
+                        return;
+
+                    state.SaveAttempted = true;
+                    progress?.Invoke(BuildBatchEditProgress(state, elapsedMs, "saving"));
+                    var savedRoot = PrefabUtility.SaveAsPrefabAsset(state.Root, state.AssetPath);
+                    if (savedRoot == null)
+                        throw new InvalidOperationException($"SaveAsPrefabAsset returned null for '{state.AssetPath}'.");
+                    state.Saved = true;
+
+                    var result = new Dictionary<string, object>
+                    {
+                        { "success", true },
+                        { "saved", true },
+                        { "saveAttempted", true },
+                        { "partialPersisted", false },
+                        { "partialPersistedKnown", true },
+                        { "persistedState", "complete" },
+                        { "prefab", state.Root.name },
+                        { "assetPath", state.AssetPath },
+                        { "operationCount", state.Operations.Count },
+                        { "appliedOperationCount", state.Summaries.Count },
+                        { "operationSummaries", state.Summaries },
+                        { "elapsedMs", (int)((EditorApplication.timeSinceStartup - state.StartedAt) * 1000d) },
+                    };
+                    AddPrefabFileDiff(result, state.BeforeSnapshot, state.AssetPath, args);
+                    complete(result);
+                }
+                catch (Exception ex)
+                {
+                    int elapsedMs = (int)((EditorApplication.timeSinceStartup - state.StartedAt) * 1000d);
+                    complete(BuildBatchEditFailure(state, args,
+                        $"Failed to batch edit prefab: {ex.Message}", "batch_edit_exception",
+                        false, elapsedMs, state.NextOperationIndex, null, ex.StackTrace));
+                }
+            };
+
+            progress?.Invoke(BuildBatchEditProgress(state, 0, "started"));
+            EditorApplication.update += tick;
+            tick();
+        }
+
+        private static Dictionary<string, object> BuildBatchEditProgress(BatchEditDeferredState state,
+            int elapsedMs, string phase)
+        {
+            var saveAttemptedWithoutSuccess = state.SaveAttempted && state.Saved == false;
+            return new Dictionary<string, object>
+            {
+                { "phase", phase },
+                { "assetPath", state.AssetPath },
+                { "operationCount", state.Operations.Count },
+                { "appliedOperationCount", state.Summaries.Count },
+                { "nextOperationIndex", state.NextOperationIndex },
+                { "elapsedMs", elapsedMs },
+                { "timeoutMs", state.TimeoutMs },
+                { "saveAttempted", state.SaveAttempted },
+                { "saved", state.Saved },
+                { "partialPersisted", saveAttemptedWithoutSuccess ? (object)null : false },
+                { "partialPersistedKnown", saveAttemptedWithoutSuccess == false },
+                { "persistedState", state.Saved ? "complete" : saveAttemptedWithoutSuccess ? "unknown" : "none" },
+            };
+        }
+
+        private static Dictionary<string, object> BuildBatchEditFailure(BatchEditDeferredState state,
+            Dictionary<string, object> args, string error, string errorCode, bool retryable, int elapsedMs,
+            int failedOperationIndex, Dictionary<string, object> failedOperation = null, string stackTrace = null)
+        {
+            var saveAttemptedWithoutSuccess = state.SaveAttempted && state.Saved == false;
+            var result = new Dictionary<string, object>
+            {
+                { "error", error },
+                { "message", error },
+                { "errorCode", errorCode },
+                { "retryable", retryable },
+                { "success", false },
+                { "timedOut", errorCode == "batch_edit_timeout" },
+                { "saved", state.Saved },
+                { "saveAttempted", state.SaveAttempted },
+                { "partialPersisted", saveAttemptedWithoutSuccess ? (object)null : false },
+                { "partialPersistedKnown", saveAttemptedWithoutSuccess == false },
+                { "persistedState", state.Saved ? "complete" : saveAttemptedWithoutSuccess ? "unknown" : "none" },
+                { "assetPath", state.AssetPath },
+                { "operationCount", state.Operations.Count },
+                { "appliedOperationCount", state.Summaries.Count },
+                { "nextOperationIndex", state.NextOperationIndex },
+                { "failedOperationIndex", failedOperationIndex },
+                { "operationSummaries", state.Summaries },
+                { "elapsedMs", elapsedMs },
+                { "timeoutMs", state.TimeoutMs },
+            };
+
+            if (failedOperation != null)
+                result["failedOperation"] = failedOperation;
+            if (string.IsNullOrEmpty(stackTrace) == false)
+                result["stackTrace"] = stackTrace;
+
+            return result;
+        }
+
         // ─── Helpers ───
 
         private static void RefreshAssetsThen(Dictionary<string, object> args, Action<object> resolve,
             Func<object> action)
+        {
+            RefreshAssetsThenDeferred(args, resolve, () => resolve(action()));
+        }
+
+        private static void RefreshAssetsThenDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action action)
         {
             int timeoutMs = Math.Max(1, GetInt(args, "assetRefreshTimeoutMs", GetInt(args, "typeResolveTimeoutMs", 30000)));
             int stableMs = Math.Max(0, GetInt(args, "assetRefreshStableMs", GetInt(args, "typeResolveStableMs", 500)));
@@ -1663,7 +1933,9 @@ namespace UnityMCP.Editor
                         double stableElapsedMs = (EditorApplication.timeSinceStartup - stableStartTime) * 1000d;
                         if (stableElapsedMs >= stableMs)
                         {
-                            complete(action());
+                            if (tick != null)
+                                EditorApplication.update -= tick;
+                            action();
                             return;
                         }
                     }

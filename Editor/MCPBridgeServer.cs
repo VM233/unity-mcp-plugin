@@ -41,17 +41,20 @@ namespace UnityMCP.Editor
 
         // Routes whose Unity APIs use async callbacks (fire on next editor frame).
         // Register here instead of adding per-route if-conditions in HandleRequest/HandleQueueSubmit.
-        private static readonly Dictionary<string, Action<Dictionary<string, object>, Action<object>>>
-            _deferredRoutes = new Dictionary<string, Action<Dictionary<string, object>, Action<object>>>
+        private delegate void DeferredRouteHandler(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress);
+
+        private static readonly Dictionary<string, DeferredRouteHandler>
+            _deferredRoutes = new Dictionary<string, DeferredRouteHandler>
         {
-            { "testing/list-tests", MCPTestRunnerCommands.ListTests },
-            { "advanced/execute", ExecuteAdvancedRouteDeferred },
-            { "wait/editor-idle", MCPEditorCommands.WaitForIdle },
-            { "uitoolkit/wait-refresh", MCPUICommands.WaitForUIToolkitRefresh },
-            { "uitoolkit/builder-preview", MCPUICommands.OpenUIBuilderPreview },
-            { "build/run-test", MCPBuildCommands.BuildAndRunTestDeferred },
-            { "packages/update-git", MCPPackageManagerCommands.UpdateGitPackageDeferred },
-            { "prefab-asset/add-component", MCPPrefabAssetCommands.AddComponentDeferred },
+            { "testing/list-tests", (args, resolve, _) => MCPTestRunnerCommands.ListTests(args, resolve) },
+            { "advanced/execute", (args, resolve, _) => ExecuteAdvancedRouteDeferred(args, resolve) },
+            { "wait/editor-idle", (args, resolve, _) => MCPEditorCommands.WaitForIdle(args, resolve) },
+            { "uitoolkit/wait-refresh", (args, resolve, _) => MCPUICommands.WaitForUIToolkitRefresh(args, resolve) },
+            { "uitoolkit/builder-preview", (args, resolve, _) => MCPUICommands.OpenUIBuilderPreview(args, resolve) },
+            { "build/run-test", (args, resolve, _) => MCPBuildCommands.BuildAndRunTestDeferred(args, resolve) },
+            { "packages/update-git", (args, resolve, _) => MCPPackageManagerCommands.UpdateGitPackageDeferred(args, resolve) },
+            { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },
             { "prefab-asset/batch-edit", MCPPrefabAssetCommands.BatchEditDeferred },
         };
 
@@ -379,7 +382,7 @@ namespace UnityMCP.Editor
                 if (_deferredRoutes.TryGetValue(apiPath, out var deferredHandler))
                 {
                     var result = MCPRequestQueue.ExecuteDeferredWithTracking(agentId, apiPath,
-                        resolve => deferredHandler(ParseJson(body), resolve));
+                        (resolve, progress) => deferredHandler(ParseJson(body), resolve, progress));
                     SendJson(response, 200, result);
                     return;
                 }
@@ -427,8 +430,8 @@ namespace UnityMCP.Editor
                 MCPRequestQueue.RequestTicket ticket;
                 if (_deferredRoutes.TryGetValue(apiPath, out var deferredHandler))
                 {
-                    ticket = MCPRequestQueue.SubmitDeferredRequest(agentId, apiPath, resolve =>
-                        deferredHandler(ParseJson(innerBody), resolve));
+                    ticket = MCPRequestQueue.SubmitDeferredRequest(agentId, apiPath, (resolve, progress) =>
+                        deferredHandler(ParseJson(innerBody), resolve, progress));
                 }
                 else
                 {
@@ -543,7 +546,7 @@ namespace UnityMCP.Editor
 
             if (_deferredRoutes.TryGetValue(route, out var deferredHandler))
             {
-                deferredHandler(ParseJson(nestedBody), resolve);
+                deferredHandler(ParseJson(nestedBody), resolve, _ => { });
                 return;
             }
 
