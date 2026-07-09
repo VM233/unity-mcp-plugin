@@ -13,11 +13,15 @@ namespace UnityMCP.Editor
         public static object GetEditorState()
         {
             var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
+            bool isPlayingOrWillChangePlaymode = EditorApplication.isPlayingOrWillChangePlaymode;
             return new Dictionary<string, object>
             {
                 { "isPlaying", EditorApplication.isPlaying },
                 { "isPaused", EditorApplication.isPaused },
                 { "isCompiling", EditorApplication.isCompiling },
+                { "isUpdating", EditorApplication.isUpdating },
+                { "isChangingPlayMode", isPlayingOrWillChangePlaymode != EditorApplication.isPlaying },
+                { "isPlayingOrWillChangePlaymode", isPlayingOrWillChangePlaymode },
                 { "activeScene", scene.name },
                 { "activeScenePath", scene.path },
                 { "sceneDirty", scene.isDirty },

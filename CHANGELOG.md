@@ -20,6 +20,7 @@ All notable changes to this package will be documented in this file.
 - **Serialized complex fields** - component property read/write now expands and accepts serialized arrays/lists plus generic child objects instead of reporting complex list fields only as `Generic`.
 - **Deferred write exclusivity** - multi-frame write requests now block later writes from leaving the queue until the active write completes, preventing interleaved asset edits while a deferred prefab batch is still applying.
 - **Queue failure status details** - `queue/status` now includes top-level `success=false`, `error`, and `message` fields for failed tickets so MCP clients can preserve validation and project-tool errors.
+- **Editor idle diagnostics** - `editor/state` now includes `isUpdating`, `isChangingPlayMode`, and `isPlayingOrWillChangePlaymode` so the MCP server can distinguish true Editor busyness from queue polling false negatives.
 - **Package meta lint false positives** - `packages/lint-metas` now skips hidden dotfiles and dot directories such as `.gitattributes`, `.gitignore`, and `.github`, matching Unity's non-imported file behavior.
 - **Error result consistency** - bridge and queue paths now normalize error payloads with `success=false`, `errorCode`, `message`, and `retryable` while keeping existing successful result payloads backward-compatible.
 - **Long direct calls** - synchronous direct calls that exceed the immediate wait window now return a retryable response with a `ticketId` and `pollRoute` while the queued Unity operation continues in the background.
