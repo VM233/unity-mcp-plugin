@@ -149,6 +149,7 @@ namespace UnityMCP.Editor
                 "asset/refresh",
                 "asset/rename",
                 "asset/move",
+                "asset/move-batch",
                 "asset/export-unitypackage",
                 "animation/update-state",
                 "animation/update-transition",
@@ -618,6 +619,8 @@ namespace UnityMCP.Editor
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
                     return "Safely move a Unity asset using AssetDatabase while preserving its .meta GUID.";
+                case "asset/move-batch":
+                    return "Preflight and move multiple Unity assets in one AssetDatabase editing block, preserving .meta GUIDs and rolling back completed moves if a later move fails.";
                 case "asset/export-unitypackage":
                     return "Export one or more Unity assets to a .unitypackage file using AssetDatabase.ExportPackage.";
                 case "console/query":
@@ -1004,6 +1007,8 @@ namespace UnityMCP.Editor
                         Prop("destinationFolder", "string", "Existing folder path to keep the same file name."),
                         Prop("dryRun", "boolean", "Validate and return expected paths without moving.")
                     ));
+                case "asset/move-batch":
+                    return AssetMoveBatchSchema();
                 case "console/query":
                     return Schema(Props(
                         Prop("count", "number", "Maximum returned entries. Defaults to 50."),
@@ -1659,6 +1664,29 @@ namespace UnityMCP.Editor
             };
 
             return Schema(properties, "assetPath", "operations");
+        }
+
+        private static Dictionary<string, object> AssetMoveBatchSchema()
+        {
+            var moveProperties = Props(
+                Prop("path", "string", "Current asset path."),
+                Prop("assetPath", "string", "Alias for path."),
+                Prop("destinationPath", "string", "Destination asset path, or an existing folder path to keep the same file name."),
+                Prop("targetPath", "string", "Alias for destinationPath."),
+                Prop("destinationFolder", "string", "Existing folder path to keep the same file name."),
+                Prop("targetFolder", "string", "Alias for destinationFolder.")
+            );
+
+            var properties = Props(
+                Prop("dryRun", "boolean", "Validate every move and return expected paths without moving."));
+            properties["moves"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "Move requests. Every item needs path or assetPath and one destination path or folder field. Duplicate sources and targets are rejected before any move starts." },
+                { "items", Schema(moveProperties) }
+            };
+
+            return Schema(properties, "moves");
         }
 
         private static Dictionary<string, object> BatchOperationSchema(string operationType, string description,

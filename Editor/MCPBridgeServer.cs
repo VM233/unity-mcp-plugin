@@ -783,6 +783,8 @@ namespace UnityMCP.Editor
                     return MCPAssetCommands.Rename(ParseJson(body));
                 case "asset/move":
                     return MCPAssetCommands.Move(ParseJson(body));
+                case "asset/move-batch":
+                    return MCPAssetCommands.MoveBatch(ParseJson(body));
                 case "asset/create-prefab":
                     return MCPAssetCommands.CreatePrefab(ParseJson(body));
                 case "asset/instantiate-prefab":

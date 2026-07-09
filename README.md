@@ -58,6 +58,7 @@ http://127.0.0.1:7890/api/ping
 | Safe assets | `unity_asset_refresh` | `asset/refresh` | Refresh AssetDatabase, optionally forcing update or importing specific asset paths before prefab/package operations. |
 | Safe assets | `unity_asset_rename` | `asset/rename` | Rename an asset through `AssetDatabase.RenameAsset`, preserving `.meta`, GUID, and references. |
 | Safe assets | `unity_asset_move` | `asset/move` | Move an asset through `AssetDatabase.MoveAsset`, preserving `.meta`, GUID, and references. |
+| Safe assets | `unity_asset_move_batch` | `asset/move-batch` | Preflight and move multiple assets in one editing block, preserving `.meta` GUIDs and rolling back completed moves if a later move fails. |
 | Serialization | `unity_serialized_object_get` | `serialized-object/get` | Read serialized properties from a scene object, component, or asset. |
 | Serialization | `unity_serialized_object_set` | `serialized-object/set` | Set one serialized property on a scene object, component, or asset. |
 | Console inspection | `unity_console_query` | `console/query` | Filter recent console entries by time, log type, message, source stack frame, full stack text, or only entries after the last Play transition. |

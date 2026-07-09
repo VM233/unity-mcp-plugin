@@ -5,6 +5,7 @@ All notable changes to this package will be documented in this file.
 ## Unreleased
 
 ### Added
+- **Batch asset moves** - `asset/move-batch` / `unity_asset_move_batch` preflights all move requests before mutating assets, moves them inside one AssetDatabase editing block, and reports per-asset GUID/meta verification. If a move fails, completed moves are reversed before the response is returned.
 - **Project tool selection hints** - `MCPProjectToolAttribute` can now declare `ReadOnly`, `MutatesAssets`, `Dangerous`, `LongRunning`, `MayReloadDomain`, and `RequiresPlayMode`; `_meta/tools` also infers common read-only `get/list/*summary` project tools and mutating asset/prefab tools when hints are not explicit.
 - **Tool metadata profiles** - `_meta/tools` now uses a single `ToolProfile` registry for first-class/fallback/lazy exposure plus `readOnly`, `mutatesAssets`, `dangerous`, `longRunning`, `mayReloadDomain`, and `requiresPlayMode` hints. First-class tools also include MCP-shaped `name`, `input_schema`, `annotations`, and an `mcpTools` list so hosts can register concrete tools without guessing field names.
 - **Project tool input validation** - project tools declared with `MCPProjectToolAttribute.InputSchemaJson` now validate schema shape at discovery time and validate required fields, primitive JSON types, and `additionalProperties=false` before execution.
