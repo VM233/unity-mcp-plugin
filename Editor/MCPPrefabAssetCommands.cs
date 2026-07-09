@@ -1638,7 +1638,7 @@ namespace UnityMCP.Editor
         {
             public string AssetPath;
             public List<Dictionary<string, object>> Operations;
-            public string BeforeSnapshot;
+            public AssetTextSnapshot BeforeSnapshot;
             public GameObject Root;
             public readonly List<Dictionary<string, object>> Summaries = new List<Dictionary<string, object>>();
             public int NextOperationIndex;

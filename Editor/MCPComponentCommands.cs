@@ -757,10 +757,10 @@ namespace UnityMCP.Editor
 
             if (value is IList rawList && !(value is string))
             {
-                var list = new List<object>();
+                var convertedItems = new List<object>();
                 foreach (var item in rawList)
-                    list.Add(item);
-                return list;
+                    convertedItems.Add(item);
+                return convertedItems;
             }
 
             return null;
