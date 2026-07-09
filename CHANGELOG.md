@@ -5,6 +5,7 @@ All notable changes to this package will be documented in this file.
 ## Unreleased
 
 ### Added
+- **Project tool selection hints** - `MCPProjectToolAttribute` can now declare `ReadOnly`, `MutatesAssets`, `Dangerous`, `LongRunning`, `MayReloadDomain`, and `RequiresPlayMode`; `_meta/tools` also infers common read-only `get/list/*summary` project tools and mutating asset/prefab tools when hints are not explicit.
 - **Tool metadata profiles** - `_meta/tools` now uses a single `ToolProfile` registry for first-class/fallback/lazy exposure plus `readOnly`, `mutatesAssets`, `dangerous`, `longRunning`, `mayReloadDomain`, and `requiresPlayMode` hints. First-class tools also include MCP-shaped `name`, `input_schema`, `annotations`, and an `mcpTools` list so hosts can register concrete tools without guessing field names.
 - **Project tool input validation** - project tools declared with `MCPProjectToolAttribute.InputSchemaJson` now validate schema shape at discovery time and validate required fields, primitive JSON types, and `additionalProperties=false` before execution.
 - **Reload-aware queue snapshots** - queue tickets persist small status snapshots through Unity domain reloads. Polling a lost ticket now returns a retryable `ticket_lost_after_reload` response instead of a generic not-found result.
@@ -15,6 +16,7 @@ All notable changes to this package will be documented in this file.
 - **First-class route metadata** — stable routes advertised in the README now include `firstClass=true` in `_meta/tools`, so MCP clients can expose concrete tools with route-owned schemas and descriptions instead of routing them through the generic advanced entry.
 
 ### Fixed
+- **Queue failure status details** - `queue/status` now includes top-level `success=false`, `error`, and `message` fields for failed tickets so MCP clients can preserve validation and project-tool errors.
 - **Package meta lint false positives** - `packages/lint-metas` now skips hidden dotfiles and dot directories such as `.gitattributes`, `.gitignore`, and `.github`, matching Unity's non-imported file behavior.
 - **Error result consistency** - bridge and queue paths now normalize error payloads with `success=false`, `errorCode`, `message`, and `retryable` while keeping existing successful result payloads backward-compatible.
 - **Long direct calls** - synchronous direct calls that exceed the immediate wait window now return a retryable response with a `ticketId` and `pollRoute` while the queued Unity operation continues in the background.

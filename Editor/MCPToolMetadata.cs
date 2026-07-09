@@ -398,8 +398,19 @@ namespace UnityMCP.Editor
                     { "additionalProperties", true }
                 };
 
-            var profile = ToolProfile.FirstClass(mutatesAssets: true);
             string toolName = ProjectToolNameToToolName(projectToolName);
+            bool explicitMutatesAssets = GetBool(projectTool, "mutatesAssets", false);
+            bool readOnly = GetBool(projectTool, "readOnly", false) ||
+                            (!explicitMutatesAssets && InferProjectToolReadOnly(projectToolName));
+            bool mutatesAssets = explicitMutatesAssets ||
+                                 (!readOnly && InferProjectToolMutatesAssets(projectToolName));
+            bool dangerous = GetBool(projectTool, "dangerous", false);
+            bool longRunning = GetBool(projectTool, "longRunning", false);
+            bool mayReloadDomain = GetBool(projectTool, "mayReloadDomain", false);
+            bool requiresPlayMode = GetBool(projectTool, "requiresPlayMode", false);
+            var profile = ToolProfile.FirstClass(readOnly: readOnly, mutatesAssets: mutatesAssets,
+                dangerous: dangerous, longRunning: longRunning, mayReloadDomain: mayReloadDomain,
+                requiresPlayMode: requiresPlayMode);
 
             return new Dictionary<string, object>
             {
@@ -414,15 +425,64 @@ namespace UnityMCP.Editor
                 { "firstClass", true },
                 { "exposure", ExposureFirstClass },
                 { "preferred", true },
-                { "readOnly", false },
-                { "mutatesAssets", true },
-                { "dangerous", false },
-                { "longRunning", false },
-                { "mayReloadDomain", false },
-                { "requiresPlayMode", false },
+                { "readOnly", readOnly },
+                { "mutatesAssets", mutatesAssets },
+                { "dangerous", dangerous },
+                { "longRunning", longRunning },
+                { "mayReloadDomain", mayReloadDomain },
+                { "requiresPlayMode", requiresPlayMode },
                 { "annotations", profile.ToAnnotations(toolName) },
                 { "source", projectTool.TryGetValue("source", out var source) ? source : "" }
             };
+        }
+
+        private static bool GetBool(Dictionary<string, object> dictionary, string key, bool fallback)
+        {
+            if (dictionary == null || !dictionary.TryGetValue(key, out var value) || value == null)
+                return fallback;
+
+            if (value is bool boolValue)
+                return boolValue;
+
+            return bool.TryParse(value.ToString(), out var parsed) ? parsed : fallback;
+        }
+
+        private static bool InferProjectToolReadOnly(string projectToolName)
+        {
+            string name = (projectToolName ?? "").ToLowerInvariant();
+            string action = name.Contains("/") ? name.Substring(name.LastIndexOf('/') + 1) : name;
+            return action.StartsWith("get-") ||
+                   action.StartsWith("list-") ||
+                   action.StartsWith("find-") ||
+                   action.StartsWith("inspect-") ||
+                   action.StartsWith("query-") ||
+                   action.EndsWith("-summary") ||
+                   action.EndsWith("-state") ||
+                   action.EndsWith("-info") ||
+                   action.EndsWith("-status");
+        }
+
+        private static bool InferProjectToolMutatesAssets(string projectToolName)
+        {
+            string name = (projectToolName ?? "").ToLowerInvariant();
+            string action = name.Contains("/") ? name.Substring(name.LastIndexOf('/') + 1) : name;
+            bool assetLike = action.Contains("asset") ||
+                             action.Contains("prefab") ||
+                             action.Contains("resource") ||
+                             action.Contains("config");
+
+            if (!assetLike)
+                return false;
+
+            return action.StartsWith("add-") ||
+                   action.StartsWith("create-") ||
+                   action.StartsWith("delete-") ||
+                   action.StartsWith("move-") ||
+                   action.StartsWith("rename-") ||
+                   action.StartsWith("remove-") ||
+                   action.StartsWith("replace-") ||
+                   action.StartsWith("set-") ||
+                   action.StartsWith("update-");
         }
 
         private static ToolProfile GetToolProfile(string route)

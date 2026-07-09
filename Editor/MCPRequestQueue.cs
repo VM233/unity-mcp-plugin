@@ -880,6 +880,18 @@ namespace UnityMCP.Editor
             if (t.CompletedAt.HasValue)
                 dict["completedAt"] = t.CompletedAt.Value.ToString("O");
 
+            if (t.Status == RequestStatus.Failed ||
+                t.Status == RequestStatus.TimedOut ||
+                t.Status == RequestStatus.LostAfterReload)
+            {
+                string message = string.IsNullOrEmpty(t.ErrorMessage)
+                    ? "Queue processing failed."
+                    : t.ErrorMessage;
+                dict["success"] = false;
+                dict["error"] = message;
+                dict["message"] = message;
+            }
+
             // Include result for completed tickets
             if (t.Status == RequestStatus.Completed || t.Status == RequestStatus.Failed)
                 dict["result"] = t.Result;

@@ -15,6 +15,18 @@ namespace UnityMCP.Editor
 
         public string InputSchemaJson { get; set; }
 
+        public bool ReadOnly { get; set; }
+
+        public bool MutatesAssets { get; set; }
+
+        public bool Dangerous { get; set; }
+
+        public bool LongRunning { get; set; }
+
+        public bool MayReloadDomain { get; set; }
+
+        public bool RequiresPlayMode { get; set; }
+
         public MCPProjectToolAttribute(string toolName)
         {
             ToolName = toolName;
@@ -264,6 +276,12 @@ namespace UnityMCP.Editor
             public string Source;
             public string ValidationError;
             public Dictionary<string, object> InputSchema;
+            public bool ReadOnly;
+            public bool MutatesAssets;
+            public bool Dangerous;
+            public bool LongRunning;
+            public bool MayReloadDomain;
+            public bool RequiresPlayMode;
 
             private MethodInfo method;
             private Type type;
@@ -275,6 +293,12 @@ namespace UnityMCP.Editor
                     ToolName = attribute.ToolName,
                     Description = attribute.Description ?? "",
                     Source = method.DeclaringType.FullName + "." + method.Name,
+                    ReadOnly = attribute.ReadOnly,
+                    MutatesAssets = attribute.MutatesAssets,
+                    Dangerous = attribute.Dangerous,
+                    LongRunning = attribute.LongRunning,
+                    MayReloadDomain = attribute.MayReloadDomain,
+                    RequiresPlayMode = attribute.RequiresPlayMode,
                     method = method
                 };
 
@@ -291,6 +315,12 @@ namespace UnityMCP.Editor
                     ToolName = attribute.ToolName,
                     Description = attribute.Description ?? "",
                     Source = type.FullName,
+                    ReadOnly = attribute.ReadOnly,
+                    MutatesAssets = attribute.MutatesAssets,
+                    Dangerous = attribute.Dangerous,
+                    LongRunning = attribute.LongRunning,
+                    MayReloadDomain = attribute.MayReloadDomain,
+                    RequiresPlayMode = attribute.RequiresPlayMode,
                     type = type
                 };
 
@@ -326,6 +356,12 @@ namespace UnityMCP.Editor
                     { "source", Source },
                     { "route", GetDirectRoute(ToolName) },
                     { "inputSchema", InputSchema ?? CreateDefaultInputSchema() },
+                    { "readOnly", ReadOnly },
+                    { "mutatesAssets", MutatesAssets },
+                    { "dangerous", Dangerous },
+                    { "longRunning", LongRunning },
+                    { "mayReloadDomain", MayReloadDomain },
+                    { "requiresPlayMode", RequiresPlayMode },
                     { "enforcesInputSchema", true },
                     { "valid", string.IsNullOrEmpty(ValidationError) },
                     { "validationError", ValidationError ?? "" }
