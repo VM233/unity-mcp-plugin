@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
@@ -102,7 +103,7 @@ namespace UnityMCP.Editor
                 toolName = GetString(args, "name");
 
             if (string.IsNullOrEmpty(toolName))
-                return new { error = "toolName is required" };
+                return MCPResponse.Error("toolName is required", "invalid_arguments");
 
             var toolArgs = GetDictionary(args, "args")
                 ?? GetDictionary(args, "arguments")
@@ -120,44 +121,59 @@ namespace UnityMCP.Editor
 
             if (matches.Count == 0)
             {
-                return new Dictionary<string, object>
-                {
-                    { "error", $"Project tool '{toolName}' was not found." },
-                    { "availableTools", DiscoverTools().Select(tool => tool.ToolName).OrderBy(name => name).ToList() }
-                };
+                return MCPResponse.Error($"Project tool '{toolName}' was not found.", "project_tool_not_found",
+                    false, new Dictionary<string, object>
+                    {
+                        { "availableTools", DiscoverTools().Select(tool => tool.ToolName).OrderBy(name => name).ToList() }
+                    });
             }
 
             if (matches.Count > 1)
             {
-                return new Dictionary<string, object>
-                {
-                    { "error", $"Project tool '{toolName}' is registered more than once." },
-                    { "matches", matches.Select(tool => tool.ToDictionary()).ToList() }
-                };
+                return MCPResponse.Error($"Project tool '{toolName}' is registered more than once.",
+                    "duplicate_project_tool", false, new Dictionary<string, object>
+                    {
+                        { "matches", matches.Select(tool => tool.ToDictionary()).ToList() }
+                    });
             }
 
             var descriptor = matches[0];
             if (!string.IsNullOrEmpty(descriptor.ValidationError))
-                return new { error = descriptor.ValidationError, tool = descriptor.ToDictionary() };
+                return MCPResponse.Error(descriptor.ValidationError, "invalid_project_tool", false,
+                    new Dictionary<string, object> { { "tool", descriptor.ToDictionary() } });
+
+            if (!descriptor.TryValidateArguments(toolArgs, out var argumentError))
+            {
+                return MCPResponse.Error(argumentError, "invalid_arguments", false,
+                    new Dictionary<string, object> { { "toolName", descriptor.ToolName } });
+            }
 
             try
             {
                 object result = descriptor.Invoke(toolArgs);
-                return new Dictionary<string, object>
+                return MCPResponse.Success(result, new Dictionary<string, object>
                 {
-                    { "success", true },
                     { "toolName", descriptor.ToolName },
-                    { "result", result }
-                };
+                });
             }
             catch (TargetInvocationException ex)
             {
                 Exception inner = ex.InnerException ?? ex;
-                return new { error = inner.Message, stackTrace = inner.StackTrace, toolName = descriptor.ToolName };
+                return MCPResponse.Error(inner.Message, "project_tool_exception", false,
+                    new Dictionary<string, object>
+                    {
+                        { "stackTrace", inner.StackTrace },
+                        { "toolName", descriptor.ToolName }
+                    });
             }
             catch (Exception ex)
             {
-                return new { error = ex.Message, stackTrace = ex.StackTrace, toolName = descriptor.ToolName };
+                return MCPResponse.Error(ex.Message, "project_tool_exception", false,
+                    new Dictionary<string, object>
+                    {
+                        { "stackTrace", ex.StackTrace },
+                        { "toolName", descriptor.ToolName }
+                    });
             }
         }
 
@@ -310,6 +326,7 @@ namespace UnityMCP.Editor
                     { "source", Source },
                     { "route", GetDirectRoute(ToolName) },
                     { "inputSchema", InputSchema ?? CreateDefaultInputSchema() },
+                    { "enforcesInputSchema", true },
                     { "valid", string.IsNullOrEmpty(ValidationError) },
                     { "validationError", ValidationError ?? "" }
                 };
@@ -326,13 +343,60 @@ namespace UnityMCP.Editor
                 try
                 {
                     InputSchema = MiniJson.Deserialize(inputSchemaJson) as Dictionary<string, object>;
-                    return InputSchema == null ? "InputSchemaJson must deserialize to a JSON object." : null;
+                    if (InputSchema == null)
+                        return "InputSchemaJson must deserialize to a JSON object.";
+
+                    return ValidateInputSchema(InputSchema);
                 }
                 catch (Exception ex)
                 {
                     InputSchema = CreateDefaultInputSchema();
                     return $"InputSchemaJson is invalid JSON: {ex.Message}";
                 }
+            }
+
+            public bool TryValidateArguments(Dictionary<string, object> args, out string error)
+            {
+                error = null;
+                args = args ?? new Dictionary<string, object>();
+                var schema = InputSchema ?? CreateDefaultInputSchema();
+                var properties = GetSchemaProperties(schema);
+                var required = GetRequiredProperties(schema);
+                var errors = new List<string>();
+
+                foreach (string requiredName in required)
+                {
+                    if (!args.ContainsKey(requiredName) || args[requiredName] == null)
+                        errors.Add($"Missing required argument '{requiredName}'.");
+                }
+
+                if (IsAdditionalPropertiesFalse(schema))
+                {
+                    foreach (string key in args.Keys)
+                    {
+                        if (!properties.ContainsKey(key))
+                            errors.Add($"Unknown argument '{key}'.");
+                    }
+                }
+
+                foreach (var pair in args)
+                {
+                    if (!properties.TryGetValue(pair.Key, out var propertySchemaObj))
+                        continue;
+
+                    var propertySchema = propertySchemaObj as Dictionary<string, object>;
+                    if (propertySchema == null)
+                        continue;
+
+                    if (!MatchesSchemaType(pair.Value, propertySchema, out var typeError))
+                        errors.Add($"Argument '{pair.Key}' {typeError}");
+                }
+
+                if (errors.Count == 0)
+                    return true;
+
+                error = string.Join(" ", errors);
+                return false;
             }
 
             private string ValidateMethod()
@@ -378,6 +442,125 @@ namespace UnityMCP.Editor
                     { "properties", new Dictionary<string, object>() },
                     { "additionalProperties", true }
                 };
+            }
+
+            private static string ValidateInputSchema(Dictionary<string, object> schema)
+            {
+                if (schema.TryGetValue("type", out var type) && type != null &&
+                    type.ToString() != "object")
+                    return "InputSchemaJson root type must be object.";
+
+                var properties = GetSchemaProperties(schema);
+                if (properties == null)
+                    return "InputSchemaJson properties must be a JSON object.";
+
+                var required = GetRequiredProperties(schema);
+                foreach (string requiredName in required)
+                {
+                    if (!properties.ContainsKey(requiredName))
+                        return $"InputSchemaJson required property '{requiredName}' is not declared in properties.";
+                }
+
+                return null;
+            }
+
+            private static Dictionary<string, object> GetSchemaProperties(Dictionary<string, object> schema)
+            {
+                if (!schema.TryGetValue("properties", out var propertiesObj) || propertiesObj == null)
+                    return new Dictionary<string, object>();
+
+                return propertiesObj as Dictionary<string, object>;
+            }
+
+            private static List<string> GetRequiredProperties(Dictionary<string, object> schema)
+            {
+                if (!schema.TryGetValue("required", out var requiredObj) || requiredObj == null)
+                    return new List<string>();
+
+                var list = requiredObj as IList;
+                if (list == null)
+                    return new List<string>();
+
+                return list.Cast<object>()
+                    .Where(item => item != null)
+                    .Select(item => item.ToString())
+                    .Where(item => !string.IsNullOrEmpty(item))
+                    .ToList();
+            }
+
+            private static bool IsAdditionalPropertiesFalse(Dictionary<string, object> schema)
+            {
+                return schema.TryGetValue("additionalProperties", out var value) &&
+                       value is bool boolValue &&
+                       boolValue == false;
+            }
+
+            private static bool MatchesSchemaType(object value, Dictionary<string, object> propertySchema,
+                out string error)
+            {
+                error = null;
+                if (!propertySchema.TryGetValue("type", out var typeObj) || typeObj == null || value == null)
+                    return true;
+
+                var allowedTypes = GetAllowedTypes(typeObj);
+                if (allowedTypes.Count == 0)
+                    return true;
+
+                foreach (string allowedType in allowedTypes)
+                {
+                    if (MatchesType(value, allowedType))
+                        return true;
+                }
+
+                error = $"must be {string.Join(" or ", allowedTypes)}.";
+                return false;
+            }
+
+            private static List<string> GetAllowedTypes(object typeObj)
+            {
+                if (typeObj is string typeString)
+                    return new List<string> { typeString };
+
+                var list = typeObj as IList;
+                if (list == null)
+                    return new List<string>();
+
+                return list.Cast<object>()
+                    .Where(item => item != null)
+                    .Select(item => item.ToString())
+                    .Where(item => !string.IsNullOrEmpty(item))
+                    .ToList();
+            }
+
+            private static bool MatchesType(object value, string type)
+            {
+                switch (type)
+                {
+                    case "string":
+                        return value is string;
+                    case "number":
+                        return IsNumber(value);
+                    case "integer":
+                        return value is byte || value is sbyte || value is short || value is ushort ||
+                               value is int || value is uint || value is long || value is ulong;
+                    case "boolean":
+                        return value is bool;
+                    case "object":
+                        return value is IDictionary;
+                    case "array":
+                        return value is IList && !(value is string);
+                    case "null":
+                        return value == null;
+                    default:
+                        return true;
+                }
+            }
+
+            private static bool IsNumber(object value)
+            {
+                return value is byte || value is sbyte || value is short || value is ushort ||
+                       value is int || value is uint || value is long || value is ulong ||
+                       value is float || value is double || value is decimal;
             }
 
             private static string CombineValidationErrors(string first, string second)

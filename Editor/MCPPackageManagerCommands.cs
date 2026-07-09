@@ -648,7 +648,8 @@ namespace UnityMCP.Editor
         private static bool ShouldSkipPath(string path)
         {
             string normalized = NormalizePath(path);
-            return HasPathSegment(normalized, ".git") ||
+            return HasHiddenPathSegment(normalized) ||
+                   HasPathSegment(normalized, ".git") ||
                    HasPathSegment(normalized, "node_modules") ||
                    HasPathSegment(normalized, "Temp") ||
                    HasPathSegment(normalized, "obj") ||
@@ -658,6 +659,23 @@ namespace UnityMCP.Editor
         private static bool HasPathSegment(string path, string segment)
         {
             return path.Split('/').Contains(segment);
+        }
+
+        private static bool HasHiddenPathSegment(string path)
+        {
+            foreach (string segment in path.Split('/'))
+            {
+                if (string.IsNullOrEmpty(segment))
+                    continue;
+
+                if (segment == "." || segment == "..")
+                    continue;
+
+                if (segment.StartsWith(".", StringComparison.Ordinal))
+                    return true;
+            }
+
+            return false;
         }
 
         private static string GetRelativePath(string root, string path)

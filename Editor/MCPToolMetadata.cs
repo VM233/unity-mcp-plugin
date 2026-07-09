@@ -10,74 +10,180 @@ namespace UnityMCP.Editor
 {
     internal static class MCPToolMetadata
     {
-        private static readonly HashSet<string> FirstClassRoutes = new HashSet<string>(StringComparer.Ordinal)
+        private const string ExposureFirstClass = "first-class";
+        private const string ExposureFallback = "fallback";
+        private const string ExposureLazy = "lazy";
+
+        private sealed class ToolProfile
         {
-            "packages/update-git",
-            "mcp/health",
-            "mcp/set-autostart",
-            "wait/editor-idle",
-            "instance/current",
-            "instance/list",
-            "instance/resolve",
-            "instance/assert-project",
-            "scene/instantiate-prefab",
-            "serialized-object/get",
-            "serialized-object/set",
-            "prefab-asset/add-component",
-            "prefab-asset/add-gameobject",
-            "prefab-asset/batch-edit",
-            "prefab-asset/get-properties",
-            "prefab-asset/hierarchy",
-            "prefab-asset/instantiate-child-prefab",
-            "prefab-asset/instantiate-prefab",
-            "prefab-asset/move-gameobject",
-            "prefab-asset/find",
-            "prefab-asset/remove-component",
-            "prefab-asset/remove-gameobject",
-            "prefab-asset/set-property",
-            "prefab-asset/set-reference",
-            "prefab-asset/transaction-edit",
-            "asset/refresh",
-            "asset/rename",
-            "asset/move",
-            "asset/export-unitypackage",
-            "compilation/errors",
-            "console/query",
-            "animation/transition-info",
-            "animation/update-state",
-            "animation/update-transition",
-            "animation/connect-states",
-            "uitoolkit/asset-inspect",
-            "uitoolkit/runtime-documents",
-            "uitoolkit/runtime-tree",
-            "uitoolkit/runtime-query",
-            "uitoolkit/runtime-style",
-            "uitoolkit/runtime-repaint",
-            "uitoolkit/refresh",
-            "uitoolkit/wait-refresh",
-            "uitoolkit/assert-layout",
-            "uitoolkit/locate-element",
-            "uitoolkit/capture-element",
-            "uitoolkit/compare-element",
-            "uitoolkit/generated-children",
-            "uitoolkit/resource-audit",
-            "uitoolkit/builder-preview",
-            "screenshot/crop",
-            "graphics/image-alpha-bounds",
-            "graphics/rect-gap",
-            "graphics/annotate-rects",
-            "graphics/compare-images",
-            "sprite/sheet-info",
-            "sprite/replace-and-slice",
-            "sprite/slice-sheet",
-            "sprite/update-animation-clip",
-            "sprite/replace-slice-update-clip",
-            "texture/apply-sprite-preset",
-            "texture/import-image",
-            "texture/check-ui-import-settings",
-            "build/run-test",
-            "project-tools/list",
-        };
+            public string Exposure;
+            public bool Preferred;
+            public bool ReadOnly;
+            public bool MutatesAssets;
+            public bool Dangerous;
+            public bool LongRunning;
+            public bool MayReloadDomain;
+            public bool RequiresPlayMode;
+
+            public static ToolProfile FirstClass(bool readOnly = false, bool mutatesAssets = false,
+                bool dangerous = false, bool longRunning = false, bool mayReloadDomain = false,
+                bool requiresPlayMode = false)
+            {
+                return new ToolProfile
+                {
+                    Exposure = ExposureFirstClass,
+                    Preferred = true,
+                    ReadOnly = readOnly,
+                    MutatesAssets = mutatesAssets,
+                    Dangerous = dangerous,
+                    LongRunning = longRunning,
+                    MayReloadDomain = mayReloadDomain,
+                    RequiresPlayMode = requiresPlayMode,
+                };
+            }
+
+            public static ToolProfile Fallback()
+            {
+                return new ToolProfile
+                {
+                    Exposure = ExposureFallback,
+                    Preferred = false,
+                    ReadOnly = false,
+                    MutatesAssets = true,
+                    Dangerous = true,
+                    LongRunning = false,
+                    MayReloadDomain = false,
+                    RequiresPlayMode = false,
+                };
+            }
+
+            public static ToolProfile Lazy()
+            {
+                return new ToolProfile
+                {
+                    Exposure = ExposureLazy,
+                    Preferred = false,
+                    ReadOnly = false,
+                    MutatesAssets = false,
+                    Dangerous = false,
+                    LongRunning = false,
+                    MayReloadDomain = false,
+                    RequiresPlayMode = false,
+                };
+            }
+
+            public Dictionary<string, object> ToAnnotations(string title)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "title", title },
+                    { "readOnlyHint", ReadOnly },
+                    { "destructiveHint", Dangerous },
+                    { "idempotentHint", ReadOnly },
+                    { "openWorldHint", false },
+                };
+            }
+        }
+
+        private static readonly Dictionary<string, ToolProfile> ToolProfiles = BuildToolProfiles();
+
+        private static Dictionary<string, ToolProfile> BuildToolProfiles()
+        {
+            var profiles = new Dictionary<string, ToolProfile>(StringComparer.Ordinal);
+
+            AddProfile(profiles, ToolProfile.FirstClass(readOnly: true),
+                "mcp/health",
+                "instance/current",
+                "instance/list",
+                "instance/resolve",
+                "instance/assert-project",
+                "serialized-object/get",
+                "prefab-asset/get-properties",
+                "prefab-asset/hierarchy",
+                "prefab-asset/find",
+                "compilation/errors",
+                "console/query",
+                "animation/transition-info",
+                "uitoolkit/asset-inspect",
+                "uitoolkit/runtime-documents",
+                "uitoolkit/runtime-tree",
+                "uitoolkit/runtime-query",
+                "uitoolkit/runtime-style",
+                "uitoolkit/locate-element",
+                "uitoolkit/capture-element",
+                "uitoolkit/compare-element",
+                "uitoolkit/generated-children",
+                "uitoolkit/resource-audit",
+                "screenshot/crop",
+                "graphics/image-alpha-bounds",
+                "graphics/rect-gap",
+                "graphics/compare-images",
+                "sprite/sheet-info",
+                "texture/check-ui-import-settings",
+                "packages/list",
+                "packages/info",
+                "packages/status",
+                "packages/lint-metas",
+                "project-tools/list");
+
+            AddProfile(profiles, ToolProfile.FirstClass(readOnly: true, longRunning: true),
+                "wait/editor-idle",
+                "uitoolkit/wait-refresh",
+                "uitoolkit/builder-preview");
+
+            AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true),
+                "mcp/set-autostart",
+                "scene/instantiate-prefab",
+                "serialized-object/set",
+                "prefab-asset/add-component",
+                "prefab-asset/add-gameobject",
+                "prefab-asset/batch-edit",
+                "prefab-asset/instantiate-child-prefab",
+                "prefab-asset/instantiate-prefab",
+                "prefab-asset/move-gameobject",
+                "prefab-asset/remove-component",
+                "prefab-asset/remove-gameobject",
+                "prefab-asset/set-property",
+                "prefab-asset/set-reference",
+                "prefab-asset/transaction-edit",
+                "asset/refresh",
+                "asset/rename",
+                "asset/move",
+                "asset/export-unitypackage",
+                "animation/update-state",
+                "animation/update-transition",
+                "animation/connect-states",
+                "uitoolkit/runtime-repaint",
+                "uitoolkit/refresh",
+                "uitoolkit/assert-layout",
+                "graphics/annotate-rects",
+                "sprite/replace-and-slice",
+                "sprite/slice-sheet",
+                "sprite/update-animation-clip",
+                "sprite/replace-slice-update-clip",
+                "texture/apply-sprite-preset",
+                "texture/import-image");
+
+            AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true,
+                    mayReloadDomain: true),
+                "packages/update-git");
+
+            AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true),
+                "build/run-test");
+
+            AddProfile(profiles, ToolProfile.Fallback(),
+                "advanced/execute",
+                "project-tools/execute");
+
+            return profiles;
+        }
+
+        private static void AddProfile(Dictionary<string, ToolProfile> profiles, ToolProfile profile,
+            params string[] routes)
+        {
+            foreach (string route in routes)
+                profiles[route] = profile;
+        }
 
         private static string ExtractCategory(string path)
         {
@@ -131,12 +237,16 @@ namespace UnityMCP.Editor
 
             return new Dictionary<string, object>
             {
+                { "schemaVersion", 2 },
+                { "metadataSource", "MCPToolMetadata.ToolProfiles" },
                 { "routes", routes },
                 { "tools", tools },
+                { "mcpTools", firstClassTools.Select(ToMcpToolDescriptor).ToList() },
                 { "firstClassTools", firstClassTools },
                 { "fallbackTools", fallbackTools },
                 { "categories", grouped },
-                { "totalTools", tools.Count }
+                { "totalTools", tools.Count },
+                { "metadataIssues", BuildMetadataIssues(tools) }
             };
         }
 
@@ -246,18 +356,31 @@ namespace UnityMCP.Editor
             if (MCPProjectToolCommands.TryGetToolDictionaryForDirectRoute(route, out var projectTool))
                 return BuildProjectToolMetadata(route, projectTool);
 
-            string exposure = GetToolExposure(route);
-            bool isFirstClass = string.Equals(exposure, "first-class", StringComparison.Ordinal);
+            string toolName = RouteToToolName(route);
+            string description = GetToolDescription(route);
+            Dictionary<string, object> inputSchema = GetToolInputSchema(route);
+            ToolProfile profile = GetToolProfile(route);
+            bool isFirstClass = string.Equals(profile.Exposure, ExposureFirstClass, StringComparison.Ordinal);
             return new Dictionary<string, object>
             {
                 { "route", route },
-                { "toolName", RouteToToolName(route) },
+                { "toolName", toolName },
+                { "name", toolName },
                 { "category", ExtractCategory(route) },
-                { "description", GetToolDescription(route) },
-                { "inputSchema", GetToolInputSchema(route) },
+                { "description", description },
+                { "inputSchema", inputSchema },
+                { "input_schema", inputSchema },
                 { "firstClass", isFirstClass },
-                { "exposure", exposure },
-                { "preferred", isFirstClass },
+                { "exposure", profile.Exposure },
+                { "preferred", profile.Preferred },
+                { "readOnly", profile.ReadOnly },
+                { "mutatesAssets", profile.MutatesAssets },
+                { "dangerous", profile.Dangerous },
+                { "longRunning", profile.LongRunning },
+                { "mayReloadDomain", profile.MayReloadDomain },
+                { "requiresPlayMode", profile.RequiresPlayMode },
+                { "annotations", profile.ToAnnotations(toolName) },
+                { "fallbackRoute", isFirstClass ? "" : "advanced/execute" },
             };
         }
 
@@ -275,35 +398,81 @@ namespace UnityMCP.Editor
                     { "additionalProperties", true }
                 };
 
+            var profile = ToolProfile.FirstClass(mutatesAssets: true);
+            string toolName = ProjectToolNameToToolName(projectToolName);
+
             return new Dictionary<string, object>
             {
                 { "route", route },
-                { "toolName", ProjectToolNameToToolName(projectToolName) },
+                { "toolName", toolName },
+                { "name", toolName },
                 { "category", "project-tools" },
                 { "description", string.IsNullOrEmpty(description) ? $"Project MCP tool: {projectToolName}" : description },
                 { "inputSchema", inputSchema },
+                { "input_schema", inputSchema },
                 { "projectToolName", projectToolName },
                 { "firstClass", true },
-                { "exposure", "first-class" },
+                { "exposure", ExposureFirstClass },
                 { "preferred", true },
+                { "readOnly", false },
+                { "mutatesAssets", true },
+                { "dangerous", false },
+                { "longRunning", false },
+                { "mayReloadDomain", false },
+                { "requiresPlayMode", false },
+                { "annotations", profile.ToAnnotations(toolName) },
                 { "source", projectTool.TryGetValue("source", out var source) ? source : "" }
             };
         }
 
-        private static bool IsFirstClassRoute(string route)
+        private static ToolProfile GetToolProfile(string route)
         {
-            return FirstClassRoutes.Contains(route);
+            return ToolProfiles.TryGetValue(route, out var profile) ? profile : ToolProfile.Lazy();
         }
 
-        private static string GetToolExposure(string route)
+        private static Dictionary<string, object> ToMcpToolDescriptor(Dictionary<string, object> tool)
         {
-            if (IsFirstClassRoute(route))
-                return "first-class";
+            return new Dictionary<string, object>
+            {
+                { "name", tool.TryGetValue("toolName", out var name) ? name : "" },
+                { "description", tool.TryGetValue("description", out var description) ? description : "" },
+                { "inputSchema", tool.TryGetValue("inputSchema", out var schema) ? schema : new Dictionary<string, object>() },
+                { "annotations", tool.TryGetValue("annotations", out var annotations) ? annotations : new Dictionary<string, object>() },
+                { "route", tool.TryGetValue("route", out var route) ? route : "" },
+            };
+        }
 
-            if (route == "advanced/execute" || route == "project-tools/execute")
-                return "fallback";
+        private static List<Dictionary<string, object>> BuildMetadataIssues(List<Dictionary<string, object>> tools)
+        {
+            var issues = new List<Dictionary<string, object>>();
+            foreach (var tool in tools)
+            {
+                string route = tool.TryGetValue("route", out var routeObj) ? routeObj?.ToString() : "";
+                string exposure = tool.TryGetValue("exposure", out var exposureObj) ? exposureObj?.ToString() : "";
+                string description = tool.TryGetValue("description", out var descObj) ? descObj?.ToString() : "";
+                bool hasProfile = ToolProfiles.ContainsKey(route) ||
+                                  MCPProjectToolCommands.TryGetToolDictionaryForDirectRoute(route, out _);
 
-            return "lazy";
+                if (!hasProfile && string.Equals(exposure, ExposureFirstClass, StringComparison.Ordinal))
+                {
+                    issues.Add(new Dictionary<string, object>
+                    {
+                        { "route", route },
+                        { "issue", "first_class_without_profile" },
+                    });
+                }
+
+                if (description.StartsWith("Execute Unity MCP route ", StringComparison.Ordinal))
+                {
+                    issues.Add(new Dictionary<string, object>
+                    {
+                        { "route", route },
+                        { "issue", "default_description" },
+                    });
+                }
+            }
+
+            return issues;
         }
 
         private static string RouteToToolName(string route)

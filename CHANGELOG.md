@@ -5,6 +5,9 @@ All notable changes to this package will be documented in this file.
 ## Unreleased
 
 ### Added
+- **Tool metadata profiles** - `_meta/tools` now uses a single `ToolProfile` registry for first-class/fallback/lazy exposure plus `readOnly`, `mutatesAssets`, `dangerous`, `longRunning`, `mayReloadDomain`, and `requiresPlayMode` hints. First-class tools also include MCP-shaped `name`, `input_schema`, `annotations`, and an `mcpTools` list so hosts can register concrete tools without guessing field names.
+- **Project tool input validation** - project tools declared with `MCPProjectToolAttribute.InputSchemaJson` now validate schema shape at discovery time and validate required fields, primitive JSON types, and `additionalProperties=false` before execution.
+- **Reload-aware queue snapshots** - queue tickets persist small status snapshots through Unity domain reloads. Polling a lost ticket now returns a retryable `ticket_lost_after_reload` response instead of a generic not-found result.
 - **Concrete tool surface cleanup** - `asset/refresh`, serialized-object get/set, compilation errors, common prefab-asset read/write routes, and clearer prefab instantiation aliases are now first-class in `_meta/tools`. `advanced/execute` remains available but is advertised as a fallback instead of a preferred entrypoint.
 - **Prefab batch operation schemas** - `prefab-asset/batch-edit` and `prefab-asset/transaction-edit` now expose operation-level schemas for `addComponent`, `setProperty`, `setReference`, `addGameObject`, `instantiatePrefab`, `removeComponent`, `removeGameObject`, and `moveGameObject`, so clients do not need to inspect source code to know operation fields.
 - **Multi-editor project routing safety** — new `instance/current`, `instance/list`, `instance/resolve`, and `instance/assert-project` routes expose the shared Unity MCP instance registry so clients can resolve the correct Editor by `projectPath` before sending commands. Requests can also include `expectedProjectPath` / `targetProjectPath` / `unityProjectPath` or the `X-UnityMCP-Expected-Project-Path` header; if a command reaches the wrong Unity project, the bridge returns `wrong_unity_project` before executing Unity API work.
@@ -12,6 +15,9 @@ All notable changes to this package will be documented in this file.
 - **First-class route metadata** — stable routes advertised in the README now include `firstClass=true` in `_meta/tools`, so MCP clients can expose concrete tools with route-owned schemas and descriptions instead of routing them through the generic advanced entry.
 
 ### Fixed
+- **Package meta lint false positives** - `packages/lint-metas` now skips hidden dotfiles and dot directories such as `.gitattributes`, `.gitignore`, and `.github`, matching Unity's non-imported file behavior.
+- **Error result consistency** - bridge and queue paths now normalize error payloads with `success=false`, `errorCode`, `message`, and `retryable` while keeping existing successful result payloads backward-compatible.
+- **Long direct calls** - synchronous direct calls that exceed the immediate wait window now return a retryable response with a `ticketId` and `pollRoute` while the queued Unity operation continues in the background.
 - **Deferred route direct-call timeout** — direct calls to deferred routes such as `advanced/execute` now wait on a deferred queue ticket instead of wrapping another main-thread wait, preventing 30s timeouts when the route is used as the stable generic entry.
 
 ## [2.32.0] - 2026-06-02

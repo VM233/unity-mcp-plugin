@@ -154,6 +154,9 @@ If an MCP client has stale tool metadata, use the concrete direct route `project
 ## Notes
 
 - Use the upstream README for the general feature list and MCP setup flow.
+- `_meta/tools` exposes both the fork's historical `tools` list and an MCP-shaped `mcpTools` list. Each first-class tool includes `name`, `description`, `inputSchema`, `input_schema`, and `annotations`, plus selection hints such as `readOnly`, `mutatesAssets`, `dangerous`, `longRunning`, `mayReloadDomain`, and `requiresPlayMode`.
+- Error payloads are normalized with `success=false`, `errorCode`, `message`, and `retryable`. Successful payloads keep their existing shape for compatibility.
+- Queue tickets now keep small status snapshots through Unity domain reloads. If a ticket cannot resume after reload, polling returns `ticket_lost_after_reload` with `retryable=true` instead of an ambiguous expired-ticket response.
 - For multiple Unity projects open at once, call `instance/resolve` with the target `projectPath`, then send later calls to the returned `port`. Also pass `expectedProjectPath` on mutating calls; the Editor rejects the request with `wrong_unity_project` if it reaches the wrong project.
 - `unity_wait_editor_idle` waits for both consecutive idle editor frames and a continuous idle time window (`stableMs`, default `500`) to avoid returning before a delayed compile or asset import starts.
 - `mcp/health` is intended for diagnosing editor slowdown caused by MCP usage. It does not stop the bridge; use `mcp/set-autostart` to prevent the bridge from coming back automatically after reload.

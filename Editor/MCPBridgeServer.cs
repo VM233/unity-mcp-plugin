@@ -1719,6 +1719,8 @@ namespace UnityMCP.Editor
         {
             response.StatusCode = statusCode;
             response.ContentType = "application/json";
+            if (statusCode >= 400 || MCPResponse.TryGetError(data, out _, out _, out _))
+                data = MCPResponse.NormalizeError(data, statusCode == 408 ? "timeout" : "error", statusCode == 408);
             data = AttachInstanceContext(data);
             string json = MiniJson.Serialize(data);
             byte[] buffer = Encoding.UTF8.GetBytes(json);
@@ -1727,13 +1729,13 @@ namespace UnityMCP.Editor
             if (buffer.Length > ResponseHardLimitBytes)
             {
                 Debug.LogWarning($"[AB-UMCP] Response too large ({buffer.Length / (1024 * 1024)}MB), replacing with error. Use pagination parameters.");
-                var errorData = new Dictionary<string, object>
-                {
-                    { "error", "response_too_large" },
-                    { "size", buffer.Length },
-                    { "limit", ResponseHardLimitBytes },
-                    { "message", "Response exceeded size limit. Use pagination parameters (maxNodes, limit, maxResults) to request smaller chunks." },
-                };
+                var errorData = MCPResponse.Error(
+                    "Response exceeded size limit. Use pagination parameters (maxNodes, limit, maxResults) to request smaller chunks.",
+                    "response_too_large", true, new Dictionary<string, object>
+                    {
+                        { "size", buffer.Length },
+                        { "limit", ResponseHardLimitBytes },
+                    });
                 json = MiniJson.Serialize(errorData);
                 buffer = Encoding.UTF8.GetBytes(json);
                 response.StatusCode = 413; // Payload Too Large
