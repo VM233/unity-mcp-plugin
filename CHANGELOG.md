@@ -16,6 +16,7 @@ All notable changes to this package will be documented in this file.
 - **First-class route metadata** — stable routes advertised in the README now include `firstClass=true` in `_meta/tools`, so MCP clients can expose concrete tools with route-owned schemas and descriptions instead of routing them through the generic advanced entry.
 
 ### Fixed
+- **SerializeReference array writes** - `serialized-object/get` now reports `$managedReferenceType`, and `serialized-object/set` can instantiate new managed-reference elements from that type or infer it from a homogeneous existing list. Unsupported writes now return a structured error without a Unity Console exception.
 - **Prefab batch edit reliability** - `prefab-asset/batch-edit` now applies operations incrementally across editor frames with progress snapshots, configurable `batchEditTimeoutMs` / per-frame budgets, structured timeout failures, and explicit persistence state (`saved`, `saveAttempted`, `partialPersistedKnown`, `persistedState`) so long or complex prefab edits do not disappear behind queue polling timeouts.
 - **Serialized complex fields** - component property read/write now expands and accepts serialized arrays/lists plus generic child objects instead of reporting complex list fields only as `Generic`.
 - **Deferred write exclusivity** - multi-frame write requests now block later writes from leaving the queue until the active write completes, preventing interleaved asset edits while a deferred prefab batch is still applying.

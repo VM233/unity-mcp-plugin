@@ -9,6 +9,8 @@ namespace UnityMCP.Editor
 {
     public static class MCPComponentCommands
     {
+        private const string ManagedReferenceTypeKey = "$managedReferenceType";
+
         public static object Add(Dictionary<string, object> args)
         {
             var go = MCPGameObjectCommands.FindGameObject(args);
@@ -677,7 +679,7 @@ namespace UnityMCP.Editor
                     break;
 #if UNITY_2020_1_OR_NEWER
                 case SerializedPropertyType.ManagedReference:
-                    SetSerializedGenericValue(prop, value);
+                    SetManagedReferenceValue(prop, value);
                     break;
 #endif
                 default:
@@ -708,15 +710,28 @@ namespace UnityMCP.Editor
         {
             if (depth >= maxDepth)
             {
-                return new Dictionary<string, object>
+                var truncatedResult = new Dictionary<string, object>
                 {
                     { "type", prop.propertyType.ToString() },
                     { "childrenTruncated", true },
                     { "maxDepth", maxDepth },
                 };
+
+#if UNITY_2020_1_OR_NEWER
+                if (prop.propertyType == SerializedPropertyType.ManagedReference && prop.managedReferenceValue != null)
+                    truncatedResult[ManagedReferenceTypeKey] = GetManagedReferenceTypeName(prop.managedReferenceValue.GetType());
+#endif
+
+                return truncatedResult;
             }
 
             var result = new Dictionary<string, object>();
+
+#if UNITY_2020_1_OR_NEWER
+            if (prop.propertyType == SerializedPropertyType.ManagedReference && prop.managedReferenceValue != null)
+                result[ManagedReferenceTypeKey] = GetManagedReferenceTypeName(prop.managedReferenceValue.GetType());
+#endif
+
             var iterator = prop.Copy();
             var end = iterator.GetEndProperty();
             bool enterChildren = true;
@@ -739,10 +754,18 @@ namespace UnityMCP.Editor
             if (items == null)
                 throw new NotSupportedException($"Array property '{prop.propertyPath}' expects a JSON array or an object with an items array.");
 
+            var fallbackManagedReferenceType = GetUniformManagedReferenceType(prop);
             prop.arraySize = items.Count;
             for (int i = 0; i < items.Count; i++)
             {
                 var element = prop.GetArrayElementAtIndex(i);
+#if UNITY_2020_1_OR_NEWER
+                if (element.propertyType == SerializedPropertyType.ManagedReference)
+                {
+                    SetManagedReferenceValue(element, items[i], fallbackManagedReferenceType);
+                    continue;
+                }
+#endif
                 SetSerializedValue(element, items[i]);
             }
         }
@@ -774,7 +797,8 @@ namespace UnityMCP.Editor
 
             foreach (var pair in values)
             {
-                if (pair.Key == "type" || pair.Key == "childrenTruncated" || pair.Key == "maxDepth")
+                if (pair.Key == "type" || pair.Key == "childrenTruncated" || pair.Key == "maxDepth" ||
+                    pair.Key == ManagedReferenceTypeKey)
                     continue;
 
                 var child = prop.FindPropertyRelative(pair.Key);
@@ -784,6 +808,115 @@ namespace UnityMCP.Editor
                 SetSerializedValue(child, pair.Value);
             }
         }
+
+#if UNITY_2020_1_OR_NEWER
+        private static void SetManagedReferenceValue(SerializedProperty prop, object value, Type fallbackType = null)
+        {
+            if (value == null)
+            {
+                prop.managedReferenceValue = null;
+                return;
+            }
+
+            if (!(value is Dictionary<string, object>))
+                throw new NotSupportedException($"Managed reference property '{prop.propertyPath}' expects a JSON object or null.");
+
+            var currentValue = prop.managedReferenceValue;
+            var requestedType = GetRequestedManagedReferenceType(value);
+            var targetType = requestedType ?? currentValue?.GetType() ?? fallbackType;
+
+            if (targetType == null)
+                throw new NotSupportedException($"Managed reference property '{prop.propertyPath}' needs '{ManagedReferenceTypeKey}' because its concrete type cannot be inferred.");
+
+            if (targetType.IsAbstract || targetType.IsInterface || typeof(UnityEngine.Object).IsAssignableFrom(targetType))
+                throw new NotSupportedException($"Managed reference type '{targetType.FullName}' is not instantiable.");
+
+            if (currentValue == null || currentValue.GetType() != targetType)
+            {
+                object instance;
+                try
+                {
+                    instance = Activator.CreateInstance(targetType);
+                }
+                catch (Exception exception)
+                {
+                    throw new NotSupportedException($"Managed reference type '{targetType.FullName}' must have a public parameterless constructor: {exception.Message}");
+                }
+
+                if (instance == null)
+                    throw new NotSupportedException($"Managed reference type '{targetType.FullName}' could not be instantiated.");
+
+                prop.managedReferenceValue = instance;
+            }
+
+            SetSerializedGenericValue(prop, value);
+        }
+
+        private static Type GetUniformManagedReferenceType(SerializedProperty prop)
+        {
+            Type inferredType = null;
+            for (int i = 0; i < prop.arraySize; i++)
+            {
+                var element = prop.GetArrayElementAtIndex(i);
+                if (element.propertyType != SerializedPropertyType.ManagedReference)
+                    return null;
+
+                var value = element.managedReferenceValue;
+                if (value == null)
+                    continue;
+
+                var elementType = value.GetType();
+                if (inferredType != null && inferredType != elementType)
+                    return null;
+
+                inferredType = elementType;
+            }
+
+            return inferredType;
+        }
+
+        private static Type GetRequestedManagedReferenceType(object value)
+        {
+            var values = value as Dictionary<string, object>;
+            if (values == null || !values.TryGetValue(ManagedReferenceTypeKey, out var rawType) || rawType == null)
+                return null;
+
+            var typeName = rawType.ToString();
+            if (string.IsNullOrWhiteSpace(typeName))
+                throw new NotSupportedException($"'{ManagedReferenceTypeKey}' must be a non-empty type name.");
+
+            var type = Type.GetType(typeName, false);
+            if (type != null)
+                return type;
+
+            var separatorIndex = typeName.IndexOf("::", StringComparison.Ordinal);
+            if (separatorIndex > 0 && separatorIndex < typeName.Length - 2)
+            {
+                var assemblyName = typeName.Substring(0, separatorIndex);
+                var fullTypeName = typeName.Substring(separatorIndex + 2);
+                foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
+                {
+                    if (assembly.GetName().Name != assemblyName)
+                        continue;
+
+                    type = assembly.GetType(fullTypeName);
+                    if (type != null)
+                        return type;
+                }
+            }
+
+            type = FindType(typeName);
+            if (type != null)
+                return type;
+
+            throw new NotSupportedException($"Managed reference type '{typeName}' was not found.");
+        }
+
+        private static string GetManagedReferenceTypeName(Type type)
+        {
+            return $"{type.Assembly.GetName().Name}::{type.FullName}";
+        }
+#endif
 
         private static string GetRelativePropertyPath(string parentPath, string childPath)
         {

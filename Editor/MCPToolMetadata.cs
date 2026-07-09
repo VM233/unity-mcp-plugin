@@ -611,7 +611,7 @@ namespace UnityMCP.Editor
                 case "serialized-object/get":
                     return "Read serialized properties from a scene object, component, or asset via SerializedObject.";
                 case "serialized-object/set":
-                    return "Set one serialized property on a scene object, component, or asset via SerializedObject.";
+                    return "Set one serialized property on a scene object, component, or asset via SerializedObject. SerializeReference values use '$managedReferenceType' when their concrete type cannot be inferred.";
                 case "asset/refresh":
                     return "Refresh AssetDatabase, optionally forcing update or importing specific asset paths.";
                 case "asset/rename":
@@ -977,7 +977,7 @@ namespace UnityMCP.Editor
                         Prop("componentType", "string", "Optional component type to select from a GameObject target."),
                         Prop("componentIndex", "number", "Component index when multiple components of the same type exist."),
                         Prop("propertyPath", "string", "Serialized property path to write."),
-                        Prop("value", "object", "Serialized value. ObjectReference supports assetPath, instanceId, or gameObject.")
+                        Prop("value", "object", "Serialized value. ObjectReference supports assetPath, instanceId, or gameObject. SerializeReference objects may include '$managedReferenceType' as 'AssemblyName::Namespace.TypeName'.")
                     ), "propertyPath", "value");
                 case "asset/rename":
                     return Schema(Props(

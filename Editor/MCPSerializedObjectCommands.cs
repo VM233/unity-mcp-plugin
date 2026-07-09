@@ -65,7 +65,17 @@ namespace UnityMCP.Editor
                 return new { error = $"Property '{propertyPath}' was not found on '{target.GetType().Name}'" };
 
             var beforeValue = MCPComponentCommands.GetSerializedValue(property);
-            MCPComponentCommands.SetSerializedValue(property, args["value"]);
+            try
+            {
+                MCPComponentCommands.SetSerializedValue(property, args["value"]);
+            }
+            catch (Exception exception)
+            {
+                serialized.Update();
+                return MCPResponse.Error(exception.Message, "serialized_object_set_failed", false,
+                    new Dictionary<string, object> { { "propertyPath", propertyPath } });
+            }
+
             serialized.ApplyModifiedProperties();
             EditorUtility.SetDirty(target);
             AssetDatabase.SaveAssets();
