@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
-using UnityEditor;
 using UnityEngine;
 
 namespace UnityMCP.Editor
@@ -106,7 +106,7 @@ namespace UnityMCP.Editor
         private const int CompletedCacheLifetimeSec   = 600;
         private const int TimedOutCacheLifetimeSec    = 300;
         private const int StaleExecutingLifetimeSec   = 120;
-        private const string PersistentTicketSnapshotKey = "UnityMCP_RequestQueue_TicketSnapshots_v2";
+        private const string PersistentTicketSnapshotFileName = "request-queue-tickets-v2.json";
         public const int SyncTimeoutMs                = 30_000;
         private const int MaxReadBatchSize            = 5;
 
@@ -733,7 +733,7 @@ namespace UnityMCP.Editor
                     return;
 
                 _persistentSnapshotsLoaded = true;
-                string json = SessionState.GetString(PersistentTicketSnapshotKey, "");
+                string json = ReadPersistentTicketSnapshots();
                 if (string.IsNullOrEmpty(json))
                     return;
 
@@ -791,7 +791,7 @@ namespace UnityMCP.Editor
             foreach (var ticket in _completedTickets.Values.OrderByDescending(t => t.SubmittedAt).Take(100))
                 snapshots.Add(SnapshotTicket(ticket));
 
-            SessionState.SetString(PersistentTicketSnapshotKey, MiniJson.Serialize(snapshots));
+            WritePersistentTicketSnapshots(MiniJson.Serialize(snapshots));
         }
 
         private static Dictionary<string, object> SnapshotTicket(RequestTicket ticket)
@@ -822,6 +822,43 @@ namespace UnityMCP.Editor
             return dictionary.TryGetValue(key, out var raw) &&
                    raw != null &&
                    long.TryParse(raw.ToString(), out value);
+        }
+
+        private static string ReadPersistentTicketSnapshots()
+        {
+            try
+            {
+                string path = GetPersistentTicketSnapshotPath();
+                return File.Exists(path) ? File.ReadAllText(path) : "";
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Unity MCP Queue] Failed to read ticket snapshots: {ex.Message}");
+                return "";
+            }
+        }
+
+        private static void WritePersistentTicketSnapshots(string json)
+        {
+            try
+            {
+                string path = GetPersistentTicketSnapshotPath();
+                string directory = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(directory))
+                    Directory.CreateDirectory(directory);
+
+                File.WriteAllText(path, json ?? "");
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Unity MCP Queue] Failed to persist ticket snapshots: {ex.Message}");
+            }
+        }
+
+        private static string GetPersistentTicketSnapshotPath()
+        {
+            return Path.Combine(Directory.GetCurrentDirectory(), "Library", "UnityMCP",
+                PersistentTicketSnapshotFileName);
         }
 
         private static Dictionary<string, object> TicketToDict(RequestTicket t)
