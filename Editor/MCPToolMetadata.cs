@@ -1770,6 +1770,7 @@ namespace UnityMCP.Editor
                                         }
                                     }
                             }
+                        }
                         },
                         { "required", new List<object> { "type" } },
                         { "additionalProperties", true }
