@@ -93,13 +93,13 @@ namespace UnityMCP.Editor.Tests
         [Test]
         public void MoveComponent_PreservesSerializedDataAndCleansYamlWhitespace()
         {
-            CreateTestPrefab(addProbe: true);
+            CreateTestPrefab(addCollider: true);
             var result = RequireDictionary(MCPPrefabAssetCommands.MoveComponent(new Dictionary<string, object>
             {
                 { "assetPath", PREFAB_PATH },
                 { "sourcePrefabPath", "Source" },
                 { "targetPrefabPath", "Target" },
-                { "componentType", typeof(MoveComponentProbe).FullName },
+                { "componentType", typeof(BoxCollider).FullName },
                 { "prefabFileDiffMode", "summary" },
             }));
 
@@ -109,13 +109,13 @@ namespace UnityMCP.Editor.Tests
             {
                 var source = root.transform.Find("Source").gameObject;
                 var target = root.transform.Find("Target").gameObject;
-                Assert.That(source.GetComponent<MoveComponentProbe>(), Is.Null);
+                Assert.That(source.GetComponent<BoxCollider>(), Is.Null);
 
-                var moved = target.GetComponent<MoveComponentProbe>();
+                var moved = target.GetComponent<BoxCollider>();
                 Assert.That(moved, Is.Not.Null);
-                Assert.That(moved.number, Is.EqualTo(42));
-                Assert.That(moved.text, Is.EqualTo("serialized value"));
-                Assert.That(moved.reference, Is.EqualTo(target));
+                Assert.That(moved.center, Is.EqualTo(new Vector3(1, 2, 3)));
+                Assert.That(moved.size, Is.EqualTo(new Vector3(4, 5, 6)));
+                Assert.That(moved.isTrigger, Is.True);
             }
             finally
             {
@@ -172,7 +172,7 @@ namespace UnityMCP.Editor.Tests
             Assert.That(nested["ok"], Is.EqualTo(true));
         }
 
-        private static void CreateTestPrefab(bool addProbe = false)
+        private static void CreateTestPrefab(bool addCollider = false)
         {
             var root = new GameObject("MCP Test Prefab");
             try
@@ -186,12 +186,12 @@ namespace UnityMCP.Editor.Tests
                 var target = new GameObject("Target");
                 target.transform.SetParent(root.transform, false);
 
-                if (addProbe)
+                if (addCollider)
                 {
-                    var probe = source.AddComponent<MoveComponentProbe>();
-                    probe.number = 42;
-                    probe.text = "serialized value";
-                    probe.reference = target;
+                    var collider = source.AddComponent<BoxCollider>();
+                    collider.center = new Vector3(1, 2, 3);
+                    collider.size = new Vector3(4, 5, 6);
+                    collider.isTrigger = true;
                 }
 
                 Assert.That(PrefabUtility.SaveAsPrefabAsset(root, PREFAB_PATH), Is.Not.Null);
@@ -213,12 +213,5 @@ namespace UnityMCP.Editor.Tests
             string projectRoot = Directory.GetParent(Application.dataPath).FullName;
             return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
         }
-    }
-
-    public sealed class MoveComponentProbe : MonoBehaviour
-    {
-        public int number;
-        public string text;
-        public GameObject reference;
     }
 }
