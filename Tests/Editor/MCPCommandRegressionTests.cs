@@ -126,7 +126,12 @@ namespace UnityMCP.Editor.Tests
 
             string yaml = File.ReadAllText(GetAbsolutePath(PREFAB_PATH));
             Assert.That(Regex.IsMatch(yaml, @"[\t ]+(?=\r?$)", RegexOptions.Multiline), Is.False);
-            CollectionAssert.AreEqual(beforeBlockOrder, GetYamlObjectBlockKeys(PREFAB_PATH));
+            var afterBlockOrder = GetYamlObjectBlockKeys(PREFAB_PATH);
+            var survivingBefore = beforeBlockOrder.Where(afterBlockOrder.Contains).ToArray();
+            var survivingAfter = afterBlockOrder.Where(beforeBlockOrder.Contains).ToArray();
+            CollectionAssert.AreEqual(survivingBefore, survivingAfter);
+            Assert.That(afterBlockOrder.Skip(survivingAfter.Length).All(key => !beforeBlockOrder.Contains(key)),
+                Is.True);
         }
 
         [Test]

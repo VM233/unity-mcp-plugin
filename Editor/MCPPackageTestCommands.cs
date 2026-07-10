@@ -245,7 +245,6 @@ namespace UnityMCP.Editor
         {
             _workflow.State = "restoring";
             TouchAndSaveWorkflow();
-            EditorApplication.delayCall += RestoreManifest;
             Debug.Log($"[MCP Package Tests] Workflow {_workflow.WorkflowId} restoring package manifest");
         }
 
@@ -276,8 +275,7 @@ namespace UnityMCP.Editor
             if (!File.Exists(_workflow.ManifestPath) ||
                 !File.ReadAllBytes(_workflow.ManifestPath).SequenceEqual(originalBytes))
             {
-                EditorApplication.delayCall -= RestoreManifest;
-                EditorApplication.delayCall += RestoreManifest;
+                RestoreManifest();
                 return;
             }
 
