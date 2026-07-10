@@ -10,6 +10,7 @@ using UnityEditor;
 using UnityEngine;
 using UnityEngine.TestTools;
 using UnityEngine.UIElements;
+using Object = UnityEngine.Object;
 
 namespace UnityMCP.Editor.Tests
 {
