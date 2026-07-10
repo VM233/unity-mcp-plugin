@@ -496,7 +496,7 @@ namespace UnityMCP.Editor
                 try
                 {
                     if (TryExecuteInIsolatedAppDomain(outputPath, args, out var isolatedResponse,
-                            out string appDomainError))
+                            out string appDomainMessage, out bool requiresDefaultDomain))
                     {
                         isolatedResponse["collectibleAssemblyContext"] = false;
                         isolatedResponse["assemblyIsolation"] = "app-domain";
@@ -513,8 +513,11 @@ namespace UnityMCP.Editor
                     response["assemblyIsolation"] = collectibleAssemblyContext
                         ? "collectible-load-context"
                         : "default-domain";
-                    if (appDomainError.Length > 0)
-                        response["assemblyIsolationWarning"] = appDomainError;
+                    if (appDomainMessage.Length > 0)
+                    {
+                        response[requiresDefaultDomain ? "assemblyIsolationReason" : "assemblyIsolationWarning"] =
+                            appDomainMessage;
+                    }
                     return response;
                 }
                 finally
@@ -537,6 +540,39 @@ namespace UnityMCP.Editor
             {
                 return new { error = ex.Message, stackTrace = ex.StackTrace };
             }
+        }
+
+        internal static bool CanUseIsolatedAppDomain(IEnumerable<string> assemblyNames, out string reason)
+        {
+            if (assemblyNames == null)
+            {
+                reason = "Skipped isolated AppDomain because the dynamic-code assembly references could not be inspected safely.";
+                return false;
+            }
+
+            foreach (string assemblyName in assemblyNames.OrderBy(name => name, StringComparer.OrdinalIgnoreCase))
+            {
+                if (IsFrameworkAssembly(assemblyName))
+                    continue;
+
+                reason = $"Skipped isolated AppDomain because dynamic code references '{assemblyName}', which must use Unity's loaded assembly context.";
+                return false;
+            }
+
+            reason = "";
+            return true;
+        }
+
+        private static bool IsFrameworkAssembly(string assemblyName)
+        {
+            if (string.IsNullOrEmpty(assemblyName))
+                return true;
+
+            return string.Equals(assemblyName, "mscorlib", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(assemblyName, "netstandard", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(assemblyName, "System", StringComparison.OrdinalIgnoreCase) ||
+                   assemblyName.StartsWith("System.", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(assemblyName, "Microsoft.CSharp", StringComparison.OrdinalIgnoreCase);
         }
 
         private static string BuildExecuteCodeSource(Dictionary<string, object> args, string code,
@@ -681,10 +717,11 @@ namespace UnityMCP.Editor
         }
 
         private static bool TryExecuteInIsolatedAppDomain(string path, Dictionary<string, object> args,
-            out Dictionary<string, object> response, out string error)
+            out Dictionary<string, object> response, out string error, out bool requiresDefaultDomain)
         {
             response = null;
             error = "";
+            requiresDefaultDomain = false;
             AppDomain domain = null;
             try
             {
@@ -715,6 +752,16 @@ namespace UnityMCP.Editor
                 }
 
                 response = executor.Execute(File.ReadAllBytes(path), args);
+                if (response != null && response.TryGetValue("requiresDefaultDomain", out object fallbackValue) &&
+                    Convert.ToBoolean(fallbackValue))
+                {
+                    requiresDefaultDomain = true;
+                    error = response.TryGetValue("assemblyIsolationReason", out object reasonValue)
+                        ? reasonValue?.ToString() ?? ""
+                        : "Dynamic code requires Unity's loaded assembly context.";
+                    response = null;
+                    return false;
+                }
                 return response != null;
             }
             catch (Exception ex)
@@ -1063,6 +1110,17 @@ namespace UnityMCP.Editor
             try
             {
                 var assembly = Assembly.Load(assemblyBytes);
+                if (MCPEditorCommands.CanUseIsolatedAppDomain(
+                        assembly.GetReferencedAssemblies().Select(reference => reference.Name), out string reason) ==
+                    false)
+                {
+                    return new Dictionary<string, object>
+                    {
+                        { "requiresDefaultDomain", true },
+                        { "assemblyIsolationReason", reason },
+                    };
+                }
+
                 var compiledType = assembly.GetType("MCPDynamicCode");
                 var method = compiledType?.GetMethod("Execute", BindingFlags.Public | BindingFlags.Static);
                 if (method == null)

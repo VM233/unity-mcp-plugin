@@ -31,6 +31,7 @@ All notable changes to this package will be documented in this file.
 - **Prefab diff summaries** - prefab mutations return summary diffs by default; callers can explicitly request `minimal` or `full` lines.
 
 ### Fixed
+- **Execute-code assembly context safety** - dynamic code that references Unity, project, or package assemblies now skips the isolated AppDomain and runs against Unity's loaded assembly context, preventing missing dependency failures and unsafe cross-domain asset serialization. Pure framework-only code remains unloadable through AppDomain isolation.
 - **UI Builder preview evidence** - `uitoolkit/builder-preview` now waits for the requested UXML document and a laid-out canvas, focuses and repaints across stable frames, restores previous focus, and rejects failed or visually blank captures instead of reporting unconditional success.
 - **Editor-window DPI cropping** - docked EditorWindow captures prefer raw screen-pixel coordinates, use explicit local/scaled fallbacks, and report the selected coordinate mode plus center-content diagnostics.
 - **Execute-code UI Toolkit and diagnostics** - dynamic code includes `UnityEngine.UIElements`, accepts additional namespace imports, maps compiler diagnostics back to user-code line numbers, and uses a collectible `AssemblyLoadContext` when available instead of permanently accumulating dynamic assemblies.

@@ -241,6 +241,19 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void ExecuteCode_UnityReferencesAvoidIsolatedAppDomain()
+        {
+            var response = RequireDictionary(MCPEditorCommands.ExecuteCode(new Dictionary<string, object>
+            {
+                { "code", "return UnityEditor.EditorApplication.isPlaying;" },
+            }));
+
+            Assert.That(response["success"], Is.EqualTo(true));
+            Assert.That(response["assemblyIsolation"], Is.Not.EqualTo("app-domain"));
+            Assert.That(response["assemblyIsolationReason"].ToString(), Does.Contain("UnityEditor"));
+        }
+
+        [Test]
         public void UIToolkitAssetInspect_NamesQueryIsCompactAndRelevant()
         {
             const string uxmlPath = TEST_FOLDER + "/Compact Inspect.uxml";
