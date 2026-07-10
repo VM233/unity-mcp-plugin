@@ -94,6 +94,8 @@ namespace UnityMCP.Editor.Tests
         public void MoveComponent_PreservesSerializedDataAndCleansYamlWhitespace()
         {
             CreateTestPrefab(addCollider: true);
+            ReverseYamlObjectBlocks(PREFAB_PATH);
+            var beforeBlockOrder = GetYamlObjectBlockKeys(PREFAB_PATH);
             var result = RequireDictionary(MCPPrefabAssetCommands.MoveComponent(new Dictionary<string, object>
             {
                 { "assetPath", PREFAB_PATH },
@@ -124,6 +126,7 @@ namespace UnityMCP.Editor.Tests
 
             string yaml = File.ReadAllText(GetAbsolutePath(PREFAB_PATH));
             Assert.That(Regex.IsMatch(yaml, @"[\t ]+(?=\r?$)", RegexOptions.Multiline), Is.False);
+            CollectionAssert.AreEqual(beforeBlockOrder, GetYamlObjectBlockKeys(PREFAB_PATH));
         }
 
         [Test]
@@ -206,6 +209,34 @@ namespace UnityMCP.Editor.Tests
         {
             Assert.That(value, Is.TypeOf<Dictionary<string, object>>());
             return (Dictionary<string, object>)value;
+        }
+
+        private static void ReverseYamlObjectBlocks(string assetPath)
+        {
+            string absolutePath = GetAbsolutePath(assetPath);
+            string text = File.ReadAllText(absolutePath).Replace("\r\n", "\n").Replace('\r', '\n');
+            var matches = Regex.Matches(text, @"(?m)^--- !u!\d+ &-?\d+(?: stripped)?[\t ]*$");
+            Assert.That(matches.Count, Is.GreaterThan(1));
+
+            string preamble = text.Substring(0, matches[0].Index);
+            var blocks = new List<string>();
+            for (int index = 0; index < matches.Count; index++)
+            {
+                int end = index + 1 < matches.Count ? matches[index + 1].Index : text.Length;
+                blocks.Add(text.Substring(matches[index].Index, end - matches[index].Index));
+            }
+            blocks.Reverse();
+            File.WriteAllText(absolutePath, preamble + string.Concat(blocks));
+            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+        }
+
+        private static string[] GetYamlObjectBlockKeys(string assetPath)
+        {
+            string text = File.ReadAllText(GetAbsolutePath(assetPath));
+            return Regex.Matches(text, @"(?m)^--- !u!(\d+) &(-?\d+)(?: stripped)?[\t ]*$")
+                .Cast<Match>()
+                .Select(match => match.Groups[1].Value + ":" + match.Groups[2].Value)
+                .ToArray();
         }
 
         private static string GetAbsolutePath(string assetPath)

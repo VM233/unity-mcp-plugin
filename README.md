@@ -37,6 +37,11 @@ http://127.0.0.1:7890/api/ping
 | MCP diagnostics | `unity_mcp_health` | `mcp/health` | Inspect bridge state, queue state, sessions, process memory, recent actions, and slow requests. |
 | MCP diagnostics | `unity_mcp_set_autostart` | `mcp/set-autostart` | Enable or disable bridge auto-start for the current Unity Editor instance. |
 | Editor stability | `unity_wait_editor_idle` | `wait/editor-idle` | Wait for compilation, package refresh, domain reload, and asset import to settle before issuing the next command. |
+| Testing | `unity_testing_list_tests` | `testing/list-tests` | List discoverable EditMode or PlayMode tests with filters. |
+| Testing | `unity_testing_run_tests` | `testing/run-tests` | Start a Unity Test Runner job. |
+| Testing | `unity_testing_get_job` | `testing/get-job` | Poll test progress and detailed results. |
+| Package testing | `unity_testing_run_package_tests` | `testing/run-package-tests` | Temporarily enable Git package tests, run them across domain reloads, and restore the package manifest exactly. |
+| Package testing | `unity_testing_get_package_job` | `testing/get-package-job` | Poll the persistent package test workflow and its final test result. |
 | Multi-editor safety | `unity_instance_current` | `instance/current` | Return the current Editor MCP instance identity, including project path and port. |
 | Multi-editor safety | `unity_instance_list` | `instance/list` | List registered Editor MCP instances across open Unity projects. |
 | Multi-editor safety | `unity_instance_resolve` | `instance/resolve` | Resolve exactly one Editor MCP instance by project path, project name, or port. |

@@ -1611,6 +1611,10 @@ namespace UnityMCP.Editor
                     return MCPTestRunnerCommands.RunTests(ParseJson(body));
                 case "testing/get-job":
                     return MCPTestRunnerCommands.GetTestJob(ParseJson(body));
+                case "testing/run-package-tests":
+                    return MCPPackageTestCommands.RunPackageTests(ParseJson(body));
+                case "testing/get-package-job":
+                    return MCPPackageTestCommands.GetPackageTestJob(ParseJson(body));
                 // testing/list-tests is handled via the deferred path in HandleRequest
 
                 default:

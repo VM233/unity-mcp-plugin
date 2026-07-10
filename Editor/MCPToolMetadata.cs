@@ -125,12 +125,18 @@ namespace UnityMCP.Editor
                 "packages/info",
                 "packages/status",
                 "packages/lint-metas",
+                "testing/get-job",
+                "testing/get-package-job",
                 "project-tools/list");
 
             AddProfile(profiles, ToolProfile.FirstClass(readOnly: true, longRunning: true),
                 "wait/editor-idle",
+                "testing/list-tests",
                 "uitoolkit/wait-refresh",
                 "uitoolkit/builder-preview");
+
+            AddProfile(profiles, ToolProfile.FirstClass(longRunning: true),
+                "testing/run-tests");
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true),
                 "mcp/set-autostart",
@@ -169,7 +175,8 @@ namespace UnityMCP.Editor
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true,
                     mayReloadDomain: true),
-                "packages/update-git");
+                "packages/update-git",
+                "testing/run-package-tests");
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true),
                 "build/run-test");
@@ -569,6 +576,16 @@ namespace UnityMCP.Editor
                     return "Lint a Unity package root for missing .meta files.";
                 case "wait/editor-idle":
                     return "Wait until the Unity Editor is idle after compilation, domain reload, package refresh, or asset import.";
+                case "testing/list-tests":
+                    return "List discoverable Unity tests with mode and name filters.";
+                case "testing/run-tests":
+                    return "Start a Unity Test Runner job and return a job ID for polling.";
+                case "testing/get-job":
+                    return "Poll a Unity Test Runner job, including progress, failures, and optional result details.";
+                case "testing/run-package-tests":
+                    return "Run tests from a Git package by temporarily enabling package testables, surviving domain reloads, and restoring manifest.json exactly.";
+                case "testing/get-package-job":
+                    return "Poll a persistent package test workflow through testable enablement, test execution, and exact manifest restoration.";
                 case "mcp/health":
                     return "Inspect MCP bridge health, queue state, sessions, process memory, and recent slow requests.";
                 case "mcp/set-autostart":
@@ -850,6 +867,41 @@ namespace UnityMCP.Editor
                         Prop("nameContains", "string", "Optional case-insensitive GameObject name filter used with componentType."),
                         Prop("pathContains", "string", "Optional case-insensitive hierarchy path filter used with componentType."),
                         Prop("maxResults", "number", "Maximum component-filtered matches. Defaults to min(maxNodes, 100).")
+                    ));
+                case "testing/list-tests":
+                    return Schema(Props(
+                        Prop("mode", "string", "Test mode: EditMode or PlayMode. Defaults to EditMode."),
+                        Prop("nameFilter", "string", "Optional case-insensitive test full-name filter."),
+                        Prop("maxResults", "number", "Maximum tests to return. Defaults to 200.")
+                    ));
+                case "testing/run-tests":
+                    return Schema(Props(
+                        Prop("mode", "string", "Test mode: EditMode or PlayMode. Defaults to EditMode."),
+                        Prop("testNames", "array", "Optional exact test full names."),
+                        Prop("categories", "array", "Optional test categories."),
+                        Prop("assemblies", "array", "Optional test assembly names."),
+                        Prop("groupNames", "array", "Optional Unity Test Runner group names."),
+                        Prop("clearStuck", "boolean", "Force-clear a previously stuck job before starting. Defaults to false.")
+                    ));
+                case "testing/get-job":
+                    return Schema(Props(
+                        Prop("jobId", "string", "Optional job ID. Defaults to the current or latest job."),
+                        Prop("includeDetails", "boolean", "Include all individual test results."),
+                        Prop("includeFailedOnly", "boolean", "Include only failed or inconclusive test results.")
+                    ));
+                case "testing/run-package-tests":
+                    return Schema(Props(
+                        Prop("packageName", "string", "Git package name. Defaults to com.anklebreaker.unity-mcp."),
+                        Prop("mode", "string", "Test mode: EditMode or PlayMode. Defaults to EditMode."),
+                        Prop("assemblies", "array", "Test assembly names. Defaults to the Unity MCP regression assembly for the Unity MCP package."),
+                        Prop("testNames", "array", "Optional exact test full names."),
+                        Prop("categories", "array", "Optional test categories."),
+                        Prop("groupNames", "array", "Optional Unity Test Runner group names.")
+                    ));
+                case "testing/get-package-job":
+                    return Schema(Props(
+                        Prop("workflowId", "string", "Optional package test workflow ID. Defaults to the active or latest workflow."),
+                        Prop("clear", "boolean", "Delete terminal workflow state after returning it. Defaults to false.")
                     ));
                 case "scene/instantiate-prefab":
                 case "asset/instantiate-prefab":

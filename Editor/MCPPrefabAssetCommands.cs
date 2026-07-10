@@ -2103,27 +2103,194 @@ namespace UnityMCP.Editor
 
         private static GameObject SavePrefabAssetNormalized(GameObject root, string assetPath)
         {
+            string absolutePath = GetAbsoluteAssetPath(assetPath);
+            byte[] beforeBytes = !string.IsNullOrEmpty(absolutePath) && File.Exists(absolutePath)
+                ? File.ReadAllBytes(absolutePath)
+                : null;
             var savedRoot = PrefabUtility.SaveAsPrefabAsset(root, assetPath);
             if (savedRoot != null)
-                NormalizePrefabYamlWhitespace(assetPath);
+                StabilizePrefabYaml(assetPath, beforeBytes);
             return savedRoot;
         }
 
-        private static void NormalizePrefabYamlWhitespace(string assetPath)
+        private static void StabilizePrefabYaml(string assetPath, byte[] beforeBytes)
         {
             string absolutePath = GetAbsoluteAssetPath(assetPath);
             if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
                 return;
 
-            byte[] bytes = File.ReadAllBytes(absolutePath);
-            bool hasUtf8Bom = bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
-            string text = File.ReadAllText(absolutePath);
-            string normalized = Regex.Replace(text, @"[\t ]+(?=\r?$)", "", RegexOptions.Multiline);
-            if (normalized == text)
+            byte[] afterBytes = File.ReadAllBytes(absolutePath);
+            bool hasUtf8Bom = HasUtf8Bom(beforeBytes) || beforeBytes == null && HasUtf8Bom(afterBytes);
+            string afterText = DecodeUtf8(afterBytes);
+            string normalized = NormalizeYamlWhitespace(afterText);
+
+            if (beforeBytes != null)
+            {
+                string beforeText = DecodeUtf8(beforeBytes);
+                if (TryPreserveYamlBlockOrder(beforeText, normalized, out string reordered))
+                    normalized = reordered;
+            }
+
+            string currentText = DecodeUtf8(afterBytes);
+            if (normalized == currentText && hasUtf8Bom == HasUtf8Bom(afterBytes))
                 return;
 
             File.WriteAllText(absolutePath, normalized, new UTF8Encoding(hasUtf8Bom));
             AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+        }
+
+        private static string NormalizeYamlWhitespace(string text)
+        {
+            return Regex.Replace(text ?? "", @"[\t ]+(?=\r?$)", "", RegexOptions.Multiline);
+        }
+
+        private static bool TryPreserveYamlBlockOrder(string beforeText, string afterText, out string result)
+        {
+            result = afterText;
+            if (!TryParseYamlFile(beforeText, out var beforeFile) ||
+                !TryParseYamlFile(afterText, out var afterFile))
+                return false;
+
+            var afterByKey = new Dictionary<string, YamlObjectBlock>(StringComparer.Ordinal);
+            foreach (var block in afterFile.Blocks)
+            {
+                if (afterByKey.ContainsKey(block.Key))
+                    return false;
+                afterByKey.Add(block.Key, block);
+            }
+
+            var ordered = new List<YamlObjectBlock>();
+            var included = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var beforeBlock in beforeFile.Blocks)
+            {
+                if (!afterByKey.TryGetValue(beforeBlock.Key, out var afterBlock))
+                    continue;
+
+                string beforeCanonical = CanonicalYamlText(beforeBlock.Text);
+                string afterCanonical = CanonicalYamlText(afterBlock.Text);
+                ordered.Add(beforeCanonical == afterCanonical
+                    ? new YamlObjectBlock(beforeBlock.Key, beforeCanonical)
+                    : afterBlock);
+                included.Add(beforeBlock.Key);
+            }
+
+            foreach (var afterBlock in afterFile.Blocks)
+            {
+                if (included.Add(afterBlock.Key))
+                    ordered.Add(afterBlock);
+            }
+
+            if (ordered.Count != afterFile.Blocks.Count)
+                return false;
+
+            string preamble = CanonicalYamlText(beforeFile.Preamble) ==
+                              CanonicalYamlText(afterFile.Preamble)
+                ? NormalizeYamlWhitespace(beforeFile.Preamble)
+                : NormalizeYamlWhitespace(afterFile.Preamble);
+            string candidate = preamble + string.Concat(ordered.Select(block => block.Text));
+            candidate = ApplyLineEnding(candidate, beforeFile.LineEnding);
+
+            if (!TryParseYamlFile(candidate, out var candidateFile) ||
+                !YamlFilesHaveEquivalentBlocks(candidateFile, afterFile))
+                return false;
+
+            result = candidate;
+            return true;
+        }
+
+        private static bool YamlFilesHaveEquivalentBlocks(YamlFile left, YamlFile right)
+        {
+            if (left.Blocks.Count != right.Blocks.Count)
+                return false;
+
+            var rightByKey = right.Blocks.ToDictionary(block => block.Key, block =>
+                NormalizeYamlWhitespace(block.Text).Replace("\r\n", "\n"), StringComparer.Ordinal);
+            foreach (var block in left.Blocks)
+            {
+                if (!rightByKey.TryGetValue(block.Key, out string rightText) ||
+                    NormalizeYamlWhitespace(block.Text).Replace("\r\n", "\n") != rightText)
+                    return false;
+            }
+            return true;
+        }
+
+        private static string CanonicalYamlText(string text)
+        {
+            return NormalizeYamlWhitespace(text).Replace("\r\n", "\n").Replace('\r', '\n');
+        }
+
+        private static bool TryParseYamlFile(string text, out YamlFile file)
+        {
+            file = null;
+            if (string.IsNullOrEmpty(text))
+                return false;
+
+            string lineEnding = text.Contains("\r\n") ? "\r\n" : "\n";
+            string normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+            var matches = Regex.Matches(normalized,
+                @"(?m)^--- !u!(?<type>\d+) &(?<id>-?\d+)(?: stripped)?[\t ]*$");
+            if (matches.Count == 0)
+                return false;
+
+            var blocks = new List<YamlObjectBlock>(matches.Count);
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            for (int index = 0; index < matches.Count; index++)
+            {
+                Match match = matches[index];
+                int end = index + 1 < matches.Count ? matches[index + 1].Index : normalized.Length;
+                string key = match.Groups["type"].Value + ":" + match.Groups["id"].Value;
+                if (!keys.Add(key))
+                    return false;
+                blocks.Add(new YamlObjectBlock(key, normalized.Substring(match.Index, end - match.Index)));
+            }
+
+            file = new YamlFile(normalized.Substring(0, matches[0].Index), blocks, lineEnding);
+            return true;
+        }
+
+        private static string ApplyLineEnding(string text, string lineEnding)
+        {
+            string normalized = text.Replace("\r\n", "\n").Replace('\r', '\n');
+            return lineEnding == "\r\n" ? normalized.Replace("\n", "\r\n") : normalized;
+        }
+
+        private static string DecodeUtf8(byte[] bytes)
+        {
+            if (bytes == null || bytes.Length == 0)
+                return "";
+            int offset = HasUtf8Bom(bytes) ? 3 : 0;
+            return Encoding.UTF8.GetString(bytes, offset, bytes.Length - offset);
+        }
+
+        private static bool HasUtf8Bom(byte[] bytes)
+        {
+            return bytes != null && bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF;
+        }
+
+        private sealed class YamlFile
+        {
+            public readonly string Preamble;
+            public readonly List<YamlObjectBlock> Blocks;
+            public readonly string LineEnding;
+
+            public YamlFile(string preamble, List<YamlObjectBlock> blocks, string lineEnding)
+            {
+                Preamble = preamble;
+                Blocks = blocks;
+                LineEnding = lineEnding;
+            }
+        }
+
+        private sealed class YamlObjectBlock
+        {
+            public readonly string Key;
+            public readonly string Text;
+
+            public YamlObjectBlock(string key, string text)
+            {
+                Key = key;
+                Text = text;
+            }
         }
 
         private static bool RestoreAssetSnapshot(AssetTextSnapshot snapshot)

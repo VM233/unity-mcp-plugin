@@ -5,6 +5,8 @@ All notable changes to this package will be documented in this file.
 ## Unreleased
 
 ### Added
+- **First-class testing tools** - Test discovery, test execution, job polling, and persistent Git package self-tests now expose concrete tools and schemas.
+- **Persistent package test workflow** - `testing/run-package-tests` backs up `Packages/manifest.json`, enables the requested package in `testables`, runs its test assembly after reload, then restores the original manifest bytes.
 - **Atomic prefab component moves** - `prefab-asset/move-component` / `unity_prefab_asset_move_component` copies a component to another GameObject, verifies the destination, removes the source, and saves once while preserving serialized data.
 - **Compact scene component filtering** - `scene/hierarchy` accepts `componentType`, `nameContains`, `pathContains`, and `maxResults` to return compact flat matches instead of serializing the entire scene tree.
 - **Batch asset moves** - `asset/move-batch` / `unity_asset_move_batch` preflights all move requests before mutating assets, moves them inside one AssetDatabase editing block, and reports per-asset GUID/meta verification. If a move fails, completed moves are reversed before the response is returned.
@@ -19,6 +21,8 @@ All notable changes to this package will be documented in this file.
 - **First-class route metadata** — stable routes advertised in the README now include `firstClass=true` in `_meta/tools`, so MCP clients can expose concrete tools with route-owned schemas and descriptions instead of routing them through the generic advanced entry.
 
 ### Fixed
+- **Prefab YAML block ordering** - prefab saves preserve the original order of surviving Unity YAML object blocks, append only new blocks, remove deleted blocks, validate block equivalence, and continue stripping trailing whitespace.
+- **Test Runner completion** - jobs finalize from completed leaf results when Unity's root `RunFinished` callback arrives late; an unfocused Editor is reported as informational state instead of a blocking reason.
 - **Prefab mutation rollback and YAML diffs** - failed `prefab-asset/add-gameobject` and component moves restore the original prefab bytes; successful prefab saves remove trailing YAML whitespace; line diffs now use a real edit script and report complete added/removed totals independently from truncation.
 - **Execute-code structured results** - nested arrays, lists, dictionaries, anonymous objects, and Unity values are serialized recursively instead of degrading to CLR type names such as `System.String[]`.
 - **SerializeReference array writes** - `serialized-object/get` now reports `$managedReferenceType`, and `serialized-object/set` can instantiate new managed-reference elements from that type or infer it from a homogeneous existing list. Unsupported writes now return a structured error without a Unity Console exception.

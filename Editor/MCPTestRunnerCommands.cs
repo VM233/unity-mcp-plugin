@@ -24,6 +24,7 @@ namespace UnityMCP.Editor
 
         private const int MaxFailuresTracked = 50;
         private const double StuckThresholdSeconds = 120.0;
+        private const double CompletionCallbackGraceSeconds = 0.5;
         private const double JobExpiryMinutes = 30.0;
 
         // ─── PlayMode Domain Reload Guard ────────────────────────────
@@ -141,6 +142,7 @@ namespace UnityMCP.Editor
                 Mode = testMode,
                 Status = TestJobStatus.Running,
                 StartedAt = DateTime.UtcNow,
+                LastUpdatedAt = DateTime.UtcNow,
                 TestNames = testNames,
                 Categories = testCategories,
                 Assemblies = assemblyNames,
@@ -221,6 +223,7 @@ namespace UnityMCP.Editor
             bool includeDetails = args.ContainsKey("includeDetails") && Convert.ToBoolean(args["includeDetails"]);
             bool includeFailedOnly = args.ContainsKey("includeFailedOnly") && Convert.ToBoolean(args["includeFailedOnly"]);
 
+            TryFinalizeFromLeafResults(job);
             return SerializeJob(job, includeDetails, includeFailedOnly);
         }
 
@@ -307,6 +310,7 @@ namespace UnityMCP.Editor
 
             job.TotalTests = totalTests;
             job.CompletedTests = 0;
+            job.LastUpdatedAt = DateTime.UtcNow;
             SaveToSessionState();
             Debug.Log($"[MCP TestRunner] Job {job.JobId}: Run started, {totalTests} tests to execute");
         }
@@ -357,6 +361,8 @@ namespace UnityMCP.Editor
             {
                 job.SkippedCount++;
             }
+
+            SaveToSessionState();
         }
 
         internal static void OnRunFinished(int totalPassed, int totalFailed, int totalSkipped,
@@ -365,24 +371,49 @@ namespace UnityMCP.Editor
             if (_currentJobId == null || !_jobs.TryGetValue(_currentJobId, out var job))
                 return;
 
-            job.Status = totalFailed > 0 ? TestJobStatus.Failed : TestJobStatus.Succeeded;
+            job.PassedCount = totalPassed;
+            job.FailedCount = totalFailed;
+            job.SkippedCount = totalSkipped + totalInconclusive;
+            job.CompletedTests = Math.Max(job.CompletedTests,
+                totalPassed + totalFailed + totalSkipped + totalInconclusive);
+            job.TotalTests = Math.Max(job.TotalTests, job.CompletedTests);
+            FinalizeJob(job, totalDuration, false);
+
+            Debug.Log($"[MCP TestRunner] Job {job.JobId}: Finished — " +
+                      $"{totalPassed} passed, {totalFailed} failed, {totalSkipped} skipped " +
+                       $"({totalDuration:F1}s)");
+        }
+
+        private static void TryFinalizeFromLeafResults(TestJob job)
+        {
+            if (job.Status != TestJobStatus.Running || job.TotalTests <= 0 ||
+                job.CompletedTests < job.TotalTests || job.CurrentTestName != null)
+                return;
+
+            if ((DateTime.UtcNow - job.LastUpdatedAt).TotalSeconds < CompletionCallbackGraceSeconds)
+                return;
+
+            double duration = job.AllResults.Sum(result => result.Duration);
+            FinalizeJob(job, duration, true);
+            Debug.LogWarning($"[MCP TestRunner] Job {job.JobId}: RunFinished callback was late; " +
+                             "finalized from completed leaf results.");
+        }
+
+        private static void FinalizeJob(TestJob job, double totalDuration, bool recoveredFromLeafResults)
+        {
+            job.Status = job.FailedCount > 0 ? TestJobStatus.Failed : TestJobStatus.Succeeded;
             job.CompletedAt = DateTime.UtcNow;
             job.TotalDuration = totalDuration;
             job.CurrentTestName = null;
             job.CurrentTestStartedAt = null;
+            job.CompletionRecovered = recoveredFromLeafResults;
 
-            // Restore PlayMode options if we disabled domain reload
             if (job.Mode == TestMode.PlayMode)
-            {
                 RestorePlayModeOptions();
-            }
 
-            _currentJobId = null;
+            if (_currentJobId == job.JobId)
+                _currentJobId = null;
             SaveToSessionState();
-
-            Debug.Log($"[MCP TestRunner] Job {job.JobId}: Finished — " +
-                      $"{totalPassed} passed, {totalFailed} failed, {totalSkipped} skipped " +
-                      $"({totalDuration:F1}s)");
         }
 
         // ─── Serialization ───────────────────────────────────────────
@@ -434,7 +465,7 @@ namespace UnityMCP.Editor
                 if (EditorApplication.isCompiling)
                     progress["blockedReason"] = "compiling";
                 else if (!UnityEditorInternal.InternalEditorUtility.isApplicationActive)
-                    progress["blockedReason"] = "editor_unfocused";
+                    progress["editorActive"] = false;
             }
 
             result["progress"] = progress;
@@ -447,6 +478,8 @@ namespace UnityMCP.Editor
 
             if (job.Error != null)
                 result["error"] = job.Error;
+            if (job.CompletionRecovered)
+                result["completionRecoveredFromLeafResults"] = true;
 
             // Summary
             result["summary"] = new Dictionary<string, object>
@@ -537,6 +570,7 @@ namespace UnityMCP.Editor
                         { "failedCount", j.FailedCount },
                         { "skippedCount", j.SkippedCount },
                         { "totalDuration", j.TotalDuration },
+                        { "completionRecovered", j.CompletionRecovered },
                         { "error", j.Error ?? "" }
                     });
                 }
@@ -582,6 +616,8 @@ namespace UnityMCP.Editor
                         FailedCount = Convert.ToInt32(dict["failedCount"]),
                         SkippedCount = Convert.ToInt32(dict["skippedCount"]),
                         TotalDuration = Convert.ToDouble(dict["totalDuration"]),
+                        CompletionRecovered = dict.TryGetValue("completionRecovered", out var recovered) &&
+                                              Convert.ToBoolean(recovered),
                     };
 
                     if (DateTime.TryParse(dict["startedAt"].ToString(), out var started))
@@ -717,6 +753,7 @@ namespace UnityMCP.Editor
             public int FailedCount;
             public int SkippedCount;
             public double TotalDuration;
+            public bool CompletionRecovered;
 
             // Current test being executed
             public string CurrentTestName;
