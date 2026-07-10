@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using UnityEditor;
+using UnityEditor.PackageManager;
 using UnityEngine;
 
 namespace UnityMCP.Editor
@@ -128,6 +129,7 @@ namespace UnityMCP.Editor
                 _workflow.State = "waiting-for-assembly";
                 TouchAndSaveWorkflow();
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                Client.Resolve();
             }
             catch (Exception ex)
             {
@@ -258,6 +260,7 @@ namespace UnityMCP.Editor
                 File.WriteAllBytes(_workflow.ManifestPath, originalBytes);
                 TouchAndSaveWorkflow();
                 AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
+                Client.Resolve();
             }
             catch (Exception ex)
             {
