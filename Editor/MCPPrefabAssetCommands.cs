@@ -179,7 +179,7 @@ namespace UnityMCP.Editor
                 MCPComponentCommands.SetSerializedValue(prop, args["value"]);
                 serialized.ApplyModifiedProperties();
 
-                SavePrefabAssetNormalized(root, assetPath);
+                SavePrefabAssetNormalized(root, assetPath, BuildExplicitYamlPropertyRoots(propertyName));
 
                 var result = new Dictionary<string, object>
                 {
@@ -618,7 +618,7 @@ namespace UnityMCP.Editor
                 }
 
                 serialized.ApplyModifiedProperties();
-                SavePrefabAssetNormalized(root, assetPath);
+                SavePrefabAssetNormalized(root, assetPath, BuildExplicitYamlPropertyRoots(propertyName));
 
                 var result = new Dictionary<string, object>
                 {
@@ -1610,7 +1610,8 @@ namespace UnityMCP.Editor
                     summaries.Add(summary);
                 }
 
-                if (SavePrefabAssetNormalized(root, assetPath) == null)
+                if (SavePrefabAssetNormalized(root, assetPath,
+                        CollectExplicitYamlPropertyRoots(operations)) == null)
                     throw new InvalidOperationException($"SaveAsPrefabAsset returned null for '{assetPath}'.");
                 saved = true;
 
@@ -1931,7 +1932,8 @@ namespace UnityMCP.Editor
 
                     state.SaveAttempted = true;
                     progress?.Invoke(BuildBatchEditProgress(state, elapsedMs, "saving"));
-                    var savedRoot = SavePrefabAssetNormalized(state.Root, state.AssetPath);
+                    var savedRoot = SavePrefabAssetNormalized(state.Root, state.AssetPath,
+                        CollectExplicitYamlPropertyRoots(state.Operations));
                     if (savedRoot == null)
                         throw new InvalidOperationException($"SaveAsPrefabAsset returned null for '{state.AssetPath}'.");
                     state.Saved = true;
@@ -2114,7 +2116,8 @@ namespace UnityMCP.Editor
             AssetDatabase.Refresh(options);
         }
 
-        private static GameObject SavePrefabAssetNormalized(GameObject root, string assetPath)
+        private static GameObject SavePrefabAssetNormalized(GameObject root, string assetPath,
+            ISet<string> explicitYamlPropertyRoots = null)
         {
             string absolutePath = GetAbsoluteAssetPath(assetPath);
             byte[] beforeBytes = !string.IsNullOrEmpty(absolutePath) && File.Exists(absolutePath)
@@ -2122,11 +2125,12 @@ namespace UnityMCP.Editor
                 : null;
             var savedRoot = PrefabUtility.SaveAsPrefabAsset(root, assetPath);
             if (savedRoot != null)
-                StabilizePrefabYaml(assetPath, beforeBytes);
+                StabilizePrefabYaml(assetPath, beforeBytes, explicitYamlPropertyRoots);
             return savedRoot;
         }
 
-        private static void StabilizePrefabYaml(string assetPath, byte[] beforeBytes)
+        private static void StabilizePrefabYaml(string assetPath, byte[] beforeBytes,
+            ISet<string> explicitYamlPropertyRoots)
         {
             string absolutePath = GetAbsoluteAssetPath(assetPath);
             if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
@@ -2140,7 +2144,8 @@ namespace UnityMCP.Editor
             if (beforeBytes != null)
             {
                 string beforeText = DecodeUtf8(beforeBytes);
-                if (TryPreserveYamlBlockOrder(beforeText, normalized, out string reordered))
+                if (TryPreserveYamlBlockOrder(beforeText, normalized, explicitYamlPropertyRoots,
+                        out string reordered))
                     normalized = reordered;
             }
 
@@ -2157,7 +2162,8 @@ namespace UnityMCP.Editor
             return Regex.Replace(text ?? "", @"[\t ]+(?=\r?$)", "", RegexOptions.Multiline);
         }
 
-        private static bool TryPreserveYamlBlockOrder(string beforeText, string afterText, out string result)
+        private static bool TryPreserveYamlBlockOrder(string beforeText, string afterText,
+            ISet<string> explicitYamlPropertyRoots, out string result)
         {
             result = afterText;
             if (!TryParseYamlFile(beforeText, out var beforeFile) ||
@@ -2174,6 +2180,7 @@ namespace UnityMCP.Editor
 
             var ordered = new List<YamlObjectBlock>();
             var included = new HashSet<string>(StringComparer.Ordinal);
+            bool preservedUnrelatedFields = false;
             foreach (var beforeBlock in beforeFile.Blocks)
             {
                 if (!afterByKey.TryGetValue(beforeBlock.Key, out var afterBlock))
@@ -2181,9 +2188,20 @@ namespace UnityMCP.Editor
 
                 string beforeCanonical = CanonicalYamlText(beforeBlock.Text);
                 string afterCanonical = CanonicalYamlText(afterBlock.Text);
-                ordered.Add(beforeCanonical == afterCanonical
-                    ? new YamlObjectBlock(beforeBlock.Key, beforeCanonical)
-                    : afterBlock);
+                if (beforeCanonical == afterCanonical)
+                {
+                    ordered.Add(beforeBlock);
+                }
+                else if (ShouldPreserveUnrelatedAddedFields(beforeBlock, afterBlock,
+                             explicitYamlPropertyRoots))
+                {
+                    ordered.Add(beforeBlock);
+                    preservedUnrelatedFields = true;
+                }
+                else
+                {
+                    ordered.Add(afterBlock);
+                }
                 included.Add(beforeBlock.Key);
             }
 
@@ -2198,17 +2216,123 @@ namespace UnityMCP.Editor
 
             string preamble = CanonicalYamlText(beforeFile.Preamble) ==
                               CanonicalYamlText(afterFile.Preamble)
-                ? NormalizeYamlWhitespace(beforeFile.Preamble)
+                ? beforeFile.Preamble
                 : NormalizeYamlWhitespace(afterFile.Preamble);
             string candidate = preamble + string.Concat(ordered.Select(block => block.Text));
             candidate = ApplyLineEnding(candidate, beforeFile.LineEnding);
 
-            if (!TryParseYamlFile(candidate, out var candidateFile) ||
-                !YamlFilesHaveEquivalentBlocks(candidateFile, afterFile))
+            if (!TryParseYamlFile(candidate, out var candidateFile))
                 return false;
+            if (preservedUnrelatedFields)
+            {
+                if (!YamlFilesHaveSameBlockKeys(candidateFile, afterFile))
+                    return false;
+            }
+            else if (!YamlFilesHaveEquivalentBlocks(candidateFile, afterFile))
+            {
+                return false;
+            }
 
             result = candidate;
             return true;
+        }
+
+        private static bool ShouldPreserveUnrelatedAddedFields(YamlObjectBlock beforeBlock,
+            YamlObjectBlock afterBlock, ISet<string> explicitYamlPropertyRoots)
+        {
+            int separatorIndex = beforeBlock.Key.IndexOf(':');
+            if (separatorIndex <= 0 ||
+                !int.TryParse(beforeBlock.Key.Substring(0, separatorIndex), out int objectType) ||
+                objectType == 1 || objectType == 4 || objectType == 224 || objectType == 1001)
+                return false;
+
+            string[] beforeLines = CanonicalYamlText(beforeBlock.Text).Split('\n');
+            string[] afterLines = CanonicalYamlText(afterBlock.Text).Split('\n');
+            var addedLines = new List<string>();
+            int beforeIndex = 0;
+            foreach (string afterLine in afterLines)
+            {
+                if (beforeIndex < beforeLines.Length && afterLine == beforeLines[beforeIndex])
+                {
+                    beforeIndex++;
+                }
+                else
+                {
+                    addedLines.Add(afterLine);
+                }
+            }
+
+            if (beforeIndex != beforeLines.Length || addedLines.Count == 0)
+                return false;
+
+            if (explicitYamlPropertyRoots == null || explicitYamlPropertyRoots.Count == 0)
+                return true;
+
+            foreach (string line in addedLines)
+            {
+                string trimmed = line.TrimStart();
+                if (trimmed.StartsWith("- ", StringComparison.Ordinal))
+                    trimmed = trimmed.Substring(2).TrimStart();
+                int colonIndex = trimmed.IndexOf(':');
+                if (colonIndex <= 0)
+                    continue;
+                string propertyName = trimmed.Substring(0, colonIndex);
+                if (explicitYamlPropertyRoots.Contains(propertyName))
+                    return false;
+            }
+
+            return true;
+        }
+
+        private static bool YamlFilesHaveSameBlockKeys(YamlFile left, YamlFile right)
+        {
+            if (left.Blocks.Count != right.Blocks.Count)
+                return false;
+            return new HashSet<string>(left.Blocks.Select(block => block.Key), StringComparer.Ordinal)
+                .SetEquals(right.Blocks.Select(block => block.Key));
+        }
+
+        private static HashSet<string> BuildExplicitYamlPropertyRoots(params string[] propertyPaths)
+        {
+            var roots = new HashSet<string>(StringComparer.Ordinal);
+            if (propertyPaths == null)
+                return roots;
+            foreach (string propertyPath in propertyPaths)
+            {
+                if (string.IsNullOrWhiteSpace(propertyPath))
+                    continue;
+                int separatorIndex = propertyPath.IndexOf('.');
+                roots.Add(separatorIndex > 0 ? propertyPath.Substring(0, separatorIndex) : propertyPath);
+            }
+            return roots;
+        }
+
+        private static HashSet<string> CollectExplicitYamlPropertyRoots(
+            IEnumerable<Dictionary<string, object>> operations)
+        {
+            var roots = new HashSet<string>(StringComparer.Ordinal);
+            if (operations == null)
+                return roots;
+
+            foreach (var operation in operations)
+            {
+                string operationType = GetOperationType(operation);
+                if (operationType != "setproperty" && operationType != "setreference")
+                    continue;
+
+                var properties = GetDictionary(operation, "properties");
+                if (properties != null)
+                {
+                    foreach (string propertyName in properties.Keys)
+                        roots.UnionWith(BuildExplicitYamlPropertyRoots(propertyName));
+                }
+                else
+                {
+                    roots.UnionWith(BuildExplicitYamlPropertyRoots(GetString(operation, "propertyName")));
+                }
+            }
+
+            return roots;
         }
 
         private static bool YamlFilesHaveEquivalentBlocks(YamlFile left, YamlFile right)

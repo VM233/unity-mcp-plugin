@@ -4,6 +4,7 @@ All notable changes to this package will be documented in this file.
 
 ## Unreleased
 
+- Fixed prefab asset edits rewriting untouched YAML whitespace or serializing unrelated default component fields.
 - Added `unity_localization_upsert_entries` for prevalidated batch String/Smart String entry updates across multiple Locales with one asset save.
 
 ### Added

@@ -104,10 +104,13 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
-        public void MoveComponent_PreservesSerializedDataAndCleansYamlWhitespace()
+        public void MoveComponent_PreservesSerializedDataBlockOrderAndUntouchedWhitespace()
         {
             CreateTestPrefab(addCollider: true);
             ReverseYamlObjectBlocks(PREFAB_PATH);
+            RewriteYamlObjectBlock(PREFAB_PATH, "m_Name: Gold",
+                block => block.Replace("  m_TagString: Untagged\n", "  m_TagString: Untagged \n"));
+            string untouchedBlockBefore = GetYamlObjectBlockContaining(PREFAB_PATH, "m_Name: Gold");
             var beforeBlockOrder = GetYamlObjectBlockKeys(PREFAB_PATH);
             var result = RequireDictionary(MCPPrefabAssetCommands.MoveComponent(new Dictionary<string, object>
             {
@@ -138,13 +141,43 @@ namespace UnityMCP.Editor.Tests
             }
 
             string yaml = File.ReadAllText(GetAbsolutePath(PREFAB_PATH));
-            Assert.That(Regex.IsMatch(yaml, @"[\t ]+(?=\r?$)", RegexOptions.Multiline), Is.False);
+            string untouchedBlockAfter = GetYamlObjectBlockContaining(PREFAB_PATH, "m_Name: Gold");
+            Assert.That(untouchedBlockAfter, Is.EqualTo(untouchedBlockBefore));
             var afterBlockOrder = GetYamlObjectBlockKeys(PREFAB_PATH);
             var survivingBefore = beforeBlockOrder.Where(afterBlockOrder.Contains).ToArray();
             var survivingAfter = afterBlockOrder.Where(beforeBlockOrder.Contains).ToArray();
             CollectionAssert.AreEqual(survivingBefore, survivingAfter);
             Assert.That(afterBlockOrder.Skip(survivingAfter.Length).All(key => !beforeBlockOrder.Contains(key)),
                 Is.True);
+        }
+
+        [Test]
+        public void TransactionEdit_DoesNotSerializeDefaultsOnUntouchedComponents()
+        {
+            CreateTestPrefab(addCollider: true);
+            RewriteYamlObjectBlock(PREFAB_PATH, "BoxCollider:",
+                block => Regex.Replace(block, @"(?m)^  m_IsTrigger:.*\n", ""));
+            string untouchedBlockBefore = GetYamlObjectBlockContaining(PREFAB_PATH, "BoxCollider:");
+            Assert.That(untouchedBlockBefore, Does.Not.Contain("m_IsTrigger:"));
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.TransactionEdit(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "operations", new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "type", "addGameObject" },
+                            { "parentPrefabPath", "Controls" },
+                            { "name", "Value Sync" },
+                        },
+                    }
+                },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(GetYamlObjectBlockContaining(PREFAB_PATH, "BoxCollider:"),
+                Is.EqualTo(untouchedBlockBefore));
         }
 
         [Test]
@@ -575,6 +608,34 @@ namespace UnityMCP.Editor.Tests
                 .Cast<Match>()
                 .Select(match => match.Groups[1].Value + ":" + match.Groups[2].Value)
                 .ToArray();
+        }
+
+        private static string GetYamlObjectBlockContaining(string assetPath, string marker)
+        {
+            string text = File.ReadAllText(GetAbsolutePath(assetPath)).Replace("\r\n", "\n").Replace('\r', '\n');
+            var matches = Regex.Matches(text, @"(?m)^--- !u!\d+ &-?\d+(?: stripped)?[\t ]*$");
+            for (int index = 0; index < matches.Count; index++)
+            {
+                int end = index + 1 < matches.Count ? matches[index + 1].Index : text.Length;
+                string block = text.Substring(matches[index].Index, end - matches[index].Index);
+                if (block.Contains(marker))
+                    return block;
+            }
+
+            Assert.Fail($"Could not find YAML object block containing '{marker}'.");
+            return "";
+        }
+
+        private static void RewriteYamlObjectBlock(string assetPath, string marker,
+            Func<string, string> rewrite)
+        {
+            string absolutePath = GetAbsolutePath(assetPath);
+            string text = File.ReadAllText(absolutePath).Replace("\r\n", "\n").Replace('\r', '\n');
+            string block = GetYamlObjectBlockContaining(assetPath, marker);
+            string rewritten = rewrite(block);
+            Assert.That(rewritten, Is.Not.EqualTo(block));
+            File.WriteAllText(absolutePath, text.Replace(block, rewritten));
+            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
         }
 
         private static string GetAbsolutePath(string assetPath)
