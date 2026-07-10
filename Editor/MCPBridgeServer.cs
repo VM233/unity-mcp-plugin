@@ -668,9 +668,9 @@ namespace UnityMCP.Editor
                 int limit = args.TryGetValue("limit", out value) && value != null
                     ? Convert.ToInt32(value)
                     : 50;
-                string category = args.TryGetValue("category", out value) ? value?.ToString() : null;
+                string metadataCategory = args.TryGetValue("category", out value) ? value?.ToString() : null;
                 return MCPToolMetadata.GetRegisteredTools(firstClassOnly, compact, includeSchema,
-                    offset, limit, category, includeCollections);
+                    offset, limit, metadataCategory, includeCollections);
             }
 
             if (TryBuildProjectMismatchResponse(path, ParseJson(body), out var projectMismatch))

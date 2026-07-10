@@ -260,10 +260,10 @@ namespace UnityMCP.Editor
             var grouped = new Dictionary<string, List<string>>();
             foreach (var tool in tools)
             {
-                string category = tool["category"].ToString();
-                if (!grouped.ContainsKey(category))
-                    grouped[category] = new List<string>();
-                grouped[category].Add(tool["toolName"].ToString());
+                string toolCategory = tool["category"].ToString();
+                if (!grouped.ContainsKey(toolCategory))
+                    grouped[toolCategory] = new List<string>();
+                grouped[toolCategory].Add(tool["toolName"].ToString());
             }
 
             result["routes"] = routes;
