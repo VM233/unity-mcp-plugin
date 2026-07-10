@@ -24,6 +24,7 @@ All notable changes to this package will be documented in this file.
 - **Token-bounded metadata** - `_meta/tools` now defaults to compact first-class metadata without schemas, returns at most 50 tools per page, and requires explicit flags for schemas or legacy duplicate collections. Full catalogs support category filters and pagination.
 - **Bounded query responses** - scene and prefab hierarchies, Console queries, test discovery/results, SerializedObject reads, and execute-code serialization now use conservative defaults with pagination or explicit truncation metadata. Console stacks and test stacks are opt-in.
 - **Lean first-class surface** - duplicate prefab aliases and low-frequency visual, animation, build, package, and queue routes remain available through the advanced catalog instead of occupying every MCP `tools/list` response.
+- **Project tool exposure** - read-only and asset-mutating project tools remain concrete; runtime mutation commands are discovered through `project-tools/list` and called through `project-tools/execute` instead of all occupying `tools/list`.
 - **Prefab diff summaries** - prefab mutations return summary diffs by default; callers can explicitly request `minimal` or `full` lines.
 
 ### Fixed

@@ -491,9 +491,18 @@ namespace UnityMCP.Editor
             bool longRunning = GetBool(projectTool, "longRunning", false);
             bool mayReloadDomain = GetBool(projectTool, "mayReloadDomain", false);
             bool requiresPlayMode = GetBool(projectTool, "requiresPlayMode", false);
-            var profile = ToolProfile.FirstClass(readOnly: readOnly, mutatesAssets: mutatesAssets,
-                dangerous: dangerous, longRunning: longRunning, mayReloadDomain: mayReloadDomain,
-                requiresPlayMode: requiresPlayMode);
+            bool isFirstClass = readOnly || mutatesAssets;
+            var profile = new ToolProfile
+            {
+                Exposure = isFirstClass ? ExposureFirstClass : ExposureLazy,
+                Preferred = isFirstClass,
+                ReadOnly = readOnly,
+                MutatesAssets = mutatesAssets,
+                Dangerous = dangerous,
+                LongRunning = longRunning,
+                MayReloadDomain = mayReloadDomain,
+                RequiresPlayMode = requiresPlayMode,
+            };
 
             return new Dictionary<string, object>
             {
@@ -504,9 +513,9 @@ namespace UnityMCP.Editor
                 { "description", string.IsNullOrEmpty(description) ? $"Project MCP tool: {projectToolName}" : description },
                 { "inputSchema", inputSchema },
                 { "projectToolName", projectToolName },
-                { "firstClass", true },
-                { "exposure", ExposureFirstClass },
-                { "preferred", true },
+                { "firstClass", isFirstClass },
+                { "exposure", profile.Exposure },
+                { "preferred", profile.Preferred },
                 { "readOnly", readOnly },
                 { "mutatesAssets", mutatesAssets },
                 { "dangerous", dangerous },
@@ -514,7 +523,8 @@ namespace UnityMCP.Editor
                 { "mayReloadDomain", mayReloadDomain },
                 { "requiresPlayMode", requiresPlayMode },
                 { "annotations", profile.ToAnnotations(toolName) },
-                { "source", projectTool.TryGetValue("source", out var source) ? source : "" }
+                { "source", projectTool.TryGetValue("source", out var source) ? source : "" },
+                { "fallbackRoute", isFirstClass ? "" : "project-tools/execute" },
             };
         }
 
