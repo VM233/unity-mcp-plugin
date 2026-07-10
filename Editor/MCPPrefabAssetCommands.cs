@@ -583,11 +583,9 @@ namespace UnityMCP.Editor
                 }
                 else if (!string.IsNullOrEmpty(referenceAssetPath))
                 {
-                    targetRef = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(referenceAssetPath);
-                    if (targetRef == null)
-                        return new { error = $"Asset not found at '{referenceAssetPath}'" };
+                    if (!TryResolveAssetReference(prop, referenceAssetPath, out targetRef, out string error))
+                        return new { error };
 
-                    prop.objectReferenceValue = targetRef;
                     refDescription = $"{targetRef.name} ({targetRef.GetType().Name})";
                 }
                 else if (!string.IsNullOrEmpty(referencePrefabPath))
@@ -2624,7 +2622,7 @@ namespace UnityMCP.Editor
                 return false;
             }
 
-            if (!TryResolveBatchReference(root, operation, out UnityEngine.Object targetRef,
+            if (!TryResolveBatchReference(root, prop, operation, out UnityEngine.Object targetRef,
                     out string refDescription, out error))
             {
                 error = $"Operation {operationIndex}: {error}";
@@ -2928,8 +2926,9 @@ namespace UnityMCP.Editor
             return true;
         }
 
-        private static bool TryResolveBatchReference(GameObject root, Dictionary<string, object> operation,
-            out UnityEngine.Object targetRef, out string refDescription, out string error)
+        private static bool TryResolveBatchReference(GameObject root, SerializedProperty property,
+            Dictionary<string, object> operation, out UnityEngine.Object targetRef,
+            out string refDescription, out string error)
         {
             targetRef = null;
             refDescription = "null (cleared)";
@@ -2942,12 +2941,8 @@ namespace UnityMCP.Editor
             string referenceAssetPath = GetString(operation, "referenceAssetPath");
             if (string.IsNullOrEmpty(referenceAssetPath) == false)
             {
-                targetRef = AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(referenceAssetPath);
-                if (targetRef == null)
-                {
-                    error = $"Asset not found at '{referenceAssetPath}'";
+                if (!TryResolveAssetReference(property, referenceAssetPath, out targetRef, out error))
                     return false;
-                }
 
                 refDescription = $"{targetRef.name} ({targetRef.GetType().Name})";
                 return true;
@@ -2990,6 +2985,36 @@ namespace UnityMCP.Editor
             }
 
             error = "Provide referenceAssetPath, referencePrefabPath, or clear=true";
+            return false;
+        }
+
+        private static bool TryResolveAssetReference(SerializedProperty property, string assetPath,
+            out UnityEngine.Object targetRef, out string error)
+        {
+            targetRef = null;
+            error = "";
+            var candidates = AssetDatabase.LoadAllAssetsAtPath(assetPath);
+            if (candidates == null || candidates.Length == 0)
+            {
+                error = $"Asset not found at '{assetPath}'";
+                return false;
+            }
+
+            foreach (var candidate in candidates)
+            {
+                if (candidate == null)
+                    continue;
+
+                property.objectReferenceValue = candidate;
+                if (property.objectReferenceValue == candidate)
+                {
+                    targetRef = candidate;
+                    return true;
+                }
+            }
+
+            error = $"No asset at '{assetPath}' is compatible with property " +
+                    $"'{property.propertyPath}' ({property.type})";
             return false;
         }
 

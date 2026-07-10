@@ -371,6 +371,109 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void PrefabSetReference_ResolvesSpriteSubAssetInsteadOfTextureMainAsset()
+        {
+            const string spritePath = TEST_FOLDER + "/Reference Sprite.png";
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            try
+            {
+                texture.SetPixels(new[] { Color.white, Color.white, Color.white, Color.white });
+                texture.Apply();
+                File.WriteAllBytes(GetAbsolutePath(spritePath), texture.EncodeToPNG());
+            }
+            finally
+            {
+                Object.DestroyImmediate(texture);
+            }
+
+            AssetDatabase.ImportAsset(spritePath, ImportAssetOptions.ForceSynchronousImport);
+            var importer = (TextureImporter)AssetImporter.GetAtPath(spritePath);
+            importer.textureType = TextureImporterType.Sprite;
+            importer.spriteImportMode = SpriteImportMode.Single;
+            importer.SaveAndReimport();
+
+            Assert.That(AssetDatabase.LoadAssetAtPath<Object>(spritePath), Is.TypeOf<Texture2D>());
+            Assert.That(AssetDatabase.LoadAssetAtPath<Sprite>(spritePath), Is.Not.Null);
+
+            var prefabRoot = new GameObject("Sprite Reference Prefab");
+            try
+            {
+                prefabRoot.AddComponent<SpriteRenderer>();
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(prefabRoot, PREFAB_PATH), Is.Not.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(prefabRoot);
+            }
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.SetReference(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "componentType", typeof(SpriteRenderer).FullName },
+                { "propertyName", "m_Sprite" },
+                { "referenceAssetPath", spritePath },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(result["reference"].ToString(), Does.Contain("Sprite"));
+
+            var loadedRoot = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                var sprite = loadedRoot.GetComponent<SpriteRenderer>().sprite;
+                Assert.That(sprite, Is.Not.Null);
+                Assert.That(AssetDatabase.GetAssetPath(sprite), Is.EqualTo(spritePath));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loadedRoot);
+            }
+        }
+
+        [Test]
+        public void RuntimeUIDocumentSelector_AcceptsNegativeInstanceId()
+        {
+            var firstObject = new GameObject("__UnityMCP_UIDocument_A");
+            var targetObject = new GameObject("__UnityMCP_UIDocument_Z");
+            try
+            {
+                firstObject.AddComponent<UIDocument>();
+                var targetDocument = targetObject.AddComponent<UIDocument>();
+
+                var buildInfo = typeof(MCPUICommands).GetMethod("BuildUIDocumentInfo",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                var findDocument = typeof(MCPUICommands).GetMethod("FindRuntimeUIDocument",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                Assert.That(buildInfo, Is.Not.Null);
+                Assert.That(findDocument, Is.Not.Null);
+
+                var documentInfo = RequireDictionary(buildInfo.Invoke(null, new object[] { targetDocument }));
+                string instanceId = documentInfo["instanceId"].ToString();
+#if !UNITY_6000_5_OR_NEWER
+                Assert.That(instanceId, Does.StartWith("-"));
+                object requestInstanceId = Convert.ToInt64(instanceId);
+#else
+                object requestInstanceId = instanceId;
+#endif
+
+                object[] parameters =
+                {
+                    new Dictionary<string, object> { { "documentInstanceId", requestInstanceId } },
+                    null,
+                };
+                var resolvedDocument = findDocument.Invoke(null, parameters);
+
+                Assert.That(resolvedDocument, Is.SameAs(targetDocument));
+                Assert.That(parameters[1], Is.EqualTo(""));
+            }
+            finally
+            {
+                Object.DestroyImmediate(targetObject);
+                Object.DestroyImmediate(firstObject);
+            }
+        }
+
+        [Test]
         public void ToolMetadata_DefaultIsCompactPaginatedAndSchemaFree()
         {
             var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools());

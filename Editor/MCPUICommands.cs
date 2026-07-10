@@ -3687,10 +3687,24 @@ namespace UnityMCP.Editor
 
         private static bool IsObjectIdString(string value)
         {
-            if (string.IsNullOrWhiteSpace(value) || value == "0")
+            if (string.IsNullOrWhiteSpace(value))
                 return false;
 
-            return value.All(char.IsDigit);
+            int digitStart = value[0] == '-' ? 1 : 0;
+            if (digitStart == value.Length)
+                return false;
+
+            bool hasNonZeroDigit = false;
+            for (int index = digitStart; index < value.Length; index++)
+            {
+                char character = value[index];
+                if (character < '0' || character > '9')
+                    return false;
+
+                hasNonZeroDigit |= character != '0';
+            }
+
+            return hasNonZeroDigit;
         }
 
         private static float GetFloat(Dictionary<string, object> args, string key, float defaultValue)
