@@ -12,6 +12,7 @@ namespace UnityMCP.Editor
     {
         private static List<string> _cachedRoutes;
         private static List<Dictionary<string, object>> _cachedTools;
+        private static List<Dictionary<string, object>> _cachedFirstClassTools;
 
         private const string ExposureFirstClass = "first-class";
         private const string ExposureFallback = "fallback";
@@ -211,7 +212,7 @@ namespace UnityMCP.Editor
         /// </summary>
         public static object GetRegisteredRoutes()
         {
-            EnsureToolMetadataCache();
+            EnsureRouteCache();
             var routes = _cachedRoutes;
 
             // Group by category
@@ -233,8 +234,11 @@ namespace UnityMCP.Editor
 
         public static object GetRegisteredTools(bool firstClassOnly = false, bool compact = false)
         {
-            EnsureToolMetadataCache();
-            var tools = firstClassOnly ? _cachedTools.Where(IsFirstClassTool).ToList() : _cachedTools;
+            if (firstClassOnly)
+                EnsureFirstClassToolMetadataCache();
+            else
+                EnsureToolMetadataCache();
+            var tools = firstClassOnly ? _cachedFirstClassTools : _cachedTools;
             if (compact)
             {
                 return new Dictionary<string, object>
@@ -297,11 +301,32 @@ namespace UnityMCP.Editor
 
         private static void EnsureToolMetadataCache()
         {
-            if (_cachedRoutes != null && _cachedTools != null)
+            EnsureRouteCache();
+            if (_cachedTools != null)
                 return;
 
-            _cachedRoutes = GetRegisteredRouteList();
             _cachedTools = _cachedRoutes.Select(BuildToolMetadata).ToList();
+        }
+
+        private static void EnsureFirstClassToolMetadataCache()
+        {
+            EnsureRouteCache();
+            if (_cachedFirstClassTools != null)
+                return;
+
+            _cachedFirstClassTools = _cachedRoutes
+                .Where(route => route.StartsWith("project-tools/call/", StringComparison.Ordinal) ||
+                                ToolProfiles.TryGetValue(route, out var profile) &&
+                                profile.Exposure == ExposureFirstClass)
+                .Select(BuildToolMetadata)
+                .Where(IsFirstClassTool)
+                .ToList();
+        }
+
+        private static void EnsureRouteCache()
+        {
+            if (_cachedRoutes == null)
+                _cachedRoutes = GetRegisteredRouteList();
         }
 
         private static bool IsFirstClassTool(Dictionary<string, object> tool)
