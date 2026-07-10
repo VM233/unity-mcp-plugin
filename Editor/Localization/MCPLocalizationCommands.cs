@@ -5,9 +5,9 @@ using System.IO;
 using System.Linq;
 using UnityEditor;
 using UnityEditor.Localization;
-using UnityEditor.PackageManager;
 using UnityEngine;
 using UnityEngine.Localization;
+using UnityEngine.Localization.Pseudo;
 using UnityEngine.Localization.Settings;
 using UnityEngine.Localization.Tables;
 using Object = UnityEngine.Object;
@@ -61,7 +61,7 @@ namespace UnityMCP.Editor.Localization
 
         private static object GetStatus()
         {
-            var package = PackageInfo.FindForAssembly(typeof(Locale).Assembly);
+            var package = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(Locale).Assembly);
             var settings = LocalizationEditorSettings.ActiveLocalizationSettings;
             var locales = LocalizationEditorSettings.GetLocales();
             var stringCollections = LocalizationEditorSettings.GetStringTableCollections();
