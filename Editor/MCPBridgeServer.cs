@@ -1521,6 +1521,20 @@ namespace UnityMCP.Editor
                 case "uitoolkit/builder-preview":
                     return MCPUICommands.OpenUIBuilderPreview(ParseJson(body));
 
+                // ─── Localization (optional package) ───
+                case "localization/status":
+                case "localization/locales":
+                case "localization/create-locale":
+                case "localization/set-selected-locale":
+                case "localization/collections":
+                case "localization/create-collection":
+                case "localization/entries":
+                case "localization/upsert-entry":
+                case "localization/remove-entry":
+                case "localization/validate":
+                case "localization/settings":
+                    return MCPLocalizationBridge.Execute(path, ParseJson(body));
+
                 // ─── Package Manager ───
                 case "packages/list":
                     return MCPPackageManagerCommands.ListPackages(ParseJson(body));

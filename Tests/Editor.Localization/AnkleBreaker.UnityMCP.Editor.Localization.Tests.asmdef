@@ -1,0 +1,32 @@
+{
+  "name": "AnkleBreaker.UnityMCP.Editor.Localization.Tests",
+  "rootNamespace": "UnityMCP.Editor.Localization.Tests",
+  "references": [
+    "AnkleBreaker.UnityMCP.Editor",
+    "AnkleBreaker.UnityMCP.Editor.Localization",
+    "Unity.Localization",
+    "Unity.Localization.Editor"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "UNITY_MCP_LOCALIZATION"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.unity.localization",
+      "expression": "1.0.0",
+      "define": "UNITY_MCP_LOCALIZATION"
+    }
+  ],
+  "noEngineReferences": false,
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ]
+}

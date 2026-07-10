@@ -110,6 +110,11 @@ namespace UnityMCP.Editor
                 "uitoolkit/locate-element",
                 "uitoolkit/capture-element",
                 "uitoolkit/compare-element",
+                "localization/status",
+                "localization/locales",
+                "localization/collections",
+                "localization/entries",
+                "localization/validate",
                 "packages/list",
                 "packages/info",
                 "packages/status",
@@ -150,7 +155,15 @@ namespace UnityMCP.Editor
                 "asset/export-unitypackage",
                 "uitoolkit/runtime-repaint",
                 "uitoolkit/refresh",
-                "uitoolkit/assert-layout");
+                "uitoolkit/assert-layout",
+                "localization/create-locale",
+                "localization/create-collection",
+                "localization/upsert-entry",
+                "localization/remove-entry",
+                "localization/settings");
+
+            AddProfile(profiles, ToolProfile.FirstClass(),
+                "localization/set-selected-locale");
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true,
                     mayReloadDomain: true),
@@ -352,9 +365,16 @@ namespace UnityMCP.Editor
             routes.AddRange(MCPProjectToolCommands.GetDirectRoutePaths());
             return routes
                 .Where(route => !string.IsNullOrEmpty(route))
+                .Where(route => IsRouteAvailable(route, MCPLocalizationBridge.IsAvailable))
                 .Distinct()
                 .OrderBy(route => route)
                 .ToList();
+        }
+
+        private static bool IsRouteAvailable(string route, bool localizationAvailable)
+        {
+            return localizationAvailable ||
+                   !route.StartsWith("localization/", StringComparison.Ordinal);
         }
 
         private static List<string> ExtractRouteCasesFromSource()
@@ -909,6 +929,28 @@ namespace UnityMCP.Editor
                     return "Build the player, launch the built executable, sample Player.log, optionally capture its window, and terminate it.";
                 case "animation/set-object-reference-curve":
                     return "Set AnimationClip ObjectReference keyframes, such as SpriteRenderer.m_Sprite.";
+                case "localization/status":
+                    return "Inspect Unity Localization package, settings, locale, and table collection status.";
+                case "localization/locales":
+                    return "List project Locales registered with Unity Localization.";
+                case "localization/create-locale":
+                    return "Create a Locale asset and optionally register it with Localization Settings.";
+                case "localization/set-selected-locale":
+                    return "Set the currently selected Unity Localization Locale.";
+                case "localization/collections":
+                    return "List String and Asset Table Collections with their Locale tables.";
+                case "localization/create-collection":
+                    return "Create a String or Asset Table Collection for selected Locales.";
+                case "localization/entries":
+                    return "Read paginated String or Asset Table entries across Locale tables.";
+                case "localization/upsert-entry":
+                    return "Create or update a localized String, Smart String, or Asset Table entry.";
+                case "localization/remove-entry":
+                    return "Remove a localization entry from one Locale table or the entire collection.";
+                case "localization/validate":
+                    return "Find missing, empty, and duplicate localization entries across Locale tables.";
+                case "localization/settings":
+                    return "Read or update Localization Settings, project Locale, and selected Locale.";
                 case "project-tools/list":
                     return "List project-defined MCP extension tools discovered in loaded Unity editor assemblies.";
                 case "project-tools/execute":
@@ -932,6 +974,78 @@ namespace UnityMCP.Editor
                         Prop("body", "string", "Optional raw JSON body. If provided, args are ignored."),
                         Prop("expectedProjectPath", "string", "Optional safety check. The request is rejected if it reaches a different Unity project.")
                     ), "route");
+                case "localization/status":
+                    return Schema(Props());
+                case "localization/locales":
+                    return Schema(Props(
+                        Prop("includePseudo", "boolean", "Include PseudoLocale assets. Defaults to true.")
+                    ));
+                case "localization/create-locale":
+                    return Schema(Props(
+                        Prop("code", "string", "Locale code, for example en-US or zh-CN."),
+                        Prop("assetPath", "string", "Locale asset path under Assets ending in .asset."),
+                        Prop("name", "string", "Optional Locale display name."),
+                        Prop("addToProject", "boolean", "Register the Locale with Localization Settings. Defaults to true.")
+                    ), "code", "assetPath");
+                case "localization/set-selected-locale":
+                    return Schema(Props(
+                        Prop("locale", "string", "Registered Locale code to select.")
+                    ), "locale");
+                case "localization/collections":
+                    return Schema(Props(
+                        Prop("type", "string", "Optional collection type filter: string or asset."),
+                        Prop("nameContains", "string", "Optional case-insensitive collection name filter.")
+                    ));
+                case "localization/create-collection":
+                    return Schema(Props(
+                        Prop("name", "string", "Table Collection name."),
+                        Prop("type", "string", "Collection type: string or asset."),
+                        Prop("assetDirectory", "string", "Existing or new directory under Assets."),
+                        Prop("locales", "array", "Optional Locale codes. Defaults to every registered Locale."),
+                        Prop("group", "string", "Optional Localization window group."),
+                        Prop("preload", "boolean", "Optional preload flag for all created tables.")
+                    ), "name", "type", "assetDirectory");
+                case "localization/entries":
+                    return Schema(Props(
+                        Prop("collection", "string", "Table Collection name or GUID."),
+                        Prop("type", "string", "Collection type: string or asset. Defaults to string."),
+                        Prop("locale", "string", "Optional Locale code filter."),
+                        Prop("keyContains", "string", "Optional case-insensitive key filter."),
+                        Prop("offset", "number", "Filtered key offset. Defaults to 0."),
+                        Prop("limit", "number", "Maximum keys returned. Defaults to 100; capped at 500.")
+                    ), "collection");
+                case "localization/upsert-entry":
+                    return Schema(Props(
+                        Prop("collection", "string", "Table Collection name or GUID."),
+                        Prop("type", "string", "Collection type: string or asset. Defaults to string."),
+                        Prop("locale", "string", "Target Locale code."),
+                        Prop("key", "string", "Shared localization key."),
+                        Prop("value", "string", "String or Smart String value."),
+                        Prop("smart", "boolean", "Mark a String entry as a Smart String."),
+                        Prop("assetPath", "string", "Asset path for an Asset Table entry."),
+                        Prop("subAssetName", "string", "Optional exact sub-asset name at assetPath."),
+                        Prop("createTable", "boolean", "Create a missing Locale table. Defaults to true.")
+                    ), "collection", "locale", "key");
+                case "localization/remove-entry":
+                    return Schema(Props(
+                        Prop("collection", "string", "Table Collection name or GUID."),
+                        Prop("type", "string", "Collection type: string or asset. Defaults to string."),
+                        Prop("key", "string", "Localization key to remove."),
+                        Prop("locale", "string", "Optional Locale code. Omit to remove the shared key from every table.")
+                    ), "collection", "key");
+                case "localization/validate":
+                    return Schema(Props(
+                        Prop("collection", "string", "Optional Table Collection name or GUID."),
+                        Prop("type", "string", "Optional collection type filter: string or asset."),
+                        Prop("includeEmpty", "boolean", "Report empty values as well as missing entries. Defaults to true."),
+                        Prop("maxIssues", "number", "Maximum issues returned. Defaults to 200; capped at 2000.")
+                    ));
+                case "localization/settings":
+                    return Schema(Props(
+                        Prop("initializeSynchronously", "boolean", "Optional Localization initialization mode."),
+                        Prop("projectLocale", "string", "Optional registered project Locale code."),
+                        Prop("selectedLocale", "string", "Optional registered selected Locale code.")
+                    ));
                 case "packages/update-git":
                     return Schema(Props(
                         Prop("name", "string", "Package name, e.g. com.example.package"),

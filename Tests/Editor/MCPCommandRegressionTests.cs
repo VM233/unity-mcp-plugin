@@ -502,6 +502,17 @@ namespace UnityMCP.Editor.Tests
             Assert.That(result.ContainsKey("fallbackTools"), Is.False);
         }
 
+        [Test]
+        public void ToolMetadata_LocalizationRoutesRequireOptionalPackage()
+        {
+            var method = typeof(MCPToolMetadata).GetMethod("IsRouteAvailable",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            Assert.That(method.Invoke(null, new object[] { "localization/status", false }), Is.EqualTo(false));
+            Assert.That(method.Invoke(null, new object[] { "localization/status", true }), Is.EqualTo(true));
+            Assert.That(method.Invoke(null, new object[] { "scene/hierarchy", false }), Is.EqualTo(true));
+        }
+
         private static void CreateTestPrefab(bool addCollider = false)
         {
             var root = new GameObject("MCP Test Prefab");
