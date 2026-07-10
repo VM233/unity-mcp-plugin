@@ -73,9 +73,7 @@ namespace UnityMCP.Editor
             };
             SaveWorkflow();
             EnsureUpdateRegistered();
-
-            if (_workflow.ManifestChanged)
-                EditorApplication.delayCall += EnablePackageTests;
+            Debug.Log($"[MCP Package Tests] Started workflow {_workflow.WorkflowId} for {_workflow.PackageName}");
 
             return BuildResponse(_workflow);
         }
@@ -165,6 +163,10 @@ namespace UnityMCP.Editor
                             _workflow.State = "waiting-for-assembly";
                             TouchAndSaveWorkflow();
                         }
+                        else
+                        {
+                            EnablePackageTests();
+                        }
                         break;
                     case "waiting-for-assembly":
                         if (AreAssembliesLoaded(_workflow.Assemblies))
@@ -210,6 +212,8 @@ namespace UnityMCP.Editor
             _workflow.TestJobId = GetString(runResult, "jobId");
             _workflow.State = "running";
             TouchAndSaveWorkflow();
+            Debug.Log($"[MCP Package Tests] Workflow {_workflow.WorkflowId} started test job " +
+                      _workflow.TestJobId);
         }
 
         private static void UpdateRunningTestJob()
@@ -240,6 +244,7 @@ namespace UnityMCP.Editor
             _workflow.State = "restoring";
             TouchAndSaveWorkflow();
             EditorApplication.delayCall += RestoreManifest;
+            Debug.Log($"[MCP Package Tests] Workflow {_workflow.WorkflowId} restoring package manifest");
         }
 
         private static void RestoreManifest()
@@ -286,6 +291,7 @@ namespace UnityMCP.Editor
                 : "failed";
             TouchAndSaveWorkflow();
             UnregisterUpdate();
+            Debug.Log($"[MCP Package Tests] Workflow {_workflow.WorkflowId} finished with state {_workflow.State}");
         }
 
         private static void FailWorkflow(string error)
