@@ -653,7 +653,10 @@ namespace UnityMCP.Editor
             }
             if (path == "_meta/tools")
             {
-                return MCPToolMetadata.GetRegisteredTools();
+                var args = ParseJson(body);
+                bool firstClassOnly = args.TryGetValue("firstClassOnly", out var value) &&
+                                      value != null && Convert.ToBoolean(value);
+                return MCPToolMetadata.GetRegisteredTools(firstClassOnly);
             }
 
             if (TryBuildProjectMismatchResponse(path, ParseJson(body), out var projectMismatch))

@@ -10,6 +10,9 @@ namespace UnityMCP.Editor
 {
     internal static class MCPToolMetadata
     {
+        private static List<string> _cachedRoutes;
+        private static List<Dictionary<string, object>> _cachedTools;
+
         private const string ExposureFirstClass = "first-class";
         private const string ExposureFallback = "fallback";
         private const string ExposureLazy = "lazy";
@@ -208,7 +211,8 @@ namespace UnityMCP.Editor
         /// </summary>
         public static object GetRegisteredRoutes()
         {
-            var routes = GetRegisteredRouteList();
+            EnsureToolMetadataCache();
+            var routes = _cachedRoutes;
 
             // Group by category
             var grouped = new Dictionary<string, List<string>>();
@@ -227,10 +231,11 @@ namespace UnityMCP.Editor
             };
         }
 
-        public static object GetRegisteredTools()
+        public static object GetRegisteredTools(bool firstClassOnly = false)
         {
-            var routes = GetRegisteredRouteList();
-            var tools = routes.Select(BuildToolMetadata).ToList();
+            EnsureToolMetadataCache();
+            var tools = firstClassOnly ? _cachedTools.Where(IsFirstClassTool).ToList() : _cachedTools;
+            var routes = tools.Select(tool => tool["route"].ToString()).ToList();
             var firstClassTools = tools.Where(IsFirstClassTool).ToList();
             var fallbackTools = tools.Where(tool =>
                 string.Equals(tool.TryGetValue("exposure", out var exposure) ? exposure?.ToString() : "",
@@ -249,6 +254,7 @@ namespace UnityMCP.Editor
             {
                 { "schemaVersion", 2 },
                 { "metadataSource", "MCPToolMetadata.ToolProfiles" },
+                { "firstClassOnly", firstClassOnly },
                 { "routes", routes },
                 { "tools", tools },
                 { "mcpTools", firstClassTools.Select(ToMcpToolDescriptor).ToList() },
@@ -258,6 +264,15 @@ namespace UnityMCP.Editor
                 { "totalTools", tools.Count },
                 { "metadataIssues", BuildMetadataIssues(tools) }
             };
+        }
+
+        private static void EnsureToolMetadataCache()
+        {
+            if (_cachedRoutes != null && _cachedTools != null)
+                return;
+
+            _cachedRoutes = GetRegisteredRouteList();
+            _cachedTools = _cachedRoutes.Select(BuildToolMetadata).ToList();
         }
 
         private static bool IsFirstClassTool(Dictionary<string, object> tool)
