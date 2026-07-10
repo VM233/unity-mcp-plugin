@@ -5,6 +5,8 @@ All notable changes to this package will be documented in this file.
 ## Unreleased
 
 ### Added
+- **Atomic prefab component moves** - `prefab-asset/move-component` / `unity_prefab_asset_move_component` copies a component to another GameObject, verifies the destination, removes the source, and saves once while preserving serialized data.
+- **Compact scene component filtering** - `scene/hierarchy` accepts `componentType`, `nameContains`, `pathContains`, and `maxResults` to return compact flat matches instead of serializing the entire scene tree.
 - **Batch asset moves** - `asset/move-batch` / `unity_asset_move_batch` preflights all move requests before mutating assets, moves them inside one AssetDatabase editing block, and reports per-asset GUID/meta verification. If a move fails, completed moves are reversed before the response is returned.
 - **Project tool selection hints** - `MCPProjectToolAttribute` can now declare `ReadOnly`, `MutatesAssets`, `Dangerous`, `LongRunning`, `MayReloadDomain`, and `RequiresPlayMode`; `_meta/tools` also infers common read-only `get/list/*summary` project tools and mutating asset/prefab tools when hints are not explicit.
 - **Tool metadata profiles** - `_meta/tools` now uses a single `ToolProfile` registry for first-class/fallback/lazy exposure plus `readOnly`, `mutatesAssets`, `dangerous`, `longRunning`, `mayReloadDomain`, and `requiresPlayMode` hints. First-class tools also include MCP-shaped `name`, `input_schema`, `annotations`, and an `mcpTools` list so hosts can register concrete tools without guessing field names.
@@ -17,6 +19,8 @@ All notable changes to this package will be documented in this file.
 - **First-class route metadata** — stable routes advertised in the README now include `firstClass=true` in `_meta/tools`, so MCP clients can expose concrete tools with route-owned schemas and descriptions instead of routing them through the generic advanced entry.
 
 ### Fixed
+- **Prefab mutation rollback and YAML diffs** - failed `prefab-asset/add-gameobject` and component moves restore the original prefab bytes; successful prefab saves remove trailing YAML whitespace; line diffs now use a real edit script and report complete added/removed totals independently from truncation.
+- **Execute-code structured results** - nested arrays, lists, dictionaries, anonymous objects, and Unity values are serialized recursively instead of degrading to CLR type names such as `System.String[]`.
 - **SerializeReference array writes** - `serialized-object/get` now reports `$managedReferenceType`, and `serialized-object/set` can instantiate new managed-reference elements from that type or infer it from a homogeneous existing list. Unsupported writes now return a structured error without a Unity Console exception.
 - **Prefab batch edit reliability** - `prefab-asset/batch-edit` now applies operations incrementally across editor frames with progress snapshots, configurable `batchEditTimeoutMs` / per-frame budgets, structured timeout failures, and explicit persistence state (`saved`, `saveAttempted`, `partialPersistedKnown`, `persistedState`) so long or complex prefab edits do not disappear behind queue polling timeouts.
 - **Serialized complex fields** - component property read/write now expands and accepts serialized arrays/lists plus generic child objects instead of reporting complex list fields only as `Generic`.

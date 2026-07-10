@@ -524,63 +524,161 @@ public static class MCPDynamicCode
         /// </summary>
         private static object SerializeResult(object result)
         {
-            if (result == null)
-                return new { success = true, result = (object)null };
-
-            // Primitives and strings
-            if (result is string || result is int || result is float || result is double
-                || result is bool || result is long || result is decimal)
-                return new Dictionary<string, object> { { "success", true }, { "result", result } };
-
-            // Unity Vector types
-            if (result is Vector2 v2)
-                return new Dictionary<string, object> { { "success", true }, { "result", new { x = v2.x, y = v2.y } } };
-            if (result is Vector3 v3)
-                return new Dictionary<string, object> { { "success", true }, { "result", new { x = v3.x, y = v3.y, z = v3.z } } };
-            if (result is Color col)
-                return new Dictionary<string, object> { { "success", true }, { "result", new { r = col.r, g = col.g, b = col.b, a = col.a } } };
-
-            // Dictionaries
-            if (result is System.Collections.IDictionary dict)
-                return new Dictionary<string, object> { { "success", true }, { "result", result } };
-
-            // Lists and arrays - serialize elements
-            if (result is System.Collections.IList list)
-            {
-                var items = new List<object>();
-                foreach (var item in list)
-                    items.Add(item?.ToString());
-                return new Dictionary<string, object> { { "success", true }, { "result", items }, { "count", items.Count } };
-            }
-
-            // Anonymous types and complex objects - serialize via reflection
-            var type = result.GetType();
-            if (type.Name.Contains("AnonymousType") || type.IsClass)
-            {
-                try
-                {
-                    var props = type.GetProperties();
-                    if (props.Length > 0)
-                    {
-                        var obj = new Dictionary<string, object>();
-                        foreach (var prop in props)
-                        {
-                            try { obj[prop.Name] = prop.GetValue(result)?.ToString(); }
-                            catch { obj[prop.Name] = "<error>"; }
-                        }
-                        return new Dictionary<string, object> { { "success", true }, { "result", obj } };
-                    }
-                }
-                catch { }
-            }
-
-            // Fallback: ToString
-            return new Dictionary<string, object>
+            object serialized = SerializeResultValue(result, 0,
+                new HashSet<object>(ReferenceEqualityComparer.Instance));
+            var response = new Dictionary<string, object>
             {
                 { "success", true },
-                { "result", result.ToString() },
-                { "type", type.Name },
+                { "result", serialized },
             };
+            if (serialized is System.Collections.ICollection collection)
+                response["count"] = collection.Count;
+            return response;
+        }
+
+        private static object SerializeResultValue(object value, int depth, HashSet<object> visiting)
+        {
+            if (value == null)
+                return null;
+            if (depth > 16)
+                return "<max-depth>";
+
+            Type type = value.GetType();
+            if (value is string || value is bool || value is byte || value is sbyte || value is short ||
+                value is ushort || value is int || value is uint || value is long || value is ulong ||
+                value is float || value is double || value is decimal)
+                return value;
+            if (value is char character)
+                return character.ToString();
+            if (type.IsEnum)
+                return value.ToString();
+            if (value is DateTime dateTime)
+                return dateTime.ToString("O");
+            if (value is DateTimeOffset dateTimeOffset)
+                return dateTimeOffset.ToString("O");
+            if (value is Guid guid)
+                return guid.ToString();
+            if (value is Type reflectedType)
+                return reflectedType.FullName;
+
+            if (value is Vector2 vector2)
+                return new Dictionary<string, object> { { "x", vector2.x }, { "y", vector2.y } };
+            if (value is Vector2Int vector2Int)
+                return new Dictionary<string, object> { { "x", vector2Int.x }, { "y", vector2Int.y } };
+            if (value is Vector3 vector3)
+                return new Dictionary<string, object> { { "x", vector3.x }, { "y", vector3.y }, { "z", vector3.z } };
+            if (value is Vector3Int vector3Int)
+                return new Dictionary<string, object> { { "x", vector3Int.x }, { "y", vector3Int.y }, { "z", vector3Int.z } };
+            if (value is Vector4 vector4)
+                return new Dictionary<string, object>
+                    { { "x", vector4.x }, { "y", vector4.y }, { "z", vector4.z }, { "w", vector4.w } };
+            if (value is Quaternion quaternion)
+                return new Dictionary<string, object>
+                    { { "x", quaternion.x }, { "y", quaternion.y }, { "z", quaternion.z }, { "w", quaternion.w } };
+            if (value is Color color)
+                return new Dictionary<string, object>
+                    { { "r", color.r }, { "g", color.g }, { "b", color.b }, { "a", color.a } };
+            if (value is Color32 color32)
+                return new Dictionary<string, object>
+                    { { "r", color32.r }, { "g", color32.g }, { "b", color32.b }, { "a", color32.a } };
+
+            if (value is UnityEngine.Object unityObject)
+            {
+                string assetPath = AssetDatabase.GetAssetPath(unityObject);
+                var unityResult = new Dictionary<string, object>
+                {
+                    { "name", unityObject.name },
+                    { "type", unityObject.GetType().FullName },
+                    { "instanceId", unityObject.GetInstanceID() },
+                };
+                if (!string.IsNullOrEmpty(assetPath))
+                    unityResult["assetPath"] = assetPath;
+                return unityResult;
+            }
+
+            bool trackReference = !type.IsValueType;
+            if (trackReference && !visiting.Add(value))
+                return "<cycle>";
+
+            try
+            {
+                if (value is System.Collections.IDictionary dictionary)
+                {
+                    var result = new Dictionary<string, object>();
+                    int count = 0;
+                    foreach (System.Collections.DictionaryEntry entry in dictionary)
+                    {
+                        if (count++ >= 10000)
+                        {
+                            result["$truncated"] = true;
+                            break;
+                        }
+
+                        string key = entry.Key?.ToString() ?? "null";
+                        result[key] = SerializeResultValue(entry.Value, depth + 1, visiting);
+                    }
+                    return result;
+                }
+
+                if (value is System.Collections.IEnumerable enumerable)
+                {
+                    var result = new List<object>();
+                    foreach (var item in enumerable)
+                    {
+                        if (result.Count >= 10000)
+                        {
+                            result.Add("<truncated>");
+                            break;
+                        }
+                        result.Add(SerializeResultValue(item, depth + 1, visiting));
+                    }
+                    return result;
+                }
+
+                var objectResult = new Dictionary<string, object>();
+                foreach (var property in type.GetProperties(BindingFlags.Instance | BindingFlags.Public))
+                {
+                    if (!property.CanRead || property.GetIndexParameters().Length > 0)
+                        continue;
+                    try
+                    {
+                        objectResult[property.Name] = SerializeResultValue(property.GetValue(value), depth + 1,
+                            visiting);
+                    }
+                    catch (Exception ex)
+                    {
+                        objectResult[property.Name] = $"<error: {ex.GetBaseException().Message}>";
+                    }
+                }
+
+                foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.Public))
+                {
+                    if (!objectResult.ContainsKey(field.Name))
+                        objectResult[field.Name] = SerializeResultValue(field.GetValue(value), depth + 1, visiting);
+                }
+
+                return objectResult.Count > 0 ? (object)objectResult : value.ToString();
+            }
+            finally
+            {
+                if (trackReference)
+                    visiting.Remove(value);
+            }
+        }
+
+        private sealed class ReferenceEqualityComparer : IEqualityComparer<object>
+        {
+            public static readonly ReferenceEqualityComparer Instance = new ReferenceEqualityComparer();
+
+            public new bool Equals(object x, object y)
+            {
+                return ReferenceEquals(x, y);
+            }
+
+            public int GetHashCode(object obj)
+            {
+                return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(obj);
+            }
         }
 
         private static bool IsEditorIdle()

@@ -47,6 +47,7 @@ http://127.0.0.1:7890/api/ping
 | Prefab asset editing | `unity_prefab_asset_instantiate_prefab` | `prefab-asset/instantiate-prefab` | Instantiate one prefab asset inside another prefab asset under a selected child path. |
 | Prefab asset editing | `unity_prefab_asset_instantiate_child_prefab` | `prefab-asset/instantiate-child-prefab` | Clearer alias for `prefab-asset/instantiate-prefab`; use this when editing a prefab asset, not the scene. |
 | Prefab asset editing | `unity_prefab_asset_move_gameobject` | `prefab-asset/move-gameobject` | Move or reorder a GameObject inside a prefab asset without opening Prefab Mode manually. |
+| Prefab asset editing | `unity_prefab_asset_move_component` | `prefab-asset/move-component` | Atomically move a component between GameObjects while preserving its serialized data. |
 | Prefab asset editing | `unity_prefab_asset_remove_component` | `prefab-asset/remove-component` | Remove a component from a GameObject inside a prefab asset. |
 | Prefab asset editing | `unity_prefab_asset_remove_gameobject` | `prefab-asset/remove-gameobject` | Remove a child GameObject from inside a prefab asset. |
 | Prefab asset editing | `unity_prefab_asset_set_property` | `prefab-asset/set-property` | Set a serialized property on a component inside a prefab asset. |

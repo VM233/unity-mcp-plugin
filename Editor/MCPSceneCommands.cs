@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -107,6 +108,54 @@ namespace UnityMCP.Editor
                 startObjects = new[] { found };
             }
 
+            string componentTypeName = args != null && args.TryGetValue("componentType", out var componentTypeValue)
+                ? componentTypeValue?.ToString()
+                : null;
+            if (!string.IsNullOrEmpty(componentTypeName))
+            {
+                Type componentType = MCPComponentCommands.FindType(componentTypeName);
+                if (componentType == null || !typeof(Component).IsAssignableFrom(componentType))
+                    return new Dictionary<string, object> { { "error", $"Component type not found: {componentTypeName}" } };
+
+                int maxResults = args.ContainsKey("maxResults")
+                    ? Math.Max(1, Convert.ToInt32(args["maxResults"]))
+                    : Math.Max(1, Math.Min(maxNodes, 100));
+                string nameContains = args.TryGetValue("nameContains", out var nameValue)
+                    ? nameValue?.ToString()
+                    : null;
+                string pathContains = args.TryGetValue("pathContains", out var pathValue)
+                    ? pathValue?.ToString()
+                    : null;
+
+                var matches = new List<object>();
+                int totalMatches = 0;
+                foreach (var root in startObjects)
+                {
+                    CollectComponentMatches(root, componentType, nameContains, pathContains, maxResults,
+                        matches, ref totalMatches);
+                }
+
+                var filteredResult = new Dictionary<string, object>
+                {
+                    { "scene", scene.name },
+                    { "filtered", true },
+                    { "componentType", componentType.FullName },
+                    { "matches", matches },
+                    { "matchCount", matches.Count },
+                    { "totalMatches", totalMatches },
+                    { "maxResults", maxResults },
+                    { "truncated", totalMatches > matches.Count },
+                    { "totalSceneObjects", totalSceneObjects },
+                };
+                if (!string.IsNullOrEmpty(parentPath))
+                    filteredResult["parentPath"] = parentPath;
+                if (!string.IsNullOrEmpty(nameContains))
+                    filteredResult["nameContains"] = nameContains;
+                if (!string.IsNullOrEmpty(pathContains))
+                    filteredResult["pathContains"] = pathContains;
+                return filteredResult;
+            }
+
             int nodeCount = 0;
             var hierarchy = new List<object>();
 
@@ -139,6 +188,54 @@ namespace UnityMCP.Editor
                 result["parentPath"] = parentPath;
 
             return result;
+        }
+
+        private static void CollectComponentMatches(GameObject go, Type componentType, string nameContains,
+            string pathContains, int maxResults, List<object> matches, ref int totalMatches)
+        {
+            string path = GetGameObjectPath(go.transform);
+            bool nameMatches = string.IsNullOrEmpty(nameContains) ||
+                               go.name.IndexOf(nameContains, StringComparison.OrdinalIgnoreCase) >= 0;
+            bool pathMatches = string.IsNullOrEmpty(pathContains) ||
+                               path.IndexOf(pathContains, StringComparison.OrdinalIgnoreCase) >= 0;
+            if (nameMatches && pathMatches && go.GetComponent(componentType) != null)
+            {
+                totalMatches++;
+                if (matches.Count < maxResults)
+                {
+                    var components = new List<string>();
+                    foreach (var component in go.GetComponents<Component>())
+                    {
+                        if (component != null)
+                            components.Add(component.GetType().Name);
+                    }
+
+                    matches.Add(new Dictionary<string, object>
+                    {
+                        { "name", go.name },
+                        { "path", path },
+                        { "instanceId", MCPObjectId.Get(go) },
+                        { "active", go.activeSelf },
+                        { "components", components },
+                        { "position", VectorToDict(go.transform.position) },
+                    });
+                }
+            }
+
+            foreach (Transform child in go.transform)
+                CollectComponentMatches(child.gameObject, componentType, nameContains, pathContains,
+                    maxResults, matches, ref totalMatches);
+        }
+
+        private static string GetGameObjectPath(Transform transform)
+        {
+            var names = new Stack<string>();
+            while (transform != null)
+            {
+                names.Push(transform.name);
+                transform = transform.parent;
+            }
+            return string.Join("/", names);
         }
 
         /// <summary>Count all GameObjects recursively without building the full hierarchy.</summary>

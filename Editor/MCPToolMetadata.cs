@@ -97,6 +97,7 @@ namespace UnityMCP.Editor
                 "instance/list",
                 "instance/resolve",
                 "instance/assert-project",
+                "scene/hierarchy",
                 "serialized-object/get",
                 "prefab-asset/get-properties",
                 "prefab-asset/hierarchy",
@@ -140,6 +141,7 @@ namespace UnityMCP.Editor
                 "prefab-asset/batch-edit",
                 "prefab-asset/instantiate-child-prefab",
                 "prefab-asset/instantiate-prefab",
+                "prefab-asset/move-component",
                 "prefab-asset/move-gameobject",
                 "prefab-asset/remove-component",
                 "prefab-asset/remove-gameobject",
@@ -579,6 +581,8 @@ namespace UnityMCP.Editor
                     return "Resolve one Unity Editor MCP instance by project path, project name, or port.";
                 case "instance/assert-project":
                     return "Assert that this MCP request reached the expected Unity project.";
+                case "scene/hierarchy":
+                    return "Read the active scene hierarchy, optionally returning compact matches filtered by component type.";
                 case "scene/instantiate-prefab":
                 case "asset/instantiate-prefab":
                     return "Instantiate a prefab asset into the currently open scene.";
@@ -599,6 +603,8 @@ namespace UnityMCP.Editor
                     return "Set an ObjectReference property on a component inside a prefab asset.";
                 case "prefab-asset/move-gameobject":
                     return "Move or reorder a GameObject inside a prefab asset.";
+                case "prefab-asset/move-component":
+                    return "Atomically move a component between GameObjects inside one prefab asset while preserving serialized data.";
                 case "prefab-asset/remove-component":
                     return "Remove a component from a GameObject inside a prefab asset.";
                 case "prefab-asset/remove-gameobject":
@@ -835,6 +841,16 @@ namespace UnityMCP.Editor
                         Prop("overwrite", "boolean", "Replace an existing output file. Defaults to false."),
                         Prop("interactive", "boolean", "Show Unity's export package UI. Defaults to false.")
                     ), "outputPath");
+                case "scene/hierarchy":
+                    return Schema(Props(
+                        Prop("maxDepth", "number", "Maximum hierarchy depth to return. Defaults to 10."),
+                        Prop("maxNodes", "number", "Maximum hierarchy nodes to return. Defaults to 5000."),
+                        Prop("parentPath", "string", "Optional GameObject path used as the search root."),
+                        Prop("componentType", "string", "Optional component type name or full name. When set, returns compact flat matches instead of the full hierarchy."),
+                        Prop("nameContains", "string", "Optional case-insensitive GameObject name filter used with componentType."),
+                        Prop("pathContains", "string", "Optional case-insensitive hierarchy path filter used with componentType."),
+                        Prop("maxResults", "number", "Maximum component-filtered matches. Defaults to min(maxNodes, 100).")
+                    ));
                 case "scene/instantiate-prefab":
                 case "asset/instantiate-prefab":
                     return Schema(Props(
@@ -929,6 +945,18 @@ namespace UnityMCP.Editor
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                         Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
                     ), "assetPath", "componentType");
+                case "prefab-asset/move-component":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab asset path to edit."),
+                        Prop("sourcePrefabPath", "string", "Path of the source GameObject inside the prefab. Empty means root."),
+                        Prop("targetPrefabPath", "string", "Path of the target GameObject inside the prefab. Empty means root."),
+                        Prop("componentType", "string", "Component type name or full name."),
+                        Prop("componentIndex", "number", "Component index on the source GameObject. Defaults to 0."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                        Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
+                        Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                    ), "assetPath", "sourcePrefabPath", "targetPrefabPath", "componentType");
                 case "prefab-asset/move-gameobject":
                     return Schema(Props(
                         Prop("assetPath", "string", "Prefab asset path to edit."),

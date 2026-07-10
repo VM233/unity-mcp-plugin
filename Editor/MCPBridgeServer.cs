@@ -943,6 +943,8 @@ namespace UnityMCP.Editor
                     return MCPPrefabAssetCommands.AddComponent(ParseJson(body));
                 case "prefab-asset/remove-component":
                     return MCPPrefabAssetCommands.RemoveComponent(ParseJson(body));
+                case "prefab-asset/move-component":
+                    return MCPPrefabAssetCommands.MoveComponent(ParseJson(body));
                 case "prefab-asset/set-reference":
                     return MCPPrefabAssetCommands.SetReference(ParseJson(body));
                 case "prefab-asset/add-gameobject":
