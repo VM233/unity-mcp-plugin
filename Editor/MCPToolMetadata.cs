@@ -231,10 +231,22 @@ namespace UnityMCP.Editor
             };
         }
 
-        public static object GetRegisteredTools(bool firstClassOnly = false)
+        public static object GetRegisteredTools(bool firstClassOnly = false, bool compact = false)
         {
             EnsureToolMetadataCache();
             var tools = firstClassOnly ? _cachedTools.Where(IsFirstClassTool).ToList() : _cachedTools;
+            if (compact)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "schemaVersion", 2 },
+                    { "compact", true },
+                    { "firstClassOnly", firstClassOnly },
+                    { "tools", tools.Select(ToCompactToolDescriptor).ToList() },
+                    { "totalTools", tools.Count }
+                };
+            }
+
             var routes = tools.Select(tool => tool["route"].ToString()).ToList();
             var firstClassTools = tools.Where(IsFirstClassTool).ToList();
             var fallbackTools = tools.Where(tool =>
@@ -264,6 +276,23 @@ namespace UnityMCP.Editor
                 { "totalTools", tools.Count },
                 { "metadataIssues", BuildMetadataIssues(tools) }
             };
+        }
+
+        private static Dictionary<string, object> ToCompactToolDescriptor(Dictionary<string, object> tool)
+        {
+            var descriptor = new Dictionary<string, object>
+            {
+                { "route", tool["route"] },
+                { "toolName", tool["toolName"] },
+                { "description", tool["description"] },
+                { "inputSchema", tool["inputSchema"] },
+                { "annotations", tool["annotations"] },
+                { "firstClass", IsFirstClassTool(tool) },
+                { "exposure", tool["exposure"] }
+            };
+            if (tool.TryGetValue("projectToolName", out var projectToolName))
+                descriptor["projectToolName"] = projectToolName;
+            return descriptor;
         }
 
         private static void EnsureToolMetadataCache()

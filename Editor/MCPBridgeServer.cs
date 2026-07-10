@@ -656,7 +656,9 @@ namespace UnityMCP.Editor
                 var args = ParseJson(body);
                 bool firstClassOnly = args.TryGetValue("firstClassOnly", out var value) &&
                                       value != null && Convert.ToBoolean(value);
-                return MCPToolMetadata.GetRegisteredTools(firstClassOnly);
+                bool compact = args.TryGetValue("compact", out value) &&
+                               value != null && Convert.ToBoolean(value);
+                return MCPToolMetadata.GetRegisteredTools(firstClassOnly, compact);
             }
 
             if (TryBuildProjectMismatchResponse(path, ParseJson(body), out var projectMismatch))
