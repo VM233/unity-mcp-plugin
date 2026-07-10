@@ -3723,9 +3723,10 @@ namespace UnityMCP.Editor
             if (args == null)
                 return results;
 
-            if (args.TryGetValue(arrayKey, out object arrayValue) && arrayValue is List<object> list)
+            if (args.TryGetValue(arrayKey, out object arrayValue) &&
+                arrayValue is System.Collections.IEnumerable enumerable && arrayValue is string == false)
             {
-                foreach (object item in list)
+                foreach (object item in enumerable)
                 {
                     if (item != null)
                         results.Add(item.ToString());

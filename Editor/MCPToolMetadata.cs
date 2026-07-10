@@ -122,7 +122,10 @@ namespace UnityMCP.Editor
                 "wait/editor-idle",
                 "testing/list-tests",
                 "uitoolkit/wait-refresh",
-                "uitoolkit/builder-preview",
+                "uitoolkit/builder-preview");
+
+            AddProfile(profiles, ToolProfile.FirstClass(readOnly: true, longRunning: true,
+                    requiresPlayMode: true),
                 "screenshot/game");
 
             AddProfile(profiles, ToolProfile.FirstClass(longRunning: true),

@@ -304,8 +304,8 @@ namespace UnityMCP.Editor.Tests
             Assert.That(preview["activeUxmlPath"], Is.EqualTo(uxmlPath));
         }
 
-        [UnityTest]
-        public IEnumerator GameViewScreenshot_ReturnsOnlyAfterPngIsReady()
+        [Test]
+        public void GameViewScreenshot_RejectsEditModeImmediately()
         {
             const string screenshotPath = TEST_FOLDER + "/Game View.png";
             object response = null;
@@ -317,17 +317,12 @@ namespace UnityMCP.Editor.Tests
                 { "timeoutMs", 10000 },
             }, value => response = value);
 
-            double timeoutAt = EditorApplication.timeSinceStartup + 12;
-            while (response == null && EditorApplication.timeSinceStartup < timeoutAt)
-                yield return null;
-
             Assert.That(response, Is.Not.Null);
             var result = RequireDictionary(response);
-            Assert.That(result["success"], Is.EqualTo(true));
-            Assert.That(result["fileReady"], Is.EqualTo(true));
-            Assert.That(Convert.ToInt32(result["width"]), Is.GreaterThan(0));
-            Assert.That(Convert.ToInt32(result["height"]), Is.GreaterThan(0));
-            Assert.That(File.Exists(GetAbsolutePath(screenshotPath)), Is.True);
+            Assert.That(result["success"], Is.EqualTo(false));
+            Assert.That(result["errorCode"], Is.EqualTo("requires_play_mode"));
+            Assert.That(result["requiresPlayMode"], Is.EqualTo(true));
+            Assert.That(File.Exists(GetAbsolutePath(screenshotPath)), Is.False);
         }
 
         [Test]
