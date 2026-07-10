@@ -186,17 +186,26 @@ namespace UnityMCP.Editor.Localization.Tests
             if (settings == null)
                 return;
 
+            bool changed = false;
             foreach (var group in settings.groups
                          .Where(group => group != null &&
                                          group.Name.IndexOf("x-mcp-", StringComparison.OrdinalIgnoreCase) >= 0)
                          .ToList())
             {
                 settings.RemoveGroup(group);
+                changed = true;
             }
 
-            settings.RemoveLabel("Locale-x-mcp-en");
-            settings.RemoveLabel("Locale-x-mcp-zh");
-            EditorUtility.SetDirty(settings);
+            foreach (string label in new[] { "Locale-x-mcp-en", "Locale-x-mcp-zh" })
+            {
+                if (!settings.GetLabels().Contains(label))
+                    continue;
+                settings.RemoveLabel(label);
+                changed = true;
+            }
+
+            if (changed)
+                EditorUtility.SetDirty(settings);
         }
 
         private void CaptureAddressableSnapshots()
