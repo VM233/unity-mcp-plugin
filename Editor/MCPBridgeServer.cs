@@ -654,11 +654,23 @@ namespace UnityMCP.Editor
             if (path == "_meta/tools")
             {
                 var args = ParseJson(body);
-                bool firstClassOnly = args.TryGetValue("firstClassOnly", out var value) &&
-                                      value != null && Convert.ToBoolean(value);
-                bool compact = args.TryGetValue("compact", out value) &&
-                               value != null && Convert.ToBoolean(value);
-                return MCPToolMetadata.GetRegisteredTools(firstClassOnly, compact);
+                bool firstClassOnly = !args.TryGetValue("firstClassOnly", out var value) ||
+                                      value == null || Convert.ToBoolean(value);
+                bool compact = !args.TryGetValue("compact", out value) ||
+                               value == null || Convert.ToBoolean(value);
+                bool includeSchema = args.TryGetValue("includeSchema", out value) &&
+                                     value != null && Convert.ToBoolean(value);
+                bool includeCollections = args.TryGetValue("includeCollections", out value) &&
+                                          value != null && Convert.ToBoolean(value);
+                int offset = args.TryGetValue("offset", out value) && value != null
+                    ? Convert.ToInt32(value)
+                    : 0;
+                int limit = args.TryGetValue("limit", out value) && value != null
+                    ? Convert.ToInt32(value)
+                    : 50;
+                string category = args.TryGetValue("category", out value) ? value?.ToString() : null;
+                return MCPToolMetadata.GetRegisteredTools(firstClassOnly, compact, includeSchema,
+                    offset, limit, category, includeCollections);
             }
 
             if (TryBuildProjectMismatchResponse(path, ParseJson(body), out var projectMismatch))
@@ -1728,8 +1740,8 @@ namespace UnityMCP.Editor
         }
 
         // Response size limits (bytes) — prevents oversized payloads from crashing the MCP stdio pipe
-        private const int ResponseSoftLimitBytes = 8 * 1024 * 1024;  // 8 MB — log warning
-        private const int ResponseHardLimitBytes = 16 * 1024 * 1024; // 16 MB — replace with error
+        private const int ResponseSoftLimitBytes = 512 * 1024;
+        private const int ResponseHardLimitBytes = 2 * 1024 * 1024;
 
         private static void SendJson(HttpListenerResponse response, int statusCode, object data)
         {

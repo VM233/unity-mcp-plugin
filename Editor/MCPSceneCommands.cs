@@ -78,11 +78,13 @@ namespace UnityMCP.Editor
             int maxDepth = 10;
             if (args != null && args.ContainsKey("maxDepth"))
                 maxDepth = System.Convert.ToInt32(args["maxDepth"]);
+            maxDepth = Math.Max(0, Math.Min(maxDepth, 50));
 
-            // Max total nodes to return — prevents Write EOF on large scenes (79K+ objects)
-            int maxNodes = 5000;
+            // Keep the default response small; callers can explore subtrees with parentPath.
+            int maxNodes = 250;
             if (args != null && args.ContainsKey("maxNodes"))
                 maxNodes = System.Convert.ToInt32(args["maxNodes"]);
+            maxNodes = Math.Max(1, Math.Min(maxNodes, 2000));
 
             // Optional: only return hierarchy under a specific parent path
             string parentPath = null;
@@ -118,8 +120,11 @@ namespace UnityMCP.Editor
                     return new Dictionary<string, object> { { "error", $"Component type not found: {componentTypeName}" } };
 
                 int maxResults = args.ContainsKey("maxResults")
-                    ? Math.Max(1, Convert.ToInt32(args["maxResults"]))
-                    : Math.Max(1, Math.Min(maxNodes, 100));
+                    ? Math.Max(1, Math.Min(Convert.ToInt32(args["maxResults"]), 200))
+                    : Math.Max(1, Math.Min(maxNodes, 50));
+                int offset = args.ContainsKey("offset")
+                    ? Math.Max(0, Convert.ToInt32(args["offset"]))
+                    : 0;
                 string nameContains = args.TryGetValue("nameContains", out var nameValue)
                     ? nameValue?.ToString()
                     : null;
@@ -131,9 +136,11 @@ namespace UnityMCP.Editor
                 int totalMatches = 0;
                 foreach (var root in startObjects)
                 {
-                    CollectComponentMatches(root, componentType, nameContains, pathContains, maxResults,
+                    CollectComponentMatches(root, componentType, nameContains, pathContains, offset, maxResults,
                         matches, ref totalMatches);
                 }
+
+                int nextOffset = offset + matches.Count;
 
                 var filteredResult = new Dictionary<string, object>
                 {
@@ -143,8 +150,11 @@ namespace UnityMCP.Editor
                     { "matches", matches },
                     { "matchCount", matches.Count },
                     { "totalMatches", totalMatches },
+                    { "offset", offset },
                     { "maxResults", maxResults },
-                    { "truncated", totalMatches > matches.Count },
+                    { "truncated", nextOffset < totalMatches },
+                    { "hasMore", nextOffset < totalMatches },
+                    { "nextOffset", nextOffset < totalMatches ? (object)nextOffset : null },
                     { "totalSceneObjects", totalSceneObjects },
                 };
                 if (!string.IsNullOrEmpty(parentPath))
@@ -158,6 +168,7 @@ namespace UnityMCP.Editor
 
             int nodeCount = 0;
             var hierarchy = new List<object>();
+            int totalAvailableNodes = CountAllObjects(startObjects);
 
             foreach (var root in startObjects)
             {
@@ -173,15 +184,20 @@ namespace UnityMCP.Editor
                 { "scene", scene.name },
                 { "hierarchy", hierarchy },
                 { "totalSceneObjects", totalSceneObjects },
+                { "totalAvailableNodes", totalAvailableNodes },
                 { "returnedNodes", nodeCount },
                 { "maxNodes", maxNodes },
             };
 
-            if (nodeCount >= maxNodes)
+            if (nodeCount < totalAvailableNodes)
             {
                 result["truncated"] = true;
-                result["message"] = $"Hierarchy truncated at {maxNodes} nodes (scene has {totalSceneObjects} total objects). " +
+                result["message"] = $"Hierarchy truncated at {nodeCount} nodes ({totalAvailableNodes} available under the selected root). " +
                     "Use parentPath to explore specific subtrees, or increase maxNodes.";
+            }
+            else
+            {
+                result["truncated"] = false;
             }
 
             if (!string.IsNullOrEmpty(parentPath))
@@ -191,7 +207,7 @@ namespace UnityMCP.Editor
         }
 
         private static void CollectComponentMatches(GameObject go, Type componentType, string nameContains,
-            string pathContains, int maxResults, List<object> matches, ref int totalMatches)
+            string pathContains, int offset, int maxResults, List<object> matches, ref int totalMatches)
         {
             string path = GetGameObjectPath(go.transform);
             bool nameMatches = string.IsNullOrEmpty(nameContains) ||
@@ -200,8 +216,8 @@ namespace UnityMCP.Editor
                                path.IndexOf(pathContains, StringComparison.OrdinalIgnoreCase) >= 0;
             if (nameMatches && pathMatches && go.GetComponent(componentType) != null)
             {
-                totalMatches++;
-                if (matches.Count < maxResults)
+                int matchIndex = totalMatches++;
+                if (matchIndex >= offset && matches.Count < maxResults)
                 {
                     var components = new List<string>();
                     foreach (var component in go.GetComponents<Component>())
@@ -224,7 +240,7 @@ namespace UnityMCP.Editor
 
             foreach (Transform child in go.transform)
                 CollectComponentMatches(child.gameObject, componentType, nameContains, pathContains,
-                    maxResults, matches, ref totalMatches);
+                    offset, maxResults, matches, ref totalMatches);
         }
 
         private static string GetGameObjectPath(Transform transform)

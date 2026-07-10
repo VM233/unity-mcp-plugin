@@ -492,7 +492,8 @@ public static class MCPDynamicCode
                     {
                         { "error", "Compilation failed" },
                         { "errors", errors },
-                        { "code", code },
+                        { "codePreview", code.Length <= 2000 ? code : code.Substring(0, 2000) },
+                        { "codeTruncated", code.Length > 2000 },
                     };
                 }
 
@@ -505,7 +506,7 @@ public static class MCPDynamicCode
                 // Cleanup temp dll (best effort)
                 try { File.Delete(outputPath); } catch { }
 
-                return SerializeResult(result);
+                return SerializeResult(result, args);
             }
             catch (TargetInvocationException ex)
             {
@@ -522,29 +523,49 @@ public static class MCPDynamicCode
         /// Handles primitives, dictionaries, anonymous objects, lists, arrays,
         /// and Unity types (Vector3, Color, etc.)
         /// </summary>
-        private static object SerializeResult(object result)
+        private static object SerializeResult(object result, Dictionary<string, object> args)
         {
+            var budget = new ResultSerializationBudget(
+                Math.Max(1, Math.Min(GetInt(args, "maxResultItems", 200), 2000)),
+                Math.Max(1, Math.Min(GetInt(args, "maxResultDepth", 8), 16)),
+                Math.Max(100, Math.Min(GetInt(args, "maxResultStringLength", 20000), 200000)));
             object serialized = SerializeResultValue(result, 0,
-                new HashSet<object>(ReferenceEqualityComparer.Instance));
+                new HashSet<object>(ReferenceEqualityComparer.Instance), budget);
             var response = new Dictionary<string, object>
             {
                 { "success", true },
                 { "result", serialized },
+                { "truncated", budget.Truncated },
+                { "serializedItems", budget.SerializedItems },
+                { "maxResultItems", budget.MaxItems },
+                { "maxResultDepth", budget.MaxDepth },
+                { "maxResultStringLength", budget.MaxStringLength },
             };
-            if (serialized is System.Collections.ICollection collection)
+            if (result is System.Collections.ICollection collection)
                 response["count"] = collection.Count;
             return response;
         }
 
-        private static object SerializeResultValue(object value, int depth, HashSet<object> visiting)
+        private static object SerializeResultValue(object value, int depth, HashSet<object> visiting,
+            ResultSerializationBudget budget)
         {
             if (value == null)
                 return null;
-            if (depth > 16)
+            if (depth > budget.MaxDepth)
+            {
+                budget.Truncated = true;
                 return "<max-depth>";
+            }
 
             Type type = value.GetType();
-            if (value is string || value is bool || value is byte || value is sbyte || value is short ||
+            if (value is string text)
+            {
+                if (text.Length <= budget.MaxStringLength)
+                    return text;
+                budget.Truncated = true;
+                return text.Substring(0, budget.MaxStringLength) + "<truncated>";
+            }
+            if (value is bool || value is byte || value is sbyte || value is short ||
                 value is ushort || value is int || value is uint || value is long || value is ulong ||
                 value is float || value is double || value is decimal)
                 return value;
@@ -605,17 +626,15 @@ public static class MCPDynamicCode
                 if (value is System.Collections.IDictionary dictionary)
                 {
                     var result = new Dictionary<string, object>();
-                    int count = 0;
                     foreach (System.Collections.DictionaryEntry entry in dictionary)
                     {
-                        if (count++ >= 10000)
+                        if (!budget.TryConsume())
                         {
                             result["$truncated"] = true;
                             break;
                         }
-
                         string key = entry.Key?.ToString() ?? "null";
-                        result[key] = SerializeResultValue(entry.Value, depth + 1, visiting);
+                        result[key] = SerializeResultValue(entry.Value, depth + 1, visiting, budget);
                     }
                     return result;
                 }
@@ -625,12 +644,12 @@ public static class MCPDynamicCode
                     var result = new List<object>();
                     foreach (var item in enumerable)
                     {
-                        if (result.Count >= 10000)
+                        if (!budget.TryConsume())
                         {
                             result.Add("<truncated>");
                             break;
                         }
-                        result.Add(SerializeResultValue(item, depth + 1, visiting));
+                        result.Add(SerializeResultValue(item, depth + 1, visiting, budget));
                     }
                     return result;
                 }
@@ -640,10 +659,15 @@ public static class MCPDynamicCode
                 {
                     if (!property.CanRead || property.GetIndexParameters().Length > 0)
                         continue;
+                    if (!budget.TryConsume())
+                    {
+                        objectResult["$truncated"] = true;
+                        break;
+                    }
                     try
                     {
                         objectResult[property.Name] = SerializeResultValue(property.GetValue(value), depth + 1,
-                            visiting);
+                            visiting, budget);
                     }
                     catch (Exception ex)
                     {
@@ -654,7 +678,15 @@ public static class MCPDynamicCode
                 foreach (var field in type.GetFields(BindingFlags.Instance | BindingFlags.Public))
                 {
                     if (!objectResult.ContainsKey(field.Name))
-                        objectResult[field.Name] = SerializeResultValue(field.GetValue(value), depth + 1, visiting);
+                    {
+                        if (!budget.TryConsume())
+                        {
+                            objectResult["$truncated"] = true;
+                            break;
+                        }
+                        objectResult[field.Name] = SerializeResultValue(field.GetValue(value), depth + 1,
+                            visiting, budget);
+                    }
                 }
 
                 return objectResult.Count > 0 ? (object)objectResult : value.ToString();
@@ -663,6 +695,38 @@ public static class MCPDynamicCode
             {
                 if (trackReference)
                     visiting.Remove(value);
+            }
+        }
+
+        private sealed class ResultSerializationBudget
+        {
+            private int _remainingItems;
+
+            public readonly int MaxItems;
+            public readonly int MaxDepth;
+            public readonly int MaxStringLength;
+            public int SerializedItems { get; private set; }
+            public bool Truncated { get; set; }
+
+            public ResultSerializationBudget(int maxItems, int maxDepth, int maxStringLength)
+            {
+                MaxItems = maxItems;
+                MaxDepth = maxDepth;
+                MaxStringLength = maxStringLength;
+                _remainingItems = maxItems;
+            }
+
+            public bool TryConsume()
+            {
+                if (_remainingItems <= 0)
+                {
+                    Truncated = true;
+                    return false;
+                }
+
+                _remainingItems--;
+                SerializedItems++;
+                return true;
             }
         }
 

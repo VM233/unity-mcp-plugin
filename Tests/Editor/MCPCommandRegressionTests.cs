@@ -180,6 +180,66 @@ namespace UnityMCP.Editor.Tests
             Assert.That(nested["ok"], Is.EqualTo(true));
         }
 
+        [Test]
+        public void ExecuteCode_ResultBudgetTruncatesLargeCollections()
+        {
+            var response = RequireDictionary(MCPEditorCommands.ExecuteCode(new Dictionary<string, object>
+            {
+                { "code", "return Enumerable.Range(0, 10).ToArray();" },
+                { "maxResultItems", 2 },
+            }));
+
+            Assert.That(response["success"], Is.EqualTo(true));
+            Assert.That(response["truncated"], Is.EqualTo(true));
+            Assert.That(System.Convert.ToInt32(response["count"]), Is.EqualTo(10));
+            var result = (List<object>)response["result"];
+            CollectionAssert.AreEqual(new object[] { 0, 1, "<truncated>" }, result);
+        }
+
+        [Test]
+        public void PrefabHierarchy_MaxNodesReturnsTruncationMetadata()
+        {
+            CreateTestPrefab();
+            var result = RequireDictionary(MCPPrefabAssetCommands.GetHierarchy(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "maxNodes", 2 },
+            }));
+
+            Assert.That(System.Convert.ToInt32(result["returnedNodes"]), Is.EqualTo(2));
+            Assert.That(System.Convert.ToInt32(result["totalNodes"]), Is.GreaterThan(2));
+            Assert.That(result["truncated"], Is.EqualTo(true));
+        }
+
+        [Test]
+        public void ToolMetadata_DefaultIsCompactPaginatedAndSchemaFree()
+        {
+            var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools());
+            Assert.That(System.Convert.ToInt32(result["schemaVersion"]), Is.EqualTo(3));
+            Assert.That(result["compact"], Is.EqualTo(true));
+            Assert.That(result["firstClassOnly"], Is.EqualTo(true));
+            Assert.That(System.Convert.ToInt32(result["returnedTools"]), Is.LessThanOrEqualTo(50));
+            Assert.That(result.ContainsKey("routes"), Is.False);
+            Assert.That(result.ContainsKey("mcpTools"), Is.False);
+            Assert.That(MiniJson.Serialize(result).Length, Is.LessThan(100000));
+
+            var tools = (List<Dictionary<string, object>>)result["tools"];
+            Assert.That(tools.All(tool => !tool.ContainsKey("inputSchema")), Is.True);
+        }
+
+        [Test]
+        public void ToolMetadata_DetailedPageDoesNotDuplicateSchemaAliases()
+        {
+            var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: false, compact: false, includeSchema: true, limit: 5));
+            var tools = (List<Dictionary<string, object>>)result["tools"];
+            Assert.That(tools, Is.Not.Empty);
+            Assert.That(tools.All(tool => tool.ContainsKey("inputSchema")), Is.True);
+            Assert.That(tools.All(tool => !tool.ContainsKey("input_schema")), Is.True);
+            Assert.That(result.ContainsKey("firstClassTools"), Is.False);
+            Assert.That(result.ContainsKey("fallbackTools"), Is.False);
+        }
+
         private static void CreateTestPrefab(bool addCollider = false)
         {
             var root = new GameObject("MCP Test Prefab");

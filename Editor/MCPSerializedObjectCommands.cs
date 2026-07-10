@@ -14,8 +14,11 @@ namespace UnityMCP.Editor
                 return new { error };
 
             string propertyPath = GetString(args, "propertyPath");
-            int maxProperties = Math.Max(1, GetInt(args, "maxProperties", 200));
-            bool includeChildren = GetBool(args, "includeChildren", true);
+            int maxProperties = Math.Max(1, Math.Min(GetInt(args, "maxProperties", 50), 500));
+            int offset = Math.Max(0, GetInt(args, "offset", 0));
+            int maxDepth = Math.Max(1, Math.Min(GetInt(args, "maxDepth", 3), 8));
+            int maxArrayElements = Math.Max(1, Math.Min(GetInt(args, "maxArrayElements", 50), 500));
+            bool includeChildren = GetBool(args, "includeChildren", false);
 
             var serialized = new SerializedObject(target);
             var result = BuildTargetResult(target);
@@ -26,24 +29,33 @@ namespace UnityMCP.Editor
                 if (property == null)
                     return new { error = $"Property '{propertyPath}' was not found on '{target.GetType().Name}'" };
 
-                result["property"] = BuildPropertyInfo(property);
+                result["property"] = BuildPropertyInfo(property, maxDepth, maxArrayElements);
                 return result;
             }
 
             var properties = new List<Dictionary<string, object>>();
+            int totalProperties = 0;
             var iterator = serialized.GetIterator();
             if (iterator.NextVisible(true))
             {
                 do
                 {
-                    properties.Add(BuildPropertyInfo(iterator));
-                    if (properties.Count >= maxProperties)
-                        break;
+                    if (totalProperties >= offset && properties.Count < maxProperties)
+                        properties.Add(BuildPropertyInfo(iterator, maxDepth, maxArrayElements));
+                    totalProperties++;
                 } while (iterator.NextVisible(includeChildren));
             }
 
             result["propertyCount"] = properties.Count;
-            result["truncated"] = properties.Count >= maxProperties;
+            result["totalProperties"] = totalProperties;
+            result["offset"] = offset;
+            result["limit"] = maxProperties;
+            int nextOffset = offset + properties.Count;
+            result["truncated"] = nextOffset < totalProperties;
+            result["hasMore"] = nextOffset < totalProperties;
+            result["nextOffset"] = nextOffset < totalProperties ? (object)nextOffset : null;
+            result["maxDepth"] = maxDepth;
+            result["maxArrayElements"] = maxArrayElements;
             result["properties"] = properties;
             return result;
         }
@@ -64,7 +76,9 @@ namespace UnityMCP.Editor
             if (property == null)
                 return new { error = $"Property '{propertyPath}' was not found on '{target.GetType().Name}'" };
 
-            var beforeValue = MCPComponentCommands.GetSerializedValue(property);
+            int maxDepth = Math.Max(1, Math.Min(GetInt(args, "maxDepth", 3), 8));
+            int maxArrayElements = Math.Max(1, Math.Min(GetInt(args, "maxArrayElements", 50), 500));
+            var beforeValue = MCPComponentCommands.GetSerializedValue(property, maxDepth, maxArrayElements);
             try
             {
                 MCPComponentCommands.SetSerializedValue(property, args["value"]);
@@ -87,8 +101,10 @@ namespace UnityMCP.Editor
             result["success"] = true;
             result["propertyPath"] = propertyPath;
             result["beforeValue"] = beforeValue;
-            result["afterValue"] = property == null ? null : MCPComponentCommands.GetSerializedValue(property);
-            result["property"] = property == null ? null : BuildPropertyInfo(property);
+            result["afterValue"] = property == null
+                ? null
+                : MCPComponentCommands.GetSerializedValue(property, maxDepth, maxArrayElements);
+            result["property"] = property == null ? null : BuildPropertyInfo(property, maxDepth, maxArrayElements);
             return result;
         }
 
@@ -221,7 +237,8 @@ namespace UnityMCP.Editor
             };
         }
 
-        private static Dictionary<string, object> BuildPropertyInfo(SerializedProperty property)
+        private static Dictionary<string, object> BuildPropertyInfo(SerializedProperty property, int maxDepth,
+            int maxArrayElements)
         {
             return new Dictionary<string, object>
             {
@@ -232,7 +249,7 @@ namespace UnityMCP.Editor
                 { "editable", property.editable },
                 { "isArray", property.isArray },
                 { "arraySize", property.isArray ? property.arraySize : -1 },
-                { "value", MCPComponentCommands.GetSerializedValue(property) },
+                { "value", MCPComponentCommands.GetSerializedValue(property, maxDepth, maxArrayElements) },
             };
         }
 

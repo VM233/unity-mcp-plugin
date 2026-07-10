@@ -222,9 +222,15 @@ namespace UnityMCP.Editor
 
             bool includeDetails = args.ContainsKey("includeDetails") && Convert.ToBoolean(args["includeDetails"]);
             bool includeFailedOnly = args.ContainsKey("includeFailedOnly") && Convert.ToBoolean(args["includeFailedOnly"]);
+            bool includeStackTrace = args.ContainsKey("includeStackTrace") &&
+                                     Convert.ToBoolean(args["includeStackTrace"]);
+            int offset = Math.Max(0, GetInt(args, "offset", 0));
+            int limit = Math.Max(1, Math.Min(GetInt(args, "limit", 100), 500));
+            int failureLimit = Math.Max(1, Math.Min(GetInt(args, "failureLimit", 20), 100));
 
             TryFinalizeFromLeafResults(job);
-            return SerializeJob(job, includeDetails, includeFailedOnly);
+            return SerializeJob(job, includeDetails, includeFailedOnly, includeStackTrace, offset, limit,
+                failureLimit);
         }
 
         /// <summary>
@@ -258,7 +264,8 @@ namespace UnityMCP.Editor
             }
 
             string nameFilter = args.ContainsKey("nameFilter") ? args["nameFilter"].ToString() : null;
-            int maxResults = args.ContainsKey("maxResults") ? Convert.ToInt32(args["maxResults"]) : 200;
+            int offset = Math.Max(0, GetInt(args, "offset", 0));
+            int maxResults = Math.Max(1, Math.Min(GetInt(args, "maxResults", 100), 500));
 
             EnsureCallbacksRegistered();
 
@@ -275,13 +282,20 @@ namespace UnityMCP.Editor
                 }
 
                 var tests = new List<Dictionary<string, object>>();
-                CollectLeafTests(root, tests, nameFilter, maxResults);
+                int totalMatches = 0;
+                CollectLeafTests(root, tests, nameFilter, offset, maxResults, ref totalMatches);
+                int nextOffset = offset + tests.Count;
 
                 resolve(new Dictionary<string, object>
                 {
                     { "mode", testMode.ToString() },
-                    { "totalTests", tests.Count },
-                    { "truncated", tests.Count >= maxResults },
+                    { "totalTests", totalMatches },
+                    { "returnedTests", tests.Count },
+                    { "offset", offset },
+                    { "limit", maxResults },
+                    { "truncated", nextOffset < totalMatches },
+                    { "hasMore", nextOffset < totalMatches },
+                    { "nextOffset", nextOffset < totalMatches ? (object)nextOffset : null },
                     { "tests", tests }
                 });
             });
@@ -418,7 +432,8 @@ namespace UnityMCP.Editor
 
         // ─── Serialization ───────────────────────────────────────────
 
-        private static Dictionary<string, object> SerializeJob(TestJob job, bool includeDetails, bool includeFailedOnly)
+        private static Dictionary<string, object> SerializeJob(TestJob job, bool includeDetails,
+            bool includeFailedOnly, bool includeStackTrace, int offset, int limit, int failureLimit)
         {
             var result = new Dictionary<string, object>
             {
@@ -451,12 +466,15 @@ namespace UnityMCP.Editor
 
             if (job.FailuresSoFar.Count > 0)
             {
-                progress["failuresSoFar"] = job.FailuresSoFar.Select(f => new Dictionary<string, object>
+                progress["failuresSoFar"] = job.FailuresSoFar.Take(failureLimit).Select(f =>
+                    new Dictionary<string, object>
                 {
                     { "name", f.Name },
                     { "fullName", f.FullName },
                     { "message", f.Message ?? "" },
                 }).ToList();
+                progress["totalFailuresSoFar"] = job.FailuresSoFar.Count;
+                progress["failuresTruncated"] = job.FailuresSoFar.Count > failureLimit;
             }
 
             // Blocked reason detection
@@ -494,19 +512,34 @@ namespace UnityMCP.Editor
             // Detailed results
             if (includeDetails || includeFailedOnly)
             {
-                var tests = job.AllResults;
+                IEnumerable<TestResult> tests = job.AllResults;
                 if (includeFailedOnly)
-                    tests = tests.Where(t => t.Status == "Failed" || t.Status == "Inconclusive").ToList();
+                    tests = tests.Where(t => t.Status == "Failed" || t.Status == "Inconclusive");
 
-                result["tests"] = tests.Select(t => new Dictionary<string, object>
+                var filteredTests = tests.ToList();
+                var page = filteredTests.Skip(offset).Take(limit).ToList();
+                result["tests"] = page.Select(t =>
                 {
-                    { "name", t.Name },
-                    { "fullName", t.FullName },
-                    { "status", t.Status },
-                    { "duration", Math.Round(t.Duration, 3) },
-                    { "message", t.Message ?? "" },
-                    { "stackTrace", t.StackTrace ?? "" }
+                    var test = new Dictionary<string, object>
+                    {
+                        { "name", t.Name },
+                        { "fullName", t.FullName },
+                        { "status", t.Status },
+                        { "duration", Math.Round(t.Duration, 3) },
+                        { "message", t.Message ?? "" },
+                    };
+                    if (includeStackTrace)
+                        test["stackTrace"] = t.StackTrace ?? "";
+                    return test;
                 }).ToList();
+                int nextOffset = offset + page.Count;
+                result["resultOffset"] = offset;
+                result["resultLimit"] = limit;
+                result["totalResults"] = filteredTests.Count;
+                result["returnedResults"] = page.Count;
+                result["resultsTruncated"] = nextOffset < filteredTests.Count;
+                result["hasMoreResults"] = nextOffset < filteredTests.Count;
+                result["nextResultOffset"] = nextOffset < filteredTests.Count ? (object)nextOffset : null;
             }
 
             return result;
@@ -515,14 +548,16 @@ namespace UnityMCP.Editor
         // ─── Test Discovery Helpers ──────────────────────────────────
 
         private static void CollectLeafTests(ITestAdaptor test, List<Dictionary<string, object>> results,
-            string nameFilter, int maxResults)
+            string nameFilter, int offset, int maxResults, ref int totalMatches)
         {
-            if (results.Count >= maxResults) return;
-
             if (!test.HasChildren)
             {
                 // Leaf test
                 if (nameFilter != null && test.FullName.IndexOf(nameFilter, StringComparison.OrdinalIgnoreCase) < 0)
+                    return;
+
+                int matchIndex = totalMatches++;
+                if (matchIndex < offset || results.Count >= maxResults)
                     return;
 
                 results.Add(new Dictionary<string, object>
@@ -536,11 +571,15 @@ namespace UnityMCP.Editor
             else
             {
                 foreach (var child in test.Children)
-                {
-                    CollectLeafTests(child, results, nameFilter, maxResults);
-                    if (results.Count >= maxResults) break;
-                }
+                    CollectLeafTests(child, results, nameFilter, offset, maxResults, ref totalMatches);
             }
+        }
+
+        private static int GetInt(Dictionary<string, object> args, string key, int defaultValue)
+        {
+            if (args == null || !args.TryGetValue(key, out var value) || value == null)
+                return defaultValue;
+            return int.TryParse(value.ToString(), out int parsed) ? parsed : defaultValue;
         }
 
         // ─── Session State Persistence ───────────────────────────────

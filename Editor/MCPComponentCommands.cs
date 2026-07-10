@@ -519,6 +519,11 @@ namespace UnityMCP.Editor
             return GetSerializedValue(prop, 0, 4, 256);
         }
 
+        internal static object GetSerializedValue(SerializedProperty prop, int maxDepth, int maxArrayElements)
+        {
+            return GetSerializedValue(prop, 0, Math.Max(1, maxDepth), Math.Max(1, maxArrayElements));
+        }
+
         private static object GetSerializedValue(SerializedProperty prop, int depth, int maxDepth, int maxArrayElements)
         {
             if (prop == null)

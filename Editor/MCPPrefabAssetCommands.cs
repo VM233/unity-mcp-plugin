@@ -27,7 +27,9 @@ namespace UnityMCP.Editor
             if (string.IsNullOrEmpty(assetPath))
                 return new { error = "assetPath is required" };
 
-            int maxDepth = args.ContainsKey("maxDepth") ? Convert.ToInt32(args["maxDepth"]) : 10;
+            int maxDepth = Math.Max(0, Math.Min(GetInt(args, "maxDepth", 10), 50));
+            int maxNodes = Math.Max(1, Math.Min(GetInt(args, "maxNodes", 250), 2000));
+            string prefabPath = GetString(args, "prefabPath");
 
             var root = PrefabUtility.LoadPrefabContents(assetPath);
             if (root == null)
@@ -35,13 +37,26 @@ namespace UnityMCP.Editor
 
             try
             {
-                var hierarchy = BuildHierarchyNode(root, 0, maxDepth);
-                return new Dictionary<string, object>
+                var hierarchyRoot = FindInPrefab(root, prefabPath);
+                if (hierarchyRoot == null)
+                    return new { error = $"GameObject '{prefabPath}' not found in prefab" };
+
+                int totalNodes = CountHierarchyNodes(hierarchyRoot);
+                int returnedNodes = 0;
+                var hierarchy = BuildHierarchyNode(hierarchyRoot, 0, maxDepth, ref returnedNodes, maxNodes);
+                var result = new Dictionary<string, object>
                 {
                     { "prefab", root.name },
                     { "assetPath", assetPath },
                     { "hierarchy", hierarchy },
+                    { "returnedNodes", returnedNodes },
+                    { "totalNodes", totalNodes },
+                    { "maxNodes", maxNodes },
+                    { "truncated", returnedNodes < totalNodes },
                 };
+                if (!string.IsNullOrEmpty(prefabPath))
+                    result["prefabPath"] = prefabPath;
+                return result;
             }
             finally
             {
@@ -2355,8 +2370,21 @@ namespace UnityMCP.Editor
             return current.gameObject;
         }
 
-        private static Dictionary<string, object> BuildHierarchyNode(GameObject go, int depth, int maxDepth)
+        private static int CountHierarchyNodes(GameObject go)
         {
+            int count = 1;
+            for (int i = 0; i < go.transform.childCount; i++)
+                count += CountHierarchyNodes(go.transform.GetChild(i).gameObject);
+            return count;
+        }
+
+        private static Dictionary<string, object> BuildHierarchyNode(GameObject go, int depth, int maxDepth,
+            ref int nodeCount, int maxNodes)
+        {
+            if (nodeCount >= maxNodes)
+                return null;
+            nodeCount++;
+
             var components = new List<string>();
             foreach (var comp in go.GetComponents<Component>())
             {
@@ -2381,10 +2409,21 @@ namespace UnityMCP.Editor
                 var children = new List<object>();
                 for (int i = 0; i < go.transform.childCount; i++)
                 {
-                    children.Add(BuildHierarchyNode(go.transform.GetChild(i).gameObject, depth + 1, maxDepth));
+                    if (nodeCount >= maxNodes)
+                        break;
+                    var child = BuildHierarchyNode(go.transform.GetChild(i).gameObject, depth + 1, maxDepth,
+                        ref nodeCount, maxNodes);
+                    if (child != null)
+                        children.Add(child);
                 }
-                node["children"] = children;
+                if (children.Count > 0)
+                    node["children"] = children;
                 node["childCount"] = go.transform.childCount;
+                if (children.Count < go.transform.childCount)
+                {
+                    node["childrenIncluded"] = children.Count;
+                    node["childrenTruncated"] = true;
+                }
             }
             else if (go.transform.childCount > 0)
             {
@@ -3083,11 +3122,13 @@ namespace UnityMCP.Editor
         {
             var afterSnapshot = CaptureAssetText(assetPath);
             int contextLines = Math.Max(0, GetInt(args, "prefabFileDiffContextLines", 2));
-            string diffMode = (GetString(args, "prefabFileDiffMode") ?? "full").ToLowerInvariant();
+            string diffMode = (GetString(args, "prefabFileDiffMode") ?? "").ToLowerInvariant();
+            if (diffMode != "full" && diffMode != "minimal" && diffMode != "summary")
+                diffMode = "summary";
             if (diffMode == "minimal")
                 contextLines = 0;
 
-            int maxLines = Math.Max(1, GetInt(args, "prefabFileDiffMaxLines", 200));
+            int maxLines = Math.Max(1, Math.Min(GetInt(args, "prefabFileDiffMaxLines", 200), 1000));
 
             var result = new Dictionary<string, object>
             {

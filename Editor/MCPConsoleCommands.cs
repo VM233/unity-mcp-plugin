@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Reflection;
 using UnityEditor;
 using UnityEditor.Compilation;
@@ -195,12 +196,13 @@ namespace UnityMCP.Editor
             EnsureListening();
             EnsurePlayModeHook();
 
-            int count = GetInt(args, "count", 50);
+            int count = Math.Max(1, Math.Min(GetInt(args, "count", 50), 200));
+            int offset = Math.Max(0, GetInt(args, "offset", 0));
             string typeFilter = GetString(args, "type", "all").ToLowerInvariant();
             string messageContains = GetString(args, "messageContains", "");
             string sourceContains = GetString(args, "sourceContains", "");
             string stackContains = GetString(args, "stackContains", "");
-            bool includeStack = GetBool(args, "includeStack", true);
+            bool includeStack = GetBool(args, "includeStack", false);
             bool sinceLastPlay = GetBool(args, "sinceLastPlay", false);
             bool newestFirst = GetBool(args, "newestFirst", false);
 
@@ -212,10 +214,10 @@ namespace UnityMCP.Editor
             if (sinceLastPlay && _lastPlayStartedAt != DateTime.MinValue)
                 since = MaxDateTime(since, _lastPlayStartedAt);
 
-            var entries = new List<Dictionary<string, object>>();
+            var matchingEntries = new List<Dictionary<string, object>>();
             lock (_logEntries)
             {
-                for (int i = _logEntries.Count - 1; i >= 0 && entries.Count < count; i--)
+                for (int i = _logEntries.Count - 1; i >= 0; i--)
                 {
                     var entry = _logEntries[i];
                     if (!MatchesLogType(entry.type, typeFilter))
@@ -244,17 +246,26 @@ namespace UnityMCP.Editor
                     if (includeStack)
                         result["stackTrace"] = entry.stackTrace ?? "";
 
-                    entries.Add(result);
+                    matchingEntries.Add(result);
                 }
             }
 
+            int totalMatches = matchingEntries.Count;
+            var entries = matchingEntries.Skip(offset).Take(count).ToList();
             if (!newestFirst)
                 entries.Reverse();
+            int nextOffset = offset + entries.Count;
 
             return new Dictionary<string, object>
             {
                 { "count", entries.Count },
                 { "entries", entries },
+                { "offset", offset },
+                { "limit", count },
+                { "totalMatches", totalMatches },
+                { "hasMore", nextOffset < totalMatches },
+                { "nextOffset", nextOffset < totalMatches ? (object)nextOffset : null },
+                { "truncated", nextOffset < totalMatches },
                 { "lastPlayStartedAt", _lastPlayStartedAt == DateTime.MinValue ? "" : _lastPlayStartedAt.ToString("o") },
                 { "sinceLastPlay", sinceLastPlay },
             };

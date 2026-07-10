@@ -8,7 +8,7 @@ using UnityEngine;
 
 namespace UnityMCP.Editor
 {
-    internal static class MCPToolMetadata
+    public static class MCPToolMetadata
     {
         private static List<string> _cachedRoutes;
         private static List<Dictionary<string, object>> _cachedTools;
@@ -96,19 +96,12 @@ namespace UnityMCP.Editor
             var profiles = new Dictionary<string, ToolProfile>(StringComparer.Ordinal);
 
             AddProfile(profiles, ToolProfile.FirstClass(readOnly: true),
-                "mcp/health",
-                "instance/current",
-                "instance/list",
-                "instance/resolve",
-                "instance/assert-project",
                 "scene/hierarchy",
                 "serialized-object/get",
                 "prefab-asset/get-properties",
                 "prefab-asset/hierarchy",
                 "prefab-asset/find",
-                "compilation/errors",
                 "console/query",
-                "animation/transition-info",
                 "uitoolkit/asset-inspect",
                 "uitoolkit/runtime-documents",
                 "uitoolkit/runtime-tree",
@@ -117,14 +110,6 @@ namespace UnityMCP.Editor
                 "uitoolkit/locate-element",
                 "uitoolkit/capture-element",
                 "uitoolkit/compare-element",
-                "uitoolkit/generated-children",
-                "uitoolkit/resource-audit",
-                "screenshot/crop",
-                "graphics/image-alpha-bounds",
-                "graphics/rect-gap",
-                "graphics/compare-images",
-                "sprite/sheet-info",
-                "texture/check-ui-import-settings",
                 "packages/list",
                 "packages/info",
                 "packages/status",
@@ -143,13 +128,9 @@ namespace UnityMCP.Editor
                 "testing/run-tests");
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true),
-                "mcp/set-autostart",
-                "scene/instantiate-prefab",
                 "serialized-object/set",
                 "prefab-asset/add-component",
                 "prefab-asset/add-gameobject",
-                "prefab-asset/batch-edit",
-                "prefab-asset/instantiate-child-prefab",
                 "prefab-asset/instantiate-prefab",
                 "prefab-asset/move-component",
                 "prefab-asset/move-gameobject",
@@ -163,30 +144,19 @@ namespace UnityMCP.Editor
                 "asset/move",
                 "asset/move-batch",
                 "asset/export-unitypackage",
-                "animation/update-state",
-                "animation/update-transition",
-                "animation/connect-states",
                 "uitoolkit/runtime-repaint",
                 "uitoolkit/refresh",
-                "uitoolkit/assert-layout",
-                "graphics/annotate-rects",
-                "sprite/replace-and-slice",
-                "sprite/slice-sheet",
-                "sprite/update-animation-clip",
-                "sprite/replace-slice-update-clip",
-                "texture/apply-sprite-preset",
-                "texture/import-image");
+                "uitoolkit/assert-layout");
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true,
                     mayReloadDomain: true),
                 "packages/update-git",
                 "testing/run-package-tests");
 
-            AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true),
-                "build/run-test");
-
             AddProfile(profiles, ToolProfile.Fallback(),
-                "advanced/execute",
+                "advanced/execute");
+
+            AddProfile(profiles, ToolProfile.FirstClass(),
                 "project-tools/execute");
 
             return profiles;
@@ -232,30 +202,60 @@ namespace UnityMCP.Editor
             };
         }
 
-        public static object GetRegisteredTools(bool firstClassOnly = false, bool compact = false)
+        public static object GetRegisteredTools(bool firstClassOnly = true, bool compact = true,
+            bool includeSchema = false, int offset = 0, int limit = 50, string category = null,
+            bool includeCollections = false)
         {
             if (firstClassOnly)
                 EnsureFirstClassToolMetadataCache();
             else
                 EnsureToolMetadataCache();
-            var tools = firstClassOnly ? _cachedFirstClassTools : _cachedTools;
-            if (compact)
+            IEnumerable<Dictionary<string, object>> query = firstClassOnly ? _cachedFirstClassTools : _cachedTools;
+            if (!string.IsNullOrEmpty(category))
             {
-                return new Dictionary<string, object>
-                {
-                    { "schemaVersion", 2 },
-                    { "compact", true },
-                    { "firstClassOnly", firstClassOnly },
-                    { "tools", tools.Select(ToCompactToolDescriptor).ToList() },
-                    { "totalTools", tools.Count }
-                };
+                query = query.Where(tool => string.Equals(
+                    tool.TryGetValue("category", out var value) ? value?.ToString() : "",
+                    category, StringComparison.OrdinalIgnoreCase));
             }
 
-            var routes = tools.Select(tool => tool["route"].ToString()).ToList();
-            var firstClassTools = tools.Where(IsFirstClassTool).ToList();
-            var fallbackTools = tools.Where(tool =>
-                string.Equals(tool.TryGetValue("exposure", out var exposure) ? exposure?.ToString() : "",
-                    "fallback", StringComparison.Ordinal)).ToList();
+            var tools = query.ToList();
+            offset = Math.Max(0, offset);
+            limit = Math.Max(1, Math.Min(limit, 200));
+            var page = tools.Skip(offset).Take(limit).ToList();
+            int nextOffset = offset + page.Count;
+            var result = new Dictionary<string, object>
+            {
+                { "schemaVersion", 3 },
+                { "compact", compact },
+                { "firstClassOnly", firstClassOnly },
+                { "includeSchema", includeSchema },
+                { "offset", offset },
+                { "limit", limit },
+                { "returnedTools", page.Count },
+                { "totalTools", tools.Count },
+                { "hasMore", nextOffset < tools.Count },
+                { "nextOffset", nextOffset < tools.Count ? (object)nextOffset : null },
+            };
+            if (!string.IsNullOrEmpty(category))
+                result["category"] = category;
+
+            if (compact)
+            {
+                result["tools"] = page.Select(tool => ToCompactToolDescriptor(tool, includeSchema)).ToList();
+                return result;
+            }
+
+            result["metadataSource"] = "MCPToolMetadata.ToolProfiles";
+            result["tools"] = page.Select(tool => ToDetailedToolDescriptor(tool, includeSchema)).ToList();
+            result["metadataIssues"] = BuildMetadataIssues(page);
+            if (!includeCollections)
+                return result;
+
+            var routes = page.Select(tool => tool["route"].ToString()).ToList();
+            var firstClassTools = page.Where(IsFirstClassTool).ToList();
+            var fallbackTools = page.Where(tool => string.Equals(
+                tool.TryGetValue("exposure", out var exposure) ? exposure?.ToString() : "",
+                "fallback", StringComparison.Ordinal)).ToList();
 
             var grouped = new Dictionary<string, List<string>>();
             foreach (var tool in tools)
@@ -266,36 +266,42 @@ namespace UnityMCP.Editor
                 grouped[category].Add(tool["toolName"].ToString());
             }
 
-            return new Dictionary<string, object>
-            {
-                { "schemaVersion", 2 },
-                { "metadataSource", "MCPToolMetadata.ToolProfiles" },
-                { "firstClassOnly", firstClassOnly },
-                { "routes", routes },
-                { "tools", tools },
-                { "mcpTools", firstClassTools.Select(ToMcpToolDescriptor).ToList() },
-                { "firstClassTools", firstClassTools },
-                { "fallbackTools", fallbackTools },
-                { "categories", grouped },
-                { "totalTools", tools.Count },
-                { "metadataIssues", BuildMetadataIssues(tools) }
-            };
+            result["routes"] = routes;
+            result["mcpTools"] = firstClassTools.Select(tool =>
+                ToMcpToolDescriptor(tool, includeSchema)).ToList();
+            result["firstClassTools"] = firstClassTools.Select(tool =>
+                ToDetailedToolDescriptor(tool, includeSchema)).ToList();
+            result["fallbackTools"] = fallbackTools.Select(tool =>
+                ToDetailedToolDescriptor(tool, includeSchema)).ToList();
+            result["categories"] = grouped;
+            return result;
         }
 
-        private static Dictionary<string, object> ToCompactToolDescriptor(Dictionary<string, object> tool)
+        private static Dictionary<string, object> ToCompactToolDescriptor(Dictionary<string, object> tool,
+            bool includeSchema)
         {
             var descriptor = new Dictionary<string, object>
             {
                 { "route", tool["route"] },
                 { "toolName", tool["toolName"] },
                 { "description", tool["description"] },
-                { "inputSchema", tool["inputSchema"] },
                 { "annotations", tool["annotations"] },
                 { "firstClass", IsFirstClassTool(tool) },
                 { "exposure", tool["exposure"] }
             };
+            if (includeSchema)
+                descriptor["inputSchema"] = tool["inputSchema"];
             if (tool.TryGetValue("projectToolName", out var projectToolName))
                 descriptor["projectToolName"] = projectToolName;
+            return descriptor;
+        }
+
+        private static Dictionary<string, object> ToDetailedToolDescriptor(Dictionary<string, object> tool,
+            bool includeSchema)
+        {
+            var descriptor = tool.ToDictionary(pair => pair.Key, pair => pair.Value);
+            if (!includeSchema)
+                descriptor.Remove("inputSchema");
             return descriptor;
         }
 
@@ -447,7 +453,6 @@ namespace UnityMCP.Editor
                 { "category", ExtractCategory(route) },
                 { "description", description },
                 { "inputSchema", inputSchema },
-                { "input_schema", inputSchema },
                 { "firstClass", isFirstClass },
                 { "exposure", profile.Exposure },
                 { "preferred", profile.Preferred },
@@ -498,7 +503,6 @@ namespace UnityMCP.Editor
                 { "category", "project-tools" },
                 { "description", string.IsNullOrEmpty(description) ? $"Project MCP tool: {projectToolName}" : description },
                 { "inputSchema", inputSchema },
-                { "input_schema", inputSchema },
                 { "projectToolName", projectToolName },
                 { "firstClass", true },
                 { "exposure", ExposureFirstClass },
@@ -568,16 +572,21 @@ namespace UnityMCP.Editor
             return ToolProfiles.TryGetValue(route, out var profile) ? profile : ToolProfile.Lazy();
         }
 
-        private static Dictionary<string, object> ToMcpToolDescriptor(Dictionary<string, object> tool)
+        private static Dictionary<string, object> ToMcpToolDescriptor(Dictionary<string, object> tool,
+            bool includeSchema)
         {
-            return new Dictionary<string, object>
+            var descriptor = new Dictionary<string, object>
             {
                 { "name", tool.TryGetValue("toolName", out var name) ? name : "" },
                 { "description", tool.TryGetValue("description", out var description) ? description : "" },
-                { "inputSchema", tool.TryGetValue("inputSchema", out var schema) ? schema : new Dictionary<string, object>() },
                 { "annotations", tool.TryGetValue("annotations", out var annotations) ? annotations : new Dictionary<string, object>() },
                 { "route", tool.TryGetValue("route", out var route) ? route : "" },
             };
+            if (includeSchema)
+                descriptor["inputSchema"] = tool.TryGetValue("inputSchema", out var schema)
+                    ? schema
+                    : new Dictionary<string, object>();
+            return descriptor;
         }
 
         private static List<Dictionary<string, object>> BuildMetadataIssues(List<Dictionary<string, object>> tools)
@@ -926,21 +935,30 @@ namespace UnityMCP.Editor
                         Prop("overwrite", "boolean", "Replace an existing output file. Defaults to false."),
                         Prop("interactive", "boolean", "Show Unity's export package UI. Defaults to false.")
                     ), "outputPath");
+                case "editor/execute-code":
+                    return Schema(Props(
+                        Prop("code", "string", "C# method body to execute. Return a value to serialize it."),
+                        Prop("maxResultItems", "number", "Maximum serialized collection/object entries across the result. Defaults to 200; capped at 2000."),
+                        Prop("maxResultDepth", "number", "Maximum serialized result depth. Defaults to 8; capped at 16."),
+                        Prop("maxResultStringLength", "number", "Maximum characters per returned string. Defaults to 20000; capped at 200000.")
+                    ), "code");
                 case "scene/hierarchy":
                     return Schema(Props(
                         Prop("maxDepth", "number", "Maximum hierarchy depth to return. Defaults to 10."),
-                        Prop("maxNodes", "number", "Maximum hierarchy nodes to return. Defaults to 5000."),
+                        Prop("maxNodes", "number", "Maximum hierarchy nodes to return. Defaults to 250; capped at 2000."),
                         Prop("parentPath", "string", "Optional GameObject path used as the search root."),
                         Prop("componentType", "string", "Optional component type name or full name. When set, returns compact flat matches instead of the full hierarchy."),
                         Prop("nameContains", "string", "Optional case-insensitive GameObject name filter used with componentType."),
                         Prop("pathContains", "string", "Optional case-insensitive hierarchy path filter used with componentType."),
-                        Prop("maxResults", "number", "Maximum component-filtered matches. Defaults to min(maxNodes, 100).")
+                        Prop("offset", "number", "Component-filtered result offset. Defaults to 0."),
+                        Prop("maxResults", "number", "Maximum component-filtered matches. Defaults to min(maxNodes, 50); capped at 200.")
                     ));
                 case "testing/list-tests":
                     return Schema(Props(
                         Prop("mode", "string", "Test mode: EditMode or PlayMode. Defaults to EditMode."),
                         Prop("nameFilter", "string", "Optional case-insensitive test full-name filter."),
-                        Prop("maxResults", "number", "Maximum tests to return. Defaults to 200.")
+                        Prop("offset", "number", "Test result offset. Defaults to 0."),
+                        Prop("maxResults", "number", "Maximum tests to return. Defaults to 100; capped at 500.")
                     ));
                 case "testing/run-tests":
                     return Schema(Props(
@@ -954,8 +972,12 @@ namespace UnityMCP.Editor
                 case "testing/get-job":
                     return Schema(Props(
                         Prop("jobId", "string", "Optional job ID. Defaults to the current or latest job."),
-                        Prop("includeDetails", "boolean", "Include all individual test results."),
-                        Prop("includeFailedOnly", "boolean", "Include only failed or inconclusive test results.")
+                        Prop("includeDetails", "boolean", "Include paginated individual test results. Defaults to false."),
+                        Prop("includeFailedOnly", "boolean", "Include only failed or inconclusive test results."),
+                        Prop("includeStackTrace", "boolean", "Include test stack traces. Defaults to false."),
+                        Prop("offset", "number", "Individual test result offset. Defaults to 0."),
+                        Prop("limit", "number", "Individual test result limit. Defaults to 100; capped at 500."),
+                        Prop("failureLimit", "number", "Maximum failures included in progress. Defaults to 20; capped at 100.")
                     ));
                 case "testing/run-package-tests":
                     return Schema(Props(
@@ -983,7 +1005,9 @@ namespace UnityMCP.Editor
                 case "prefab-asset/hierarchy":
                     return Schema(Props(
                         Prop("assetPath", "string", "Prefab asset path to inspect."),
-                        Prop("maxDepth", "number", "Maximum hierarchy depth to return. Defaults to 10.")
+                        Prop("prefabPath", "string", "Optional GameObject path used as the hierarchy root."),
+                        Prop("maxDepth", "number", "Maximum hierarchy depth to return. Defaults to 10."),
+                        Prop("maxNodes", "number", "Maximum hierarchy nodes to return. Defaults to 250; capped at 2000.")
                     ), "assetPath");
                 case "prefab-asset/get-properties":
                     return Schema(Props(
@@ -1001,7 +1025,7 @@ namespace UnityMCP.Editor
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                         Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
                         Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
-                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary.")
                     ), "assetPath", "componentType", "propertyName", "value");
                 case "prefab-asset/set-reference":
                     return Schema(Props(
@@ -1014,7 +1038,7 @@ namespace UnityMCP.Editor
                         Prop("referenceComponentType", "string", "When using referencePrefabPath, assign this component instead of the GameObject."),
                         Prop("clear", "boolean", "Clear the ObjectReference."),
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
-                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary.")
                     ), "assetPath", "propertyName");
                 case "prefab-asset/instantiate-prefab":
                 case "prefab-asset/instantiate-child-prefab":
@@ -1038,7 +1062,7 @@ namespace UnityMCP.Editor
                         Prop("rotation", "object", "Optional local Euler rotation object with x/y/z."),
                         Prop("scale", "object", "Optional local scale object with x/y/z."),
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
-                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary.")
                     ), "assetPath", "name");
                 case "prefab-asset/add-component":
                     return Schema(Props(
@@ -1052,7 +1076,7 @@ namespace UnityMCP.Editor
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                         Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
                         Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
-                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary."),
                         Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
                         Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
                     ), "assetPath", "componentType");
@@ -1063,7 +1087,7 @@ namespace UnityMCP.Editor
                         Prop("componentType", "string", "Component type name or full name."),
                         Prop("index", "number", "Component index when multiple components of the same type exist. Defaults to 0."),
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
-                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary.")
                     ), "assetPath", "componentType");
                 case "prefab-asset/move-component":
                     return Schema(Props(
@@ -1075,7 +1099,7 @@ namespace UnityMCP.Editor
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                         Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
                         Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
-                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary.")
                     ), "assetPath", "sourcePrefabPath", "targetPrefabPath", "componentType");
                 case "prefab-asset/move-gameobject":
                     return Schema(Props(
@@ -1090,7 +1114,7 @@ namespace UnityMCP.Editor
                         Prop("assetPath", "string", "Prefab asset path to edit."),
                         Prop("prefabPath", "string", "Path of the child GameObject to remove. Cannot be root."),
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
-                        Prop("prefabFileDiffMode", "string", "Diff return mode: full, minimal, or summary. Defaults to full.")
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary.")
                     ), "assetPath", "prefabPath");
                 case "prefab-asset/find":
                     return Schema(Props(
@@ -1104,9 +1128,9 @@ namespace UnityMCP.Editor
                         Prop("maxResults", "number", "Maximum returned matches. Defaults to 50.")
                     ), "assetPath");
                 case "prefab-asset/batch-edit":
-                    return PrefabAssetBatchEditSchema(false);
+                    return PrefabAssetBatchEditSchema();
                 case "prefab-asset/transaction-edit":
-                    return PrefabAssetBatchEditSchema(true);
+                    return PrefabAssetBatchEditSchema();
                 case "serialized-object/get":
                     return Schema(Props(
                         Prop("instanceId", "number", "Target Unity object instance id."),
@@ -1116,8 +1140,11 @@ namespace UnityMCP.Editor
                         Prop("componentType", "string", "Optional component type to select from a GameObject target."),
                         Prop("componentIndex", "number", "Component index when multiple components of the same type exist."),
                         Prop("propertyPath", "string", "Optional serialized property path to read."),
-                        Prop("maxProperties", "number", "Maximum properties to return when propertyPath is omitted. Defaults to 200."),
-                        Prop("includeChildren", "boolean", "Walk child properties. Defaults to true.")
+                        Prop("offset", "number", "Visible property offset. Defaults to 0."),
+                        Prop("maxProperties", "number", "Maximum properties to return when propertyPath is omitted. Defaults to 50; capped at 500."),
+                        Prop("includeChildren", "boolean", "Walk child properties. Defaults to false."),
+                        Prop("maxDepth", "number", "Maximum nested serialized value depth. Defaults to 3; capped at 8."),
+                        Prop("maxArrayElements", "number", "Maximum elements returned per serialized array. Defaults to 50; capped at 500.")
                     ));
                 case "serialized-object/set":
                     return Schema(Props(
@@ -1159,7 +1186,8 @@ namespace UnityMCP.Editor
                     return AssetMoveBatchSchema();
                 case "console/query":
                     return Schema(Props(
-                        Prop("count", "number", "Maximum returned entries. Defaults to 50."),
+                        Prop("count", "number", "Maximum returned entries. Defaults to 50; capped at 200."),
+                        Prop("offset", "number", "Filtered entry offset, counting from the newest match. Defaults to 0."),
                         Prop("type", "string", "Filter by all, error, warning, info, exception, or assert. Defaults to all."),
                         Prop("messageContains", "string", "Case-insensitive message substring filter."),
                         Prop("sourceContains", "string", "Case-insensitive source stack frame/path substring filter."),
@@ -1168,7 +1196,7 @@ namespace UnityMCP.Editor
                         Prop("until", "string", "End time filter. Accepts ISO/local time, Unix seconds, or Unix milliseconds."),
                         Prop("sinceSecondsAgo", "number", "Start time filter relative to now."),
                         Prop("sinceLastPlay", "boolean", "Only include entries recorded after the latest Play transition."),
-                        Prop("includeStack", "boolean", "Include full stack traces. Defaults to true."),
+                        Prop("includeStack", "boolean", "Include full stack traces. Defaults to false."),
                         Prop("newestFirst", "boolean", "Return newest entries first. Defaults to false.")
                     ));
                 case "debug/attach-unity":
@@ -1703,7 +1731,7 @@ namespace UnityMCP.Editor
             }
         }
 
-        private static Dictionary<string, object> PrefabAssetBatchEditSchema(bool transactionDefaults)
+        private static Dictionary<string, object> PrefabAssetBatchEditSchema()
         {
             var properties = Props(
                 Prop("assetPath", "string", "Prefab asset path to edit."),
@@ -1717,9 +1745,7 @@ namespace UnityMCP.Editor
                 Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                 Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
                 Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
-                Prop("prefabFileDiffMode", "string", transactionDefaults
-                    ? "Diff return mode. Defaults to summary for transaction-edit."
-                    : "Diff return mode: full, minimal, or summary. Defaults to full."),
+                Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary."),
                 Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
                 Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
             );
@@ -1727,86 +1753,26 @@ namespace UnityMCP.Editor
             properties["operations"] = new Dictionary<string, object>
             {
                 { "type", "array" },
-                { "description", "Ordered prefab asset edit operations. Use type values: addComponent, setProperty, setReference, addGameObject, instantiatePrefab, removeComponent, removeGameObject, moveGameObject." },
+                { "description", "Ordered prefab edits. Each item uses type plus the fields accepted by the matching prefab-asset route." },
                 { "items", new Dictionary<string, object>
                     {
-                        { "oneOf", new List<object>
+                        { "type", "object" },
+                        { "properties", new Dictionary<string, object>
                             {
-                                BatchOperationSchema("addComponent", "Add a component to a GameObject inside the prefab.",
-                                    Props(
-                                        OperationTypeProp("addComponent"),
-                                        PrefabPathProp("Target GameObject path. Empty means root."),
-                                        Prop("componentType", "string", "Component type name or full name."),
-                                        Prop("properties", "object", "Optional serialized properties to set on the new component. Array/list fields accept either a JSON array or { items: [...] }; Generic fields accept child-field objects.")
-                                    ), "type", "componentType"),
-                                BatchOperationSchema("setProperty", "Set serialized properties on an existing component.",
-                                    Props(
-                                        OperationTypeProp("setProperty"),
-                                        PrefabPathProp("Target GameObject path. Empty means root."),
-                                        Prop("componentType", "string", "Component type name or full name."),
-                                        Prop("componentIndex", "number", "Component index when multiple components of this type exist. Defaults to 0."),
-                                        Prop("index", "number", "Alias for componentIndex."),
-                                        Prop("propertyName", "string", "Single serialized property name or path to set."),
-                                        Prop("value", "object", "Value for propertyName. Array/list fields accept either a JSON array or { items: [...] }; Generic fields accept child-field objects."),
-                                        Prop("properties", "object", "Map of serialized property names to values. Array/list fields accept either a JSON array or { items: [...] }; Generic fields accept child-field objects.")
-                                    ), "type", "componentType"),
-                                BatchOperationSchema("setReference", "Set an ObjectReference property on an existing component.",
-                                    Props(
-                                        OperationTypeProp("setReference"),
-                                        PrefabPathProp("Target GameObject path. Empty means root."),
-                                        Prop("componentType", "string", "Component type name or full name. Optional when propertyName can identify the component."),
-                                        Prop("componentIndex", "number", "Component index when multiple components of this type exist. Defaults to 0."),
-                                        Prop("index", "number", "Alias for componentIndex."),
-                                        Prop("propertyName", "string", "ObjectReference serialized property name or path."),
-                                        Prop("referenceAssetPath", "string", "Project asset path to assign."),
-                                        Prop("referencePrefabPath", "string", "Path of a GameObject inside the same prefab to assign."),
-                                        Prop("referenceComponentType", "string", "When using referencePrefabPath, assign this component instead of the GameObject."),
-                                        Prop("clear", "boolean", "Clear the ObjectReference.")
-                                    ), "type", "propertyName"),
-                                BatchOperationSchema("addGameObject", "Create a new child GameObject inside the prefab.",
-                                    Props(
-                                        OperationTypeProp("addGameObject"),
-                                        Prop("parentPrefabPath", "string", "Parent path inside the prefab. Empty means root."),
-                                        Prop("name", "string", "Name of the new child GameObject."),
-                                        Prop("primitiveType", "string", "Optional Unity PrimitiveType to create, e.g. Cube or Sphere."),
-                                        TransformPositionProp(),
-                                        TransformRotationProp(),
-                                        TransformScaleProp()
-                                    ), "type", "name"),
-                                BatchOperationSchema("instantiatePrefab", "Instantiate a prefab asset as a child inside the target prefab asset.",
-                                    Props(
-                                        OperationTypeProp("instantiatePrefab"),
-                                        Prop("sourcePrefabPath", "string", "Prefab asset path to instantiate into the target prefab."),
-                                        Prop("parentPrefabPath", "string", "Parent path inside the target prefab. Empty means root."),
-                                        Prop("name", "string", "Optional name override for the created GameObject."),
-                                        Prop("siblingIndex", "number", "Optional sibling index under the parent."),
-                                        TransformPositionProp(),
-                                        TransformRotationProp(),
-                                        TransformScaleProp()
-                                    ), "type", "sourcePrefabPath"),
-                                BatchOperationSchema("removeComponent", "Remove a component from a GameObject inside the prefab.",
-                                    Props(
-                                        OperationTypeProp("removeComponent"),
-                                        PrefabPathProp("Target GameObject path. Empty means root."),
-                                        Prop("componentType", "string", "Component type name or full name."),
-                                        Prop("componentIndex", "number", "Component index when multiple components of this type exist. Defaults to 0."),
-                                        Prop("index", "number", "Alias for componentIndex.")
-                                    ), "type", "componentType"),
-                                BatchOperationSchema("removeGameObject", "Remove a child GameObject from inside the prefab. The root cannot be removed.",
-                                    Props(
-                                        OperationTypeProp("removeGameObject"),
-                                        PrefabPathProp("Child GameObject path to remove.")
-                                    ), "type", "prefabPath"),
-                                BatchOperationSchema("moveGameObject", "Move or reorder a child GameObject inside the prefab.",
-                                    Props(
-                                        OperationTypeProp("moveGameObject"),
-                                        PrefabPathProp("GameObject path to move."),
-                                        Prop("newParentPrefabPath", "string", "New parent path inside the prefab. Empty means root."),
-                                        Prop("siblingIndex", "number", "Optional sibling index under the new parent."),
-                                        Prop("worldPositionStays", "boolean", "Preserve world transform while reparenting. Defaults to false.")
-                                    ), "type", "prefabPath")
+                                { "type", new Dictionary<string, object>
+                                    {
+                                        { "type", "string" },
+                                        { "enum", new List<object>
+                                            {
+                                                "addComponent", "setProperty", "setReference", "addGameObject",
+                                                "instantiatePrefab", "removeComponent", "removeGameObject", "moveGameObject"
+                                            }
+                                        }
+                                    }
                             }
-                        }
+                        },
+                        { "required", new List<object> { "type" } },
+                        { "additionalProperties", true }
                     }
                 }
             };
@@ -1835,45 +1801,6 @@ namespace UnityMCP.Editor
             };
 
             return Schema(properties, "moves");
-        }
-
-        private static Dictionary<string, object> BatchOperationSchema(string operationType, string description,
-            Dictionary<string, object> properties, params string[] required)
-        {
-            var schema = Schema(properties, required);
-            schema["description"] = description;
-            schema["additionalProperties"] = true;
-            return schema;
-        }
-
-        private static KeyValuePair<string, object> OperationTypeProp(string operationType)
-        {
-            return new KeyValuePair<string, object>("type", new Dictionary<string, object>
-            {
-                { "type", "string" },
-                { "enum", new List<object> { operationType } },
-                { "description", "Operation type. The runtime also accepts op or action, but type is preferred." },
-            });
-        }
-
-        private static KeyValuePair<string, object> PrefabPathProp(string description)
-        {
-            return Prop("prefabPath", "string", description);
-        }
-
-        private static KeyValuePair<string, object> TransformPositionProp()
-        {
-            return Prop("position", "object", "Optional local position object with x/y/z.");
-        }
-
-        private static KeyValuePair<string, object> TransformRotationProp()
-        {
-            return Prop("rotation", "object", "Optional local Euler rotation object with x/y/z.");
-        }
-
-        private static KeyValuePair<string, object> TransformScaleProp()
-        {
-            return Prop("scale", "object", "Optional local scale object with x/y/z.");
         }
 
         private static Dictionary<string, object> EditorWindowSchema(Dictionary<string, object> extraProps)
