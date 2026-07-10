@@ -261,7 +261,6 @@ namespace UnityMCP.Editor.Localization.Tests
         {
             m_AssetSnapshots.Clear();
             CaptureSnapshot(AssetDatabase.GetAssetPath(LocalizationEditorSettings.ActiveLocalizationSettings));
-            CaptureSnapshot(AssetDatabase.GetAssetPath(LocalizationSettings.StringDatabase));
 
             var settings = AddressableAssetSettingsDefaultObject.Settings;
             if (settings == null)
@@ -304,8 +303,9 @@ namespace UnityMCP.Editor.Localization.Tests
             if (source == null || !source.Remove(VariableGroup))
                 return;
 
-            if (LocalizationSettings.StringDatabase != null)
-                EditorUtility.SetDirty(LocalizationSettings.StringDatabase);
+            var settings = LocalizationEditorSettings.ActiveLocalizationSettings;
+            if (settings != null)
+                EditorUtility.SetDirty(settings);
         }
     }
 }

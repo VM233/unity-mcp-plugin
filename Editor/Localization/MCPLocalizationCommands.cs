@@ -555,8 +555,9 @@ namespace UnityMCP.Editor.Localization
             group.Add(variableName, variable);
 
             EditorUtility.SetDirty(group);
-            if (createdGroup && LocalizationSettings.StringDatabase != null)
-                EditorUtility.SetDirty(LocalizationSettings.StringDatabase);
+            var settings = LocalizationEditorSettings.ActiveLocalizationSettings;
+            if (createdGroup && settings != null)
+                EditorUtility.SetDirty(settings);
             AssetDatabase.SaveAssets();
 
             var result = BuildVariableInfo(variableName, variable);
