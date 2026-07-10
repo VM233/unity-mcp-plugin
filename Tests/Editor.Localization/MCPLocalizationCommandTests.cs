@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.AddressableAssets;
 using UnityEditor.Localization;
+using UnityEngine;
 
 namespace UnityMCP.Editor.Localization.Tests
 {
@@ -13,11 +16,16 @@ namespace UnityMCP.Editor.Localization.Tests
         private const string EnglishCode = "x-mcp-en";
         private const string ChineseCode = "x-mcp-zh";
 
+        private readonly Dictionary<string, byte[]> m_AssetSnapshots = new();
+
         [SetUp]
         public void SetUp()
         {
             CleanupLocales();
+            CleanupAddressables();
             AssetDatabase.DeleteAsset(TestFolder);
+            AssetDatabase.SaveAssets();
+            CaptureAddressableSnapshots();
             AssetDatabase.CreateFolder("Assets", "__UnityMCPLocalizationTests");
         }
 
@@ -26,7 +34,9 @@ namespace UnityMCP.Editor.Localization.Tests
         {
             CleanupLocales();
             AssetDatabase.DeleteAsset(TestFolder);
+            CleanupAddressables();
             AssetDatabase.SaveAssets();
+            RestoreAddressableSnapshots();
             AssetDatabase.Refresh();
         }
 
@@ -168,6 +178,62 @@ namespace UnityMCP.Editor.Localization.Tests
                 if (locale != null)
                     LocalizationEditorSettings.RemoveLocale(locale);
             }
+        }
+
+        private static void CleanupAddressables()
+        {
+            var settings = AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null)
+                return;
+
+            foreach (var group in settings.groups
+                         .Where(group => group != null &&
+                                         group.Name.IndexOf("x-mcp-", StringComparison.OrdinalIgnoreCase) >= 0)
+                         .ToList())
+            {
+                settings.RemoveGroup(group);
+            }
+
+            settings.RemoveLabel("Locale-x-mcp-en");
+            settings.RemoveLabel("Locale-x-mcp-zh");
+            EditorUtility.SetDirty(settings);
+        }
+
+        private void CaptureAddressableSnapshots()
+        {
+            m_AssetSnapshots.Clear();
+            var settings = AddressableAssetSettingsDefaultObject.Settings;
+            if (settings == null)
+                return;
+
+            CaptureSnapshot(AssetDatabase.GetAssetPath(settings));
+            CaptureSnapshot(AssetDatabase.GetAssetPath(settings.FindGroup("Localization-Locales")));
+        }
+
+        private void CaptureSnapshot(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath))
+                return;
+            string absolutePath = GetAbsolutePath(assetPath);
+            if (File.Exists(absolutePath))
+                m_AssetSnapshots[assetPath] = File.ReadAllBytes(absolutePath);
+        }
+
+        private void RestoreAddressableSnapshots()
+        {
+            foreach (var snapshot in m_AssetSnapshots)
+            {
+                File.WriteAllBytes(GetAbsolutePath(snapshot.Key), snapshot.Value);
+                AssetDatabase.ImportAsset(snapshot.Key, ImportAssetOptions.ForceSynchronousImport |
+                                                         ImportAssetOptions.ForceUpdate);
+            }
+            m_AssetSnapshots.Clear();
+        }
+
+        private static string GetAbsolutePath(string assetPath)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
         }
     }
 }

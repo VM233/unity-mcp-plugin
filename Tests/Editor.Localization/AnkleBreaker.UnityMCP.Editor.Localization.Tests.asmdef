@@ -5,7 +5,9 @@
     "AnkleBreaker.UnityMCP.Editor",
     "AnkleBreaker.UnityMCP.Editor.Localization",
     "Unity.Localization",
-    "Unity.Localization.Editor"
+    "Unity.Localization.Editor",
+    "Unity.Addressables",
+    "Unity.Addressables.Editor"
   ],
   "includePlatforms": [
     "Editor"
