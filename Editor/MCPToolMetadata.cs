@@ -319,21 +319,24 @@ namespace UnityMCP.Editor
 
         private static IEnumerable<string> GetSourceCandidatePaths()
         {
-            var paths = new List<string>();
             string projectRoot = Directory.GetParent(Application.dataPath).FullName;
 
             var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(MCPBridgeServer).Assembly);
             if (!string.IsNullOrEmpty(packageInfo?.resolvedPath))
-                paths.Add(Path.Combine(packageInfo.resolvedPath, "Editor", "MCPBridgeServer.cs"));
+                yield return Path.Combine(packageInfo.resolvedPath, "Editor", "MCPBridgeServer.cs");
 
-            paths.Add(Path.Combine(projectRoot, "Packages", "com.anklebreaker.unity-mcp", "Editor", "MCPBridgeServer.cs"));
+            yield return Path.Combine(projectRoot, "Packages", "com.anklebreaker.unity-mcp", "Editor",
+                "MCPBridgeServer.cs");
 
             string packageCacheRoot = Path.Combine(projectRoot, "Library", "PackageCache");
             if (Directory.Exists(packageCacheRoot))
             {
-                paths.AddRange(Directory
-                    .GetFiles(packageCacheRoot, "MCPBridgeServer.cs", SearchOption.AllDirectories)
-                    .Where(path => path.Replace('\\', '/').Contains("com.anklebreaker.unity-mcp")));
+                foreach (string path in Directory.EnumerateFiles(packageCacheRoot, "MCPBridgeServer.cs",
+                             SearchOption.AllDirectories))
+                {
+                    if (path.Replace('\\', '/').Contains("com.anklebreaker.unity-mcp"))
+                        yield return path;
+                }
             }
 
             foreach (string guid in AssetDatabase.FindAssets("MCPBridgeServer t:MonoScript"))
@@ -342,14 +345,10 @@ namespace UnityMCP.Editor
                 if (!path.EndsWith("MCPBridgeServer.cs", StringComparison.Ordinal))
                     continue;
 
-                paths.Add(Path.IsPathRooted(path)
+                yield return Path.IsPathRooted(path)
                     ? path
-                    : Path.Combine(projectRoot, path));
+                    : Path.Combine(projectRoot, path);
             }
-
-            return paths
-                .Where(path => !string.IsNullOrEmpty(path))
-                .Distinct();
         }
 
         private static List<string> ExtractRouteCases(string source)
