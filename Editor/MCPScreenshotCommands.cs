@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 #if UNITY_EDITOR_WIN
 using System.Diagnostics;
@@ -18,27 +19,129 @@ namespace UnityMCP.Editor
     {
         // ─── Capture Game View ───
 
-        public static object CaptureGameView(Dictionary<string, object> args)
+        public static void CaptureGameView(Dictionary<string, object> args, Action<object> resolve)
         {
+            args ??= new Dictionary<string, object>();
             string path = args.ContainsKey("path") ? args["path"].ToString() : "";
             if (string.IsNullOrEmpty(path))
                 path = "Assets/Screenshots/GameView_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png";
 
             int superSize = args.ContainsKey("superSize") ? Convert.ToInt32(args["superSize"]) : 1;
+            int waitFrames = Math.Max(1, GetInt(args, "waitFrames", 2));
+            int stableFrames = Math.Max(1, GetInt(args, "stableFrames", 2));
+            int timeoutMs = Math.Max(1000, GetInt(args, "timeoutMs", 10000));
 
-            // Ensure directory exists
-            string dir = Path.GetDirectoryName(path)?.Replace('\\', '/');
-            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                Directory.CreateDirectory(dir);
+            string fullPath = Path.GetFullPath(path);
+            string dir = Path.GetDirectoryName(fullPath);
+            try
+            {
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+                if (File.Exists(fullPath))
+                    File.Delete(fullPath);
+            }
+            catch (Exception ex)
+            {
+                resolve(new Dictionary<string, object>
+                {
+                    { "success", false },
+                    { "error", $"Could not prepare screenshot path '{path}': {ex.Message}" },
+                });
+                return;
+            }
 
-            ScreenCapture.CaptureScreenshot(path, superSize);
+            int frame = 0;
+            int stableFileFrames = 0;
+            long lastSize = -1;
+            bool captureRequested = false;
+            bool resolved = false;
+            double startedAt = EditorApplication.timeSinceStartup;
 
+            void Finish(object result)
+            {
+                if (resolved)
+                    return;
+
+                resolved = true;
+                EditorApplication.update -= Tick;
+                resolve(result);
+            }
+
+            void Tick()
+            {
+                frame++;
+                double elapsedMs = (EditorApplication.timeSinceStartup - startedAt) * 1000d;
+                if (elapsedMs >= timeoutMs)
+                {
+                    Finish(new Dictionary<string, object>
+                    {
+                        { "success", false },
+                        { "error", $"Timed out waiting for Game View screenshot '{path}'." },
+                        { "path", path },
+                        { "elapsedMs", Math.Round(elapsedMs, 2) },
+                        { "captureRequested", captureRequested },
+                        { "fileExists", File.Exists(fullPath) },
+                        { "stableFileFrames", stableFileFrames },
+                    });
+                    return;
+                }
+
+                if (captureRequested == false)
+                {
+                    if (frame < waitFrames)
+                    {
+                        EditorApplication.QueuePlayerLoopUpdate();
+                        return;
+                    }
+
+                    ScreenCapture.CaptureScreenshot(path, superSize);
+                    captureRequested = true;
+                    EditorApplication.QueuePlayerLoopUpdate();
+                    return;
+                }
+
+                if (File.Exists(fullPath))
+                {
+                    long size = new FileInfo(fullPath).Length;
+                    if (size > 0 && size == lastSize)
+                        stableFileFrames++;
+                    else
+                        stableFileFrames = 0;
+                    lastSize = size;
+
+                    if (stableFileFrames >= stableFrames &&
+                        TryReadPngInfo(fullPath, out int width, out int height, out _))
+                    {
+                        Finish(new Dictionary<string, object>
+                        {
+                            { "success", true },
+                            { "path", path },
+                            { "fullPath", fullPath.Replace('\\', '/') },
+                            { "superSize", superSize },
+                            { "width", width },
+                            { "height", height },
+                            { "sizeBytes", size },
+                            { "waitFrames", waitFrames },
+                            { "stableFrames", stableFrames },
+                            { "elapsedMs", Math.Round(elapsedMs, 2) },
+                            { "fileReady", true },
+                        });
+                        return;
+                    }
+                }
+
+                EditorApplication.QueuePlayerLoopUpdate();
+            }
+
+            EditorApplication.update += Tick;
+        }
+
+        public static object CaptureGameView(Dictionary<string, object> args)
+        {
             return new Dictionary<string, object>
             {
-                { "success", true },
-                { "path", path },
-                { "superSize", superSize },
-                { "message", $"Screenshot will be saved to '{path}' on next frame render" },
+                { "success", false },
+                { "error", "screenshot/game must be executed through the deferred route." },
             };
         }
 
@@ -373,6 +476,44 @@ namespace UnityMCP.Editor
             return int.TryParse(args[key].ToString(), out int value) ? value : defaultValue;
         }
 
+        internal static bool TryReadPngInfo(string path, out int width, out int height, out string error)
+        {
+            width = 0;
+            height = 0;
+            error = "";
+            Texture2D texture = null;
+            try
+            {
+                byte[] bytes = File.ReadAllBytes(path);
+                if (bytes.Length == 0)
+                {
+                    error = "PNG file is empty.";
+                    return false;
+                }
+
+                texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                if (texture.LoadImage(bytes, false) == false)
+                {
+                    error = "PNG decode failed.";
+                    return false;
+                }
+
+                width = texture.width;
+                height = texture.height;
+                return width > 0 && height > 0;
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+                return false;
+            }
+            finally
+            {
+                if (texture != null)
+                    UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
         private static float GetFloat(Dictionary<string, object> args, string key, float defaultValue)
         {
             return TryGetFloat(args, key, out float value) ? value : defaultValue;
@@ -616,6 +757,7 @@ namespace UnityMCP.Editor
                 RepaintImmediately(win);
 
                 IntPtr hwnd; bool whole; int px = 0, py = 0, pw = 0, ph = 0;
+                float pixelsPerPoint = Math.Max(1f, EditorGUIUtility.pixelsPerPoint);
                 if (floating)
                 {
                     hwnd = FindHwndByTitleExact(win, pid, main, out int n);
@@ -629,10 +771,9 @@ namespace UnityMCP.Editor
                         floating = false;
                         hwnd = main;
                         whole = false;
-                        float ppp = EditorGUIUtility.pixelsPerPoint;
                         var rp = win.position;
-                        px = (int)Math.Round(rp.x * ppp); py = (int)Math.Round(rp.y * ppp);
-                        pw = (int)Math.Round(rp.width * ppp); ph = (int)Math.Round(rp.height * ppp);
+                        px = (int)Math.Round(rp.x); py = (int)Math.Round(rp.y);
+                        pw = (int)Math.Round(rp.width); ph = (int)Math.Round(rp.height);
                         if (pw <= 0 || ph <= 0) return Err("Bad panel rect " + pw + "x" + ph);
                     }
                     else
@@ -643,14 +784,14 @@ namespace UnityMCP.Editor
                 else
                 {
                     hwnd = main; whole = false;
-                    float ppp = EditorGUIUtility.pixelsPerPoint;
                     var rp = win.position;
-                    px = (int)Math.Round(rp.x * ppp); py = (int)Math.Round(rp.y * ppp);
-                    pw = (int)Math.Round(rp.width * ppp); ph = (int)Math.Round(rp.height * ppp);
+                    px = (int)Math.Round(rp.x); py = (int)Math.Round(rp.y);
+                    pw = (int)Math.Round(rp.width); ph = (int)Math.Round(rp.height);
                     if (pw <= 0 || ph <= 0) return Err("Bad panel rect " + pw + "x" + ph);
                 }
 
-                return GrabAndEncode(hwnd, whole, px, py, pw, ph, path, maxDimension, win, floating);
+                return GrabAndEncode(hwnd, whole, px, py, pw, ph, pixelsPerPoint, path, maxDimension, win,
+                    floating);
             }
             finally
             {
@@ -679,7 +820,7 @@ namespace UnityMCP.Editor
         // All GDI handles and the Texture2D are released in finally (deselect-before-delete).
         static Dictionary<string, object> GrabAndEncode(IntPtr hwnd, bool wholeWindow,
             int panelX, int panelY, int panelW, int panelH,
-            string path, int maxDimension, EditorWindow win, bool floating)
+            float pixelsPerPoint, string path, int maxDimension, EditorWindow win, bool floating)
         {
             if (IsIconic(hwnd)) return Err("Window is minimized.");
             if (!GetWindowRect(hwnd, out RECT wr)) return Err("GetWindowRect failed.", Marshal.GetLastWin32Error());
@@ -688,22 +829,39 @@ namespace UnityMCP.Editor
 
             int cropX, cropY, cropW, cropH;
             string cropWarning = "";
+            string coordinateMode = "whole-window";
             if (wholeWindow) { cropX = 0; cropY = 0; cropW = winW; cropH = winH; }
             else
             {
-                cropX = panelX - wr.left; cropY = panelY - wr.top;
-                if (cropX < 0 || cropY < 0 || cropX >= winW || cropY >= winH)
+                var candidates = new List<CropCandidate>
                 {
-                    int localCropX = panelX;
-                    int localCropY = panelY;
-                    if (localCropX < 0 || localCropY < 0 || localCropX >= winW || localCropY >= winH)
-                        return Err("Panel offscreen (crop " + cropX + "," + cropY + ", local " + localCropX + "," + localCropY + "); DPI / multi-monitor mismatch?");
-
-                    cropWarning = "Used local EditorWindow coordinates because OS-relative crop was outside the captured window.";
-                    cropX = localCropX;
-                    cropY = localCropY;
+                    new CropCandidate(panelX - wr.left, panelY - wr.top, panelW, panelH, "screen-pixels"),
+                    new CropCandidate(panelX, panelY, panelW, panelH, "window-local-pixels"),
+                };
+                if (Math.Abs(pixelsPerPoint - 1f) > 0.01f)
+                {
+                    int scaledX = (int)Math.Round(panelX * pixelsPerPoint);
+                    int scaledY = (int)Math.Round(panelY * pixelsPerPoint);
+                    int scaledW = (int)Math.Round(panelW * pixelsPerPoint);
+                    int scaledH = (int)Math.Round(panelH * pixelsPerPoint);
+                    candidates.Add(new CropCandidate(scaledX - wr.left, scaledY - wr.top, scaledW, scaledH,
+                        "screen-points-scaled"));
+                    candidates.Add(new CropCandidate(scaledX, scaledY, scaledW, scaledH,
+                        "window-local-points-scaled"));
                 }
-                cropW = panelW; cropH = panelH;
+
+                var selected = candidates.FirstOrDefault(candidate => candidate.HasValidOrigin(winW, winH));
+                if (selected.Width <= 0 || selected.Height <= 0)
+                    return Err("Panel rect could not be mapped into the captured window; DPI / multi-monitor mismatch.");
+
+                cropX = selected.X;
+                cropY = selected.Y;
+                cropW = selected.Width;
+                cropH = selected.Height;
+                coordinateMode = selected.Mode;
+                if (coordinateMode != "screen-pixels")
+                    cropWarning = "EditorWindow crop used " + coordinateMode + " coordinate fallback.";
+
                 if (cropX + cropW > winW) cropW = winW - cropX;
                 if (cropY + cropH > winH) cropH = winH - cropY;
                 if (cropW <= 0 || cropH <= 0) return Err("Bad crop " + cropW + "x" + cropH);
@@ -761,6 +919,9 @@ namespace UnityMCP.Editor
                 for (int i = 0; i + 2 < buf.Length; i += stride) sum += buf[i] + buf[i + 1] + buf[i + 2];
                 if (sum == 0) return Err("All-black frame (GPU refused PW_RENDERFULLCONTENT).");
 
+                AnalyzeCenterPixels(buf, cropW, cropH, out int centerColorRange,
+                    out int centerDistinctColorBuckets, out bool centerVisuallyBlank);
+
                 byte[] png = EncodeBgraBottomUp(buf, cropW, cropH);
                 if (png == null || png.Length == 0) return Err("PNG encode failed.");
 
@@ -780,6 +941,10 @@ namespace UnityMCP.Editor
                     { "sizeBytes", png.Length },
                     { "window", win.GetType().FullName },
                     { "floating", floating },
+                    { "coordinateMode", coordinateMode },
+                    { "centerColorRange", centerColorRange },
+                    { "centerDistinctColorBuckets", centerDistinctColorBuckets },
+                    { "centerVisuallyBlank", centerVisuallyBlank },
                     { "warning", cropWarning },
                 };
             }
@@ -793,6 +958,62 @@ namespace UnityMCP.Editor
                 if (hMemFull != IntPtr.Zero) DeleteDC(hMemFull);
                 if (hScreen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, hScreen);
             }
+        }
+
+        private readonly struct CropCandidate
+        {
+            public readonly int X;
+            public readonly int Y;
+            public readonly int Width;
+            public readonly int Height;
+            public readonly string Mode;
+
+            public CropCandidate(int x, int y, int width, int height, string mode)
+            {
+                X = x;
+                Y = y;
+                Width = width;
+                Height = height;
+                Mode = mode;
+            }
+
+            public bool HasValidOrigin(int windowWidth, int windowHeight)
+            {
+                return Width > 0 && Height > 0 && X >= 0 && Y >= 0 && X < windowWidth && Y < windowHeight;
+            }
+        }
+
+        private static void AnalyzeCenterPixels(byte[] bgra, int width, int height, out int colorRange,
+            out int distinctColorBuckets, out bool visuallyBlank)
+        {
+            int minLuminance = 255;
+            int maxLuminance = 0;
+            var buckets = new HashSet<int>();
+            int minX = width / 5;
+            int maxX = Math.Max(minX + 1, width * 4 / 5);
+            int minY = height / 5;
+            int maxY = Math.Max(minY + 1, height * 4 / 5);
+            int stepX = Math.Max(1, (maxX - minX) / 64);
+            int stepY = Math.Max(1, (maxY - minY) / 64);
+
+            for (int y = minY; y < maxY; y += stepY)
+            {
+                for (int x = minX; x < maxX; x += stepX)
+                {
+                    int offset = (y * width + x) * 4;
+                    int blue = bgra[offset];
+                    int green = bgra[offset + 1];
+                    int red = bgra[offset + 2];
+                    int luminance = (red * 3 + green * 6 + blue) / 10;
+                    minLuminance = Math.Min(minLuminance, luminance);
+                    maxLuminance = Math.Max(maxLuminance, luminance);
+                    buckets.Add((red >> 4) << 8 | (green >> 4) << 4 | (blue >> 4));
+                }
+            }
+
+            colorRange = maxLuminance - minLuminance;
+            distinctColorBuckets = buckets.Count;
+            visuallyBlank = colorRange <= 6 && distinctColorBuckets <= 4;
         }
 
         // GDI 32bpp DIB is BGRA; Texture2D wants RGBA + bottom-up rows (our positive biHeight).

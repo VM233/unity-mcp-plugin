@@ -1,8 +1,10 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Text;
 using UnityEditor;
 using UnityEngine;
 
@@ -298,23 +300,10 @@ namespace UnityMCP.Editor
 
             try
             {
-                // Wrap user code in a static method so it can use 'return' to send data back
-                string fullCode = @"
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using UnityEngine;
-using UnityEditor;
-using UnityEditor.SceneManagement;
-
-public static class MCPDynamicCode
-{
-    public static object Execute()
-    {
-        " + code + @"
-        return null;
-    }
-}";
+                string fullCode = BuildExecuteCodeSource(args, code, out int generatedPrefixLineCount,
+                    out int userCodeLineCount, out string usingError);
+                if (usingError.Length > 0)
+                    return new { error = usingError };
 
                 // --- Roslyn-based compilation (via reflection) ---
                 // All Roslyn types accessed through reflection to avoid compile-time dependency.
@@ -485,7 +474,12 @@ public static class MCPDynamicCode
                         }
                         catch { message = diag.ToString(); }
 
-                        errors.Add($"Line {line + 1}: {message}");
+                        int generatedLine = line + 1;
+                        int userLine = generatedLine - generatedPrefixLineCount;
+                        string lineLabel = userLine >= 1 && userLine <= userCodeLineCount
+                            ? $"Line {userLine}"
+                            : $"Generated line {generatedLine}";
+                        errors.Add($"{lineLabel}: {message}");
                     }
 
                     return new Dictionary<string, object>
@@ -497,16 +491,43 @@ public static class MCPDynamicCode
                     };
                 }
 
-                // Load and execute
-                var compiledAssembly = Assembly.LoadFrom(outputPath);
-                var compiledType = compiledAssembly.GetType("MCPDynamicCode");
-                var method = compiledType.GetMethod("Execute");
-                var result = method.Invoke(null, null);
+                object loadContext = null;
+                bool collectibleAssemblyContext = false;
+                try
+                {
+                    if (TryExecuteInIsolatedAppDomain(outputPath, args, out var isolatedResponse,
+                            out string appDomainError))
+                    {
+                        isolatedResponse["collectibleAssemblyContext"] = false;
+                        isolatedResponse["assemblyIsolation"] = "app-domain";
+                        return isolatedResponse;
+                    }
 
-                // Cleanup temp dll (best effort)
-                try { File.Delete(outputPath); } catch { }
-
-                return SerializeResult(result, args);
+                    var compiledAssembly = LoadDynamicAssembly(outputPath, out loadContext,
+                        out collectibleAssemblyContext);
+                    var compiledType = compiledAssembly.GetType("MCPDynamicCode");
+                    var method = compiledType.GetMethod("Execute");
+                    var result = method.Invoke(null, null);
+                    var response = SerializeResult(result, args);
+                    response["collectibleAssemblyContext"] = collectibleAssemblyContext;
+                    response["assemblyIsolation"] = collectibleAssemblyContext
+                        ? "collectible-load-context"
+                        : "default-domain";
+                    if (appDomainError.Length > 0)
+                        response["assemblyIsolationWarning"] = appDomainError;
+                    return response;
+                }
+                finally
+                {
+                    TryUnloadAssemblyContext(loadContext);
+                    try
+                    {
+                        File.Delete(outputPath);
+                    }
+                    catch
+                    {
+                    }
+                }
             }
             catch (TargetInvocationException ex)
             {
@@ -518,12 +539,224 @@ public static class MCPDynamicCode
             }
         }
 
+        private static string BuildExecuteCodeSource(Dictionary<string, object> args, string code,
+            out int generatedPrefixLineCount, out int userCodeLineCount, out string error)
+        {
+            var namespaces = new List<string>
+            {
+                "System",
+                "System.Collections.Generic",
+                "System.Linq",
+                "UnityEngine",
+                "UnityEngine.UIElements",
+                "UnityEditor",
+                "UnityEditor.SceneManagement",
+            };
+
+            foreach (string namespaceName in GetAdditionalUsingNamespaces(args))
+            {
+                if (IsValidNamespace(namespaceName) == false)
+                {
+                    generatedPrefixLineCount = 0;
+                    userCodeLineCount = 0;
+                    error = $"Invalid namespace in usings: '{namespaceName}'.";
+                    return "";
+                }
+
+                if (namespaces.Contains(namespaceName, StringComparer.Ordinal) == false)
+                    namespaces.Add(namespaceName);
+            }
+
+            var prefix = new StringBuilder();
+            foreach (string namespaceName in namespaces)
+                prefix.Append("using ").Append(namespaceName).AppendLine(";");
+            prefix.AppendLine();
+            prefix.AppendLine("public static class MCPDynamicCode");
+            prefix.AppendLine("{");
+            prefix.AppendLine("    public static object Execute()");
+            prefix.AppendLine("    {");
+
+            generatedPrefixLineCount = prefix.ToString().Count(character => character == '\n');
+            userCodeLineCount = Math.Max(1, code.Count(character => character == '\n') + 1);
+            error = "";
+            return prefix.ToString() + code + Environment.NewLine + "        return null;" + Environment.NewLine + "    }" +
+                   Environment.NewLine + "}";
+        }
+
+        private static IEnumerable<string> GetAdditionalUsingNamespaces(Dictionary<string, object> args)
+        {
+            if (args == null)
+                yield break;
+
+            foreach (string key in new[] { "using", "usings" })
+            {
+                if (args.TryGetValue(key, out object value) == false || value == null)
+                    continue;
+
+                if (value is string text)
+                {
+                    if (string.IsNullOrWhiteSpace(text) == false)
+                        yield return text.Trim();
+                    continue;
+                }
+
+                if (value is IEnumerable enumerable)
+                {
+                    foreach (object item in enumerable)
+                    {
+                        string namespaceName = item?.ToString()?.Trim();
+                        if (string.IsNullOrEmpty(namespaceName) == false)
+                            yield return namespaceName;
+                    }
+                }
+            }
+        }
+
+        private static bool IsValidNamespace(string namespaceName)
+        {
+            if (string.IsNullOrWhiteSpace(namespaceName))
+                return false;
+
+            foreach (string part in namespaceName.Split('.'))
+            {
+                if (part.Length == 0 || char.IsLetter(part[0]) == false && part[0] != '_')
+                    return false;
+
+                for (int i = 1; i < part.Length; i++)
+                {
+                    if (char.IsLetterOrDigit(part[i]) == false && part[i] != '_')
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static Assembly LoadDynamicAssembly(string path, out object loadContext,
+            out bool collectibleAssemblyContext)
+        {
+            loadContext = null;
+            collectibleAssemblyContext = false;
+            var loadContextType = Type.GetType(
+                "System.Runtime.Loader.AssemblyLoadContext, System.Runtime.Loader", false) ??
+                                  AppDomain.CurrentDomain.GetAssemblies()
+                                      .Select(assembly => assembly.GetType(
+                                          "System.Runtime.Loader.AssemblyLoadContext", false))
+                                      .FirstOrDefault(type => type != null);
+            if (loadContextType != null)
+            {
+                try
+                {
+                    var constructor = loadContextType.GetConstructor(
+                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null,
+                        new[] { typeof(string), typeof(bool) }, null);
+                    var loadFromStream = loadContextType.GetMethod("LoadFromStream", new[] { typeof(Stream) });
+                    var unload = loadContextType.GetMethod("Unload", Type.EmptyTypes);
+                    if (constructor != null && loadFromStream != null && unload != null)
+                    {
+                        loadContext = constructor.Invoke(new object[]
+                        {
+                            "UnityMCPDynamicCode_" + Guid.NewGuid().ToString("N"),
+                            true,
+                        });
+                        using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+                        {
+                            var assembly = loadFromStream.Invoke(loadContext, new object[] { stream }) as Assembly;
+                            if (assembly != null)
+                            {
+                                collectibleAssemblyContext = true;
+                                return assembly;
+                            }
+                        }
+                    }
+                }
+                catch
+                {
+                    TryUnloadAssemblyContext(loadContext);
+                    loadContext = null;
+                }
+            }
+
+            return Assembly.Load(File.ReadAllBytes(path));
+        }
+
+        private static bool TryExecuteInIsolatedAppDomain(string path, Dictionary<string, object> args,
+            out Dictionary<string, object> response, out string error)
+        {
+            response = null;
+            error = "";
+            AppDomain domain = null;
+            try
+            {
+                var createDomain = typeof(AppDomain).GetMethod("CreateDomain",
+                    BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(string) }, null);
+                var unloadDomain = typeof(AppDomain).GetMethod("Unload",
+                    BindingFlags.Public | BindingFlags.Static, null, new[] { typeof(AppDomain) }, null);
+                if (createDomain == null || unloadDomain == null)
+                    return false;
+
+                domain = createDomain.Invoke(null,
+                    new object[] { "UnityMCPDynamicCode_" + Guid.NewGuid().ToString("N") }) as AppDomain;
+                if (domain == null)
+                    return false;
+
+                var createExecutor = domain.GetType().GetMethod("CreateInstanceFromAndUnwrap",
+                    BindingFlags.Instance | BindingFlags.Public, null,
+                    new[] { typeof(string), typeof(string) }, null);
+                var executor = createExecutor?.Invoke(domain, new object[]
+                {
+                    typeof(MCPDynamicCodeDomainExecutor).Assembly.Location,
+                    typeof(MCPDynamicCodeDomainExecutor).FullName,
+                }) as MCPDynamicCodeDomainExecutor;
+                if (executor == null)
+                {
+                    error = "Could not create the isolated dynamic-code executor.";
+                    return false;
+                }
+
+                response = executor.Execute(File.ReadAllBytes(path), args);
+                return response != null;
+            }
+            catch (Exception ex)
+            {
+                error = ex.GetBaseException().Message;
+                return false;
+            }
+            finally
+            {
+                if (domain != null)
+                {
+                    try
+                    {
+                        AppDomain.Unload(domain);
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
+        }
+
+        private static void TryUnloadAssemblyContext(object loadContext)
+        {
+            if (loadContext == null)
+                return;
+
+            try
+            {
+                loadContext.GetType().GetMethod("Unload", Type.EmptyTypes)?.Invoke(loadContext, null);
+            }
+            catch
+            {
+            }
+        }
+
         /// <summary>
         /// Serialize the result of ExecuteCode into a JSON-friendly structure.
         /// Handles primitives, dictionaries, anonymous objects, lists, arrays,
         /// and Unity types (Vector3, Color, etc.)
         /// </summary>
-        private static object SerializeResult(object result, Dictionary<string, object> args)
+        internal static Dictionary<string, object> SerializeResult(object result, Dictionary<string, object> args)
         {
             var budget = new ResultSerializationBudget(
                 Math.Max(1, Math.Min(GetInt(args, "maxResultItems", 200), 2000)),
@@ -820,6 +1053,36 @@ public static class MCPDynamicCode
                 return defaultValue;
 
             return int.TryParse(args[key].ToString(), out int value) ? value : defaultValue;
+        }
+    }
+
+    public sealed class MCPDynamicCodeDomainExecutor : MarshalByRefObject
+    {
+        public Dictionary<string, object> Execute(byte[] assemblyBytes, Dictionary<string, object> args)
+        {
+            try
+            {
+                var assembly = Assembly.Load(assemblyBytes);
+                var compiledType = assembly.GetType("MCPDynamicCode");
+                var method = compiledType?.GetMethod("Execute", BindingFlags.Public | BindingFlags.Static);
+                if (method == null)
+                    return MCPResponse.Error("Compiled dynamic-code entry point was not found.",
+                        "execute_code_entry_missing");
+
+                object result = method.Invoke(null, null);
+                return MCPEditorCommands.SerializeResult(result, args);
+            }
+            catch (TargetInvocationException ex)
+            {
+                var cause = ex.InnerException ?? ex;
+                return MCPResponse.Error(cause.Message, "execute_code_exception", false,
+                    new Dictionary<string, object> { { "stackTrace", cause.StackTrace ?? "" } });
+            }
+            catch (Exception ex)
+            {
+                return MCPResponse.Error(ex.Message, "execute_code_exception", false,
+                    new Dictionary<string, object> { { "stackTrace", ex.StackTrace ?? "" } });
+            }
         }
     }
 }

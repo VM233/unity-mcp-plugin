@@ -5,6 +5,8 @@ All notable changes to this package will be documented in this file.
 ## Unreleased
 
 ### Added
+- **Completed visual capture results** - `screenshot/game` now waits for a stable, decodable PNG and reports dimensions, byte size, elapsed time, and readiness instead of returning before the next frame writes the file.
+- **Readable project-tool names** - project tools expose compact `unity_pt_*` names capped for MCP clients, retain the legacy name in metadata, and can opt into an explicit `MCPProjectToolAttribute.ShortName`.
 - **First-class testing tools** - Test discovery, test execution, job polling, and persistent Git package self-tests now expose concrete tools and schemas.
 - **Persistent package test workflow** - `testing/run-package-tests` backs up `Packages/manifest.json`, enables the requested package in `testables`, runs its test assembly after reload, then restores the original manifest bytes.
 - **Atomic prefab component moves** - `prefab-asset/move-component` / `unity_prefab_asset_move_component` copies a component to another GameObject, verifies the destination, removes the source, and saves once while preserving serialized data.
@@ -21,6 +23,7 @@ All notable changes to this package will be documented in this file.
 - **First-class route metadata** — stable routes advertised in the README now include `firstClass=true` in `_meta/tools`, so MCP clients can expose concrete tools with route-owned schemas and descriptions instead of routing them through the generic advanced entry.
 
 ### Changed
+- **Compact targeted UI asset inspection** - `uitoolkit/asset-inspect` names queries omit the unrelated general element list by default, share one result budget, and return only relevant USS classes unless full output is requested.
 - **Token-bounded metadata** - `_meta/tools` now defaults to compact first-class metadata without schemas, returns at most 50 tools per page, and requires explicit flags for schemas or legacy duplicate collections. Full catalogs support category filters and pagination.
 - **Bounded query responses** - scene and prefab hierarchies, Console queries, test discovery/results, SerializedObject reads, and execute-code serialization now use conservative defaults with pagination or explicit truncation metadata. Console stacks and test stacks are opt-in.
 - **Lean first-class surface** - duplicate prefab aliases and low-frequency visual, animation, build, package, and queue routes remain available through the advanced catalog instead of occupying every MCP `tools/list` response.
@@ -28,6 +31,9 @@ All notable changes to this package will be documented in this file.
 - **Prefab diff summaries** - prefab mutations return summary diffs by default; callers can explicitly request `minimal` or `full` lines.
 
 ### Fixed
+- **UI Builder preview evidence** - `uitoolkit/builder-preview` now waits for the requested UXML document and a laid-out canvas, focuses and repaints across stable frames, restores previous focus, and rejects failed or visually blank captures instead of reporting unconditional success.
+- **Editor-window DPI cropping** - docked EditorWindow captures prefer raw screen-pixel coordinates, use explicit local/scaled fallbacks, and report the selected coordinate mode plus center-content diagnostics.
+- **Execute-code UI Toolkit and diagnostics** - dynamic code includes `UnityEngine.UIElements`, accepts additional namespace imports, maps compiler diagnostics back to user-code line numbers, and uses a collectible `AssemblyLoadContext` when available instead of permanently accumulating dynamic assemblies.
 - **Prefab YAML block ordering** - prefab saves preserve the original order of surviving Unity YAML object blocks, append only new blocks, remove deleted blocks, validate block equivalence, and continue stripping trailing whitespace.
 - **Test Runner completion** - jobs finalize from completed leaf results when Unity's root `RunFinished` callback arrives late; an unfocused Editor is reported as informational state instead of a blocking reason.
 - **Prefab mutation rollback and YAML diffs** - failed `prefab-asset/add-gameobject` and component moves restore the original prefab bytes; successful prefab saves remove trailing YAML whitespace; line diffs now use a real edit script and report complete added/removed totals independently from truncation.

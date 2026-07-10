@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
@@ -443,6 +444,11 @@ namespace UnityMCP.Editor
             string typeName = GetString(args, "typeName");
             int maxResults = Math.Max(1, GetInt(args, "maxResults", 100));
             bool includeUss = GetBool(args, "includeUss", true);
+            bool hasNamesQuery = args != null && args.ContainsKey("names");
+            bool includeElements = GetBool(args, "includeElements", hasNamesQuery == false);
+            bool targetedQuery = requestedNames.Count > 0 || string.IsNullOrEmpty(requestedName) == false ||
+                                 string.IsNullOrEmpty(className) == false || string.IsNullOrEmpty(typeName) == false;
+            bool includeAllUssClasses = GetBool(args, "includeAllUssClasses", targetedQuery == false);
 
             var elements = new List<UxmlElementInfo>();
             var styleReferences = new List<string>();
@@ -478,28 +484,55 @@ namespace UnityMCP.Editor
 
             var ussClassStyles = includeUss ? ReadUssClassStyles(ussPaths) : new Dictionary<string, UssClassStyle>();
 
-            var filteredElements = elements
+            var requestedNameSet = new HashSet<string>(requestedNames, StringComparer.OrdinalIgnoreCase);
+            var matchingElements = elements
                 .Where(element => ElementMatches(element, requestedName, className, typeName))
-                .Take(maxResults)
+                .Where(element => requestedNameSet.Count == 0 || requestedNameSet.Contains(element.Name))
+                .ToList();
+            var reportedElements = includeElements
+                ? matchingElements.Take(maxResults).ToList()
+                : new List<UxmlElementInfo>();
+            var filteredElements = reportedElements
                 .Select(element => BuildUxmlElementDictionary(element, ussClassStyles))
                 .ToList();
 
             var nameChecks = new List<Dictionary<string, object>>();
+            var reportedNameMatches = new List<UxmlElementInfo>();
+            int remainingNameMatches = maxResults;
+            bool nameMatchesTruncated = false;
             foreach (string name in requestedNames)
             {
                 var matches = elements.Where(element => string.Equals(element.Name, name, StringComparison.OrdinalIgnoreCase))
                     .ToList();
                 bool typeMatches = string.IsNullOrEmpty(typeName) ||
                     matches.Any(element => TypeMatches(element.TypeName, typeName));
+                var returnedMatches = matches.Take(remainingNameMatches).ToList();
+                remainingNameMatches -= returnedMatches.Count;
+                nameMatchesTruncated |= returnedMatches.Count < matches.Count;
+                reportedNameMatches.AddRange(returnedMatches);
                 nameChecks.Add(new Dictionary<string, object>
                 {
                     { "name", name },
                     { "exists", matches.Count > 0 },
                     { "matchCount", matches.Count },
                     { "typeMatches", typeMatches },
-                    { "matches", matches.Take(maxResults).Select(element => BuildUxmlElementDictionary(element, ussClassStyles)).ToList() },
+                    { "reportedMatchCount", returnedMatches.Count },
+                    { "matchesTruncated", returnedMatches.Count < matches.Count },
+                    { "matches", returnedMatches.Select(element => BuildUxmlElementDictionary(element, ussClassStyles)).ToList() },
                 });
             }
+
+            var relevantClassNames = new HashSet<string>(reportedElements.Concat(reportedNameMatches)
+                .SelectMany(element => element.Classes)
+                .Where(name => string.IsNullOrEmpty(name) == false), StringComparer.OrdinalIgnoreCase);
+            var returnedUssClasses = includeUss == false
+                ? new Dictionary<string, object>()
+                : ussClassStyles
+                    .Where(pair => includeAllUssClasses || relevantClassNames.Contains(pair.Key))
+                    .ToDictionary(pair => pair.Key, pair => (object)pair.Value.ToDictionary(),
+                        StringComparer.OrdinalIgnoreCase);
+            bool outputTruncated = includeElements && matchingElements.Count > reportedElements.Count ||
+                                   nameMatchesTruncated;
 
             return new Dictionary<string, object>
             {
@@ -521,8 +554,12 @@ namespace UnityMCP.Editor
                         Convert.ToBoolean(check["exists"]) && Convert.ToBoolean(check["typeMatches"]))) },
                 { "nameChecks", nameChecks },
                 { "matchedCount", filteredElements.Count },
+                { "totalMatchedCount", matchingElements.Count },
+                { "outputTruncated", outputTruncated },
+                { "includeElements", includeElements },
+                { "includeAllUssClasses", includeAllUssClasses },
                 { "elements", filteredElements },
-                { "ussClasses", ussClassStyles.ToDictionary(pair => pair.Key, pair => pair.Value.ToDictionary()) },
+                { "ussClasses", returnedUssClasses },
             };
         }
 
@@ -1233,8 +1270,11 @@ namespace UnityMCP.Editor
                 return;
             }
 
+            var previousFocus = EditorWindow.focusedWindow;
             bool opened = AssetDatabase.OpenAsset(asset);
             int waitFrames = Math.Max(1, GetInt(args, "waitFrames", 8));
+            int stableFrames = Math.Max(1, GetInt(args, "stableFrames", 2));
+            int timeoutMs = Math.Max(1000, GetInt(args, "timeoutMs", 10000));
             bool capture = GetBool(args, "capture", true);
             string screenshotPath = GetString(args, "screenshotPath");
             if (string.IsNullOrEmpty(screenshotPath))
@@ -1244,24 +1284,72 @@ namespace UnityMCP.Editor
             }
 
             int frame = 0;
+            int readyFrameCount = 0;
+            double startedAt = EditorApplication.timeSinceStartup;
+            bool resolved = false;
+
+            void Finish(Dictionary<string, object> result)
+            {
+                if (resolved)
+                    return;
+
+                resolved = true;
+                EditorApplication.update -= Tick;
+                if (previousFocus != null && previousFocus != FindUIBuilderWindow())
+                {
+                    try
+                    {
+                        previousFocus.Focus();
+                    }
+                    catch
+                    {
+                    }
+                }
+
+                resolve(result);
+            }
+
             void Tick()
             {
                 frame++;
-                if (frame < waitFrames)
-                    return;
-
-                EditorApplication.update -= Tick;
                 int repainted = MarkAllUIToolkitDirty();
                 var window = FindUIBuilderWindow();
+                if (window != null)
+                {
+                    window.Focus();
+                    window.rootVisualElement?.MarkDirtyRepaint();
+                    window.Repaint();
+                }
+
+                var previewState = InspectUIBuilderPreviewState(window, uxmlPath);
+                bool editorIdle = EditorApplication.isCompiling == false && EditorApplication.isUpdating == false;
+                if (frame >= waitFrames && editorIdle && previewState.Ready)
+                    readyFrameCount++;
+                else
+                    readyFrameCount = 0;
+
+                double elapsedMs = (EditorApplication.timeSinceStartup - startedAt) * 1000d;
+                bool timedOut = elapsedMs >= timeoutMs;
+                if (readyFrameCount < stableFrames && timedOut == false)
+                {
+                    EditorApplication.QueuePlayerLoopUpdate();
+                    return;
+                }
+
                 var result = new Dictionary<string, object>
                 {
-                    { "success", true },
+                    { "success", readyFrameCount >= stableFrames },
                     { "uxmlPath", uxmlPath },
                     { "opened", opened },
                     { "waitFrames", waitFrames },
+                    { "stableFrames", stableFrames },
+                    { "readyFrameCount", readyFrameCount },
+                    { "elapsedMs", Math.Round(elapsedMs, 2) },
+                    { "timedOut", timedOut },
                     { "repaintedRuntimeDocuments", repainted },
                     { "windowFound", window != null },
                     { "window", window == null ? null : BuildWindowInfo(window) },
+                    { "preview", previewState.ToDictionary() },
                 };
 
                 if (args.ContainsKey("zoom"))
@@ -1273,15 +1361,38 @@ namespace UnityMCP.Editor
 
                 if (capture)
                 {
-                    result["screenshot"] = MCPScreenshotCommands.CaptureEditorWindow(new Dictionary<string, object>
+                    var screenshot = MCPScreenshotCommands.CaptureEditorWindow(new Dictionary<string, object>
                     {
                         { "window", "UI Builder" },
                         { "path", screenshotPath },
                         { "maxDimension", GetInt(args, "maxDimension", 8192) },
                     });
+                    result["screenshot"] = screenshot;
+
+                    var screenshotResult = screenshot as Dictionary<string, object>;
+                    bool screenshotSucceeded = screenshotResult != null &&
+                                               GetBool(screenshotResult, "success", false);
+                    bool centerVisuallyBlank = screenshotResult != null &&
+                                               GetBool(screenshotResult, "centerVisuallyBlank", false);
+                    bool visualValid = screenshotSucceeded && centerVisuallyBlank == false;
+                    result["visualValid"] = visualValid;
+                    if (visualValid == false)
+                    {
+                        result["success"] = false;
+                        result["error"] = screenshotSucceeded
+                            ? "UI Builder screenshot center is visually blank; preview evidence is invalid."
+                            : "UI Builder screenshot capture failed.";
+                    }
                 }
 
-                resolve(result);
+                if (readyFrameCount < stableFrames && result.ContainsKey("error") == false)
+                {
+                    result["error"] = previewState.Error.Length > 0
+                        ? previewState.Error
+                        : "UI Builder did not load the requested UXML before timeout.";
+                }
+
+                Finish(result);
             }
 
             EditorApplication.update += Tick;
@@ -2130,6 +2241,110 @@ namespace UnityMCP.Editor
             }
 
             return null;
+        }
+
+        private sealed class UIBuilderPreviewState
+        {
+            public bool Ready;
+            public bool DocumentPathMatches;
+            public string ActiveUxmlPath = "";
+            public int DocumentRootChildCount = -1;
+            public int CanvasChildCount = -1;
+            public float DocumentRootWidth;
+            public float DocumentRootHeight;
+            public float CanvasWidth;
+            public float CanvasHeight;
+            public string Error = "";
+
+            public Dictionary<string, object> ToDictionary()
+            {
+                return new Dictionary<string, object>
+                {
+                    { "ready", Ready },
+                    { "documentPathMatches", DocumentPathMatches },
+                    { "activeUxmlPath", ActiveUxmlPath },
+                    { "documentRootChildCount", DocumentRootChildCount },
+                    { "canvasChildCount", CanvasChildCount },
+                    { "documentRootSize", new Dictionary<string, object>
+                        {
+                            { "width", DocumentRootWidth },
+                            { "height", DocumentRootHeight },
+                        }
+                    },
+                    { "canvasSize", new Dictionary<string, object>
+                        {
+                            { "width", CanvasWidth },
+                            { "height", CanvasHeight },
+                        }
+                    },
+                    { "error", Error },
+                };
+            }
+        }
+
+        private static UIBuilderPreviewState InspectUIBuilderPreviewState(EditorWindow window,
+            string expectedUxmlPath)
+        {
+            var state = new UIBuilderPreviewState();
+            if (window == null)
+            {
+                state.Error = "UI Builder window was not found.";
+                return state;
+            }
+
+            try
+            {
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var windowType = window.GetType();
+                var document = windowType.GetProperty("document", flags)?.GetValue(window);
+                if (document == null)
+                {
+                    state.Error = "UI Builder document is not initialized.";
+                    return state;
+                }
+
+                var documentType = document.GetType();
+                state.ActiveUxmlPath = documentType.GetProperty("uxmlPath", flags)?.GetValue(document)?.ToString() ?? "";
+                state.DocumentPathMatches = string.Equals(NormalizeAssetPath(state.ActiveUxmlPath, ""),
+                    NormalizeAssetPath(expectedUxmlPath, ""), StringComparison.OrdinalIgnoreCase);
+
+                var documentRoot = windowType.GetProperty("documentRootElement", flags)?.GetValue(window)
+                    as UnityEngine.UIElements.VisualElement;
+                var canvas = windowType.GetProperty("canvas", flags)?.GetValue(window)
+                    as UnityEngine.UIElements.VisualElement;
+
+                state.DocumentRootChildCount = documentRoot?.childCount ?? -1;
+                state.CanvasChildCount = canvas?.childCount ?? -1;
+                if (documentRoot != null)
+                {
+                    state.DocumentRootWidth = documentRoot.layout.width;
+                    state.DocumentRootHeight = documentRoot.layout.height;
+                }
+
+                if (canvas != null)
+                {
+                    state.CanvasWidth = canvas.layout.width;
+                    state.CanvasHeight = canvas.layout.height;
+                }
+
+                state.Ready = state.DocumentPathMatches && state.DocumentRootChildCount > 0 &&
+                              state.CanvasChildCount > 0 && IsPositiveFinite(state.DocumentRootWidth) &&
+                              IsPositiveFinite(state.DocumentRootHeight) && IsPositiveFinite(state.CanvasWidth) &&
+                              IsPositiveFinite(state.CanvasHeight);
+                if (state.Ready == false)
+                    state.Error = "UI Builder document or canvas is not ready.";
+            }
+            catch (Exception ex)
+            {
+                state.Error = ex.Message;
+            }
+
+            return state;
+        }
+
+        private static bool IsPositiveFinite(float value)
+        {
+            return float.IsNaN(value) == false && float.IsInfinity(value) == false && value > 0;
         }
 
         private static bool MatchesWindow(EditorWindow window, string windowQuery, string typeQuery, string titleQuery, bool exact)

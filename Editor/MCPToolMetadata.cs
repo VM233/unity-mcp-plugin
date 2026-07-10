@@ -122,7 +122,8 @@ namespace UnityMCP.Editor
                 "wait/editor-idle",
                 "testing/list-tests",
                 "uitoolkit/wait-refresh",
-                "uitoolkit/builder-preview");
+                "uitoolkit/builder-preview",
+                "screenshot/game");
 
             AddProfile(profiles, ToolProfile.FirstClass(longRunning: true),
                 "testing/run-tests");
@@ -481,7 +482,11 @@ namespace UnityMCP.Editor
                     { "additionalProperties", true }
                 };
 
-            string toolName = ProjectToolNameToToolName(projectToolName);
+            var shortName = projectTool.TryGetValue("shortName", out var shortNameValue)
+                ? shortNameValue?.ToString()
+                : "";
+            string toolName = ProjectToolNameToToolName(projectToolName, shortName);
+            string legacyToolName = "unity_project_tool_" + NormalizeProjectToolName(projectToolName);
             bool explicitMutatesAssets = GetBool(projectTool, "mutatesAssets", false);
             bool readOnly = GetBool(projectTool, "readOnly", false) ||
                             (!explicitMutatesAssets && InferProjectToolReadOnly(projectToolName));
@@ -513,6 +518,7 @@ namespace UnityMCP.Editor
                 { "description", string.IsNullOrEmpty(description) ? $"Project MCP tool: {projectToolName}" : description },
                 { "inputSchema", inputSchema },
                 { "projectToolName", projectToolName },
+                { "legacyToolName", legacyToolName },
                 { "firstClass", isFirstClass },
                 { "exposure", profile.Exposure },
                 { "preferred", profile.Preferred },
@@ -637,16 +643,65 @@ namespace UnityMCP.Editor
             return "unity_" + route.Replace("/", "_").Replace("-", "_");
         }
 
-        private static string ProjectToolNameToToolName(string projectToolName)
+        internal static string ProjectToolNameToToolName(string projectToolName, string shortName = "")
         {
-            var normalized = Regex.Replace(projectToolName ?? "", "[^A-Za-z0-9]+", "_")
-                .Trim('_')
-                .ToLowerInvariant();
+            var normalized = NormalizeProjectToolName(string.IsNullOrEmpty(shortName) ? projectToolName : shortName);
 
             if (string.IsNullOrEmpty(normalized))
                 normalized = "tool";
 
-            return "unity_project_tool_" + normalized;
+            var tokens = normalized.Split(new[] { '_' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(CompactProjectToolToken)
+                .ToArray();
+            string compact = "unity_pt_" + string.Join("_", tokens);
+            const int maxLength = 48;
+            if (compact.Length <= maxLength)
+                return compact;
+
+            string hash = ComputeStableNameHash(normalized);
+            int prefixLength = maxLength - hash.Length - 1;
+            return compact.Substring(0, prefixLength).TrimEnd('_') + "_" + hash;
+        }
+
+        private static string NormalizeProjectToolName(string projectToolName)
+        {
+            return Regex.Replace(projectToolName ?? "", "[^A-Za-z0-9]+", "_")
+                .Trim('_')
+                .ToLowerInvariant();
+        }
+
+        private static string CompactProjectToolToken(string token)
+        {
+            switch (token)
+            {
+                case "vmframework": return "vmf";
+                case "battleidle": return "battle";
+                case "visual": return "ui";
+                case "element": return "el";
+                case "elements": return "els";
+                case "property": return "prop";
+                case "properties": return "props";
+                case "configuration": return "config";
+                case "configurations": return "configs";
+                case "wrapper": return "wrap";
+                case "wrappers": return "wraps";
+                default: return token;
+            }
+        }
+
+        private static string ComputeStableNameHash(string value)
+        {
+            unchecked
+            {
+                uint hash = 2166136261;
+                foreach (char character in value)
+                {
+                    hash ^= character;
+                    hash *= 16777619;
+                }
+
+                return hash.ToString("x8");
+            }
         }
 
         private static string GetToolDescription(string route)
@@ -807,6 +862,8 @@ namespace UnityMCP.Editor
                     return "Assert UI Toolkit runtime layout constraints such as edge touching, containment, and size.";
                 case "uitoolkit/builder-preview":
                     return "Open a UXML asset in UI Builder, wait for the preview to settle, and optionally capture the UI Builder window.";
+                case "screenshot/game":
+                    return "Capture the Game View and return only after the PNG is fully written and decodable.";
                 case "screenshot/crop":
                     return "Crop an existing screenshot or image file to a PNG.";
                 case "gameview/info":
@@ -948,6 +1005,7 @@ namespace UnityMCP.Editor
                 case "editor/execute-code":
                     return Schema(Props(
                         Prop("code", "string", "C# method body to execute. Return a value to serialize it."),
+                        Prop("usings", "array", "Additional namespace imports. UnityEngine.UIElements is included by default."),
                         Prop("maxResultItems", "number", "Maximum serialized collection/object entries across the result. Defaults to 200; capped at 2000."),
                         Prop("maxResultDepth", "number", "Maximum serialized result depth. Defaults to 8; capped at 16."),
                         Prop("maxResultStringLength", "number", "Maximum characters per returned string. Defaults to 20000; capped at 200000.")
@@ -1367,8 +1425,10 @@ namespace UnityMCP.Editor
                         Prop("names", "array", "VisualElement.name values to validate."),
                         Prop("className", "string", "USS class exact match."),
                         Prop("typeName", "string", "Expected or filtered VisualElement type name."),
-                        Prop("maxResults", "number", "Maximum returned elements per query. Defaults to 100."),
-                        Prop("includeUss", "boolean", "Parse USS files and attach default size declarations. Defaults to true.")
+                        Prop("maxResults", "number", "Total result budget for elements and name matches. Defaults to 100."),
+                        Prop("includeUss", "boolean", "Parse USS files and attach default size declarations. Defaults to true."),
+                        Prop("includeElements", "boolean", "Return the general elements collection. Defaults to false for names queries and true otherwise."),
+                        Prop("includeAllUssClasses", "boolean", "Return every parsed USS class. Targeted queries default to only classes used by returned elements.")
                     ));
                 case "uitoolkit/runtime-documents":
                     return Schema(Props(
@@ -1528,6 +1588,8 @@ namespace UnityMCP.Editor
                         Prop("assetPath", "string", "Alias for uxmlPath."),
                         Prop("path", "string", "Alias for uxmlPath."),
                         Prop("waitFrames", "number", "Editor frames to wait before capturing. Defaults to 8."),
+                        Prop("stableFrames", "number", "Consecutive ready UI Builder frames required. Defaults to 2."),
+                        Prop("timeoutMs", "number", "Maximum time to wait for the requested document and canvas. Defaults to 10000."),
                         Prop("capture", "boolean", "Capture the UI Builder window after opening. Defaults to true."),
                         Prop("screenshotPath", "string", "PNG path for the UI Builder screenshot."),
                         Prop("maxDimension", "number", "Maximum screenshot dimension. Defaults to 8192."),
@@ -1537,6 +1599,14 @@ namespace UnityMCP.Editor
                     return RuntimeUIDocumentSchema(Props(
                         Prop("assertions", "array", "Layout assertions. Supported types: edge-touch, same-edge, same-center, inside, size.")
                     ), "assertions");
+                case "screenshot/game":
+                    return Schema(Props(
+                        Prop("path", "string", "Output PNG path. Defaults under Assets/Screenshots."),
+                        Prop("superSize", "number", "Resolution multiplier. Defaults to 1."),
+                        Prop("waitFrames", "number", "Frames to wait before requesting the capture. Defaults to 2."),
+                        Prop("stableFrames", "number", "Consecutive stable file-size frames required. Defaults to 2."),
+                        Prop("timeoutMs", "number", "Maximum time to wait for a complete decodable PNG. Defaults to 10000.")
+                    ));
                 case "screenshot/crop":
                     return Schema(Props(
                         Prop("sourcePath", "string", "Image path to crop. Aliases: imagePath, path."),

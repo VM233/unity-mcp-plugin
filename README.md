@@ -132,7 +132,7 @@ Project tools are exposed in metadata as first-class concrete routes and tool na
 ```json
 {
   "route": "project-tools/call/battleidle/add-property",
-  "toolName": "unity_project_tool_battleidle_add_property",
+  "toolName": "unity_pt_battle_add_prop",
   "inputSchema": {
     "type": "object",
     "properties": {

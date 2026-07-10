@@ -52,6 +52,7 @@ namespace UnityMCP.Editor
             { "wait/editor-idle", (args, resolve, _) => MCPEditorCommands.WaitForIdle(args, resolve) },
             { "uitoolkit/wait-refresh", (args, resolve, _) => MCPUICommands.WaitForUIToolkitRefresh(args, resolve) },
             { "uitoolkit/builder-preview", (args, resolve, _) => MCPUICommands.OpenUIBuilderPreview(args, resolve) },
+            { "screenshot/game", (args, resolve, _) => MCPScreenshotCommands.CaptureGameView(args, resolve) },
             { "build/run-test", (args, resolve, _) => MCPBuildCommands.BuildAndRunTestDeferred(args, resolve) },
             { "packages/update-git", (args, resolve, _) => MCPPackageManagerCommands.UpdateGitPackageDeferred(args, resolve) },
             { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },

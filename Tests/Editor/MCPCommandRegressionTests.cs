@@ -1,10 +1,15 @@
+using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.TestTools;
+using UnityEngine.UIElements;
 
 namespace UnityMCP.Editor.Tests
 {
@@ -23,6 +28,13 @@ namespace UnityMCP.Editor.Tests
         [TearDown]
         public void TearDown()
         {
+            var builderType = Type.GetType("Unity.UI.Builder.Builder, UnityEditor.UIBuilderModule", false);
+            if (builderType != null)
+            {
+                foreach (var window in Resources.FindObjectsOfTypeAll(builderType).OfType<EditorWindow>())
+                    window.Close();
+            }
+
             AssetDatabase.DeleteAsset(TEST_FOLDER);
         }
 
@@ -194,6 +206,144 @@ namespace UnityMCP.Editor.Tests
             Assert.That(System.Convert.ToInt32(response["count"]), Is.EqualTo(10));
             var result = (List<object>)response["result"];
             CollectionAssert.AreEqual(new object[] { 0, 1, "<truncated>" }, result);
+        }
+
+        [Test]
+        public void ExecuteCode_UIElementsUsingAndUserLineNumbersAreAvailable()
+        {
+            var success = RequireDictionary(MCPEditorCommands.ExecuteCode(new Dictionary<string, object>
+            {
+                { "code", "return new Button { name = \"Ready\" }.name;" },
+            }));
+            Assert.That(success["success"], Is.EqualTo(true));
+            Assert.That(success["result"], Is.EqualTo("Ready"));
+
+            var failure = RequireDictionary(MCPEditorCommands.ExecuteCode(new Dictionary<string, object>
+            {
+                { "code", "var value = 1;\nreturn MissingSymbol;" },
+            }));
+            Assert.That(failure["error"], Is.EqualTo("Compilation failed"));
+            var errors = (List<string>)failure["errors"];
+            Assert.That(errors.Any(error => error.StartsWith("Line 2:", StringComparison.Ordinal)), Is.True);
+        }
+
+        [Test]
+        public void ExecuteCode_UsesUnloadableAssemblyIsolation()
+        {
+            var response = RequireDictionary(MCPEditorCommands.ExecuteCode(new Dictionary<string, object>
+            {
+                { "code", "return 7;" },
+            }));
+            Assert.That(response["success"], Is.EqualTo(true));
+            Assert.That(response["assemblyIsolation"],
+                Is.EqualTo("app-domain").Or.EqualTo("collectible-load-context"));
+        }
+
+        [Test]
+        public void UIToolkitAssetInspect_NamesQueryIsCompactAndRelevant()
+        {
+            const string uxmlPath = TEST_FOLDER + "/Compact Inspect.uxml";
+            const string ussPath = TEST_FOLDER + "/Compact Inspect.uss";
+            File.WriteAllText(GetAbsolutePath(uxmlPath),
+                "<ui:UXML xmlns:ui=\"UnityEngine.UIElements\"><ui:VisualElement name=\"Target\" class=\"target-class\"/><ui:VisualElement name=\"Unrelated\" class=\"unrelated-class\"/></ui:UXML>");
+            File.WriteAllText(GetAbsolutePath(ussPath),
+                ".target-class { width: 10px; }\n.unrelated-class { width: 20px; }\n");
+            AssetDatabase.ImportAsset(uxmlPath, ImportAssetOptions.ForceSynchronousImport);
+            AssetDatabase.ImportAsset(ussPath, ImportAssetOptions.ForceSynchronousImport);
+
+            var result = RequireDictionary(MCPUICommands.InspectUIToolkitAsset(new Dictionary<string, object>
+            {
+                { "uxmlPath", uxmlPath },
+                { "ussPath", ussPath },
+                { "names", new[] { "Target" } },
+                { "maxResults", 5 },
+                { "includeUss", true },
+            }));
+
+            Assert.That(result["valid"], Is.EqualTo(true));
+            Assert.That(result["includeElements"], Is.EqualTo(false));
+            Assert.That(((List<Dictionary<string, object>>)result["elements"]), Is.Empty);
+            var nameChecks = (List<Dictionary<string, object>>)result["nameChecks"];
+            Assert.That(nameChecks, Has.Count.EqualTo(1));
+            Assert.That(nameChecks[0]["reportedMatchCount"], Is.EqualTo(1));
+            var ussClasses = (Dictionary<string, object>)result["ussClasses"];
+            Assert.That(ussClasses.ContainsKey("target-class"), Is.True);
+            Assert.That(ussClasses.ContainsKey("unrelated-class"), Is.False);
+            Assert.That(result["outputTruncated"], Is.EqualTo(false));
+        }
+
+        [UnityTest]
+        public IEnumerator UIBuilderPreview_WaitsForRequestedDocumentAndCanvas()
+        {
+            const string uxmlPath = TEST_FOLDER + "/Builder Preview.uxml";
+            File.WriteAllText(GetAbsolutePath(uxmlPath),
+                "<ui:UXML xmlns:ui=\"UnityEngine.UIElements\"><ui:VisualElement name=\"PreviewTarget\" style=\"width: 120px; height: 80px;\"/></ui:UXML>");
+            AssetDatabase.ImportAsset(uxmlPath, ImportAssetOptions.ForceSynchronousImport);
+
+            object response = null;
+            MCPUICommands.OpenUIBuilderPreview(new Dictionary<string, object>
+            {
+                { "uxmlPath", uxmlPath },
+                { "waitFrames", 1 },
+                { "stableFrames", 1 },
+                { "timeoutMs", 10000 },
+                { "capture", false },
+            }, value => response = value);
+
+            double timeoutAt = EditorApplication.timeSinceStartup + 12;
+            while (response == null && EditorApplication.timeSinceStartup < timeoutAt)
+                yield return null;
+
+            Assert.That(response, Is.Not.Null);
+            var result = RequireDictionary(response);
+            Assert.That(result["success"], Is.EqualTo(true));
+            var preview = RequireDictionary(result["preview"]);
+            Assert.That(preview["ready"], Is.EqualTo(true));
+            Assert.That(preview["documentPathMatches"], Is.EqualTo(true));
+            Assert.That(preview["activeUxmlPath"], Is.EqualTo(uxmlPath));
+        }
+
+        [UnityTest]
+        public IEnumerator GameViewScreenshot_ReturnsOnlyAfterPngIsReady()
+        {
+            const string screenshotPath = TEST_FOLDER + "/Game View.png";
+            object response = null;
+            MCPScreenshotCommands.CaptureGameView(new Dictionary<string, object>
+            {
+                { "path", screenshotPath },
+                { "waitFrames", 1 },
+                { "stableFrames", 1 },
+                { "timeoutMs", 10000 },
+            }, value => response = value);
+
+            double timeoutAt = EditorApplication.timeSinceStartup + 12;
+            while (response == null && EditorApplication.timeSinceStartup < timeoutAt)
+                yield return null;
+
+            Assert.That(response, Is.Not.Null);
+            var result = RequireDictionary(response);
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(result["fileReady"], Is.EqualTo(true));
+            Assert.That(Convert.ToInt32(result["width"]), Is.GreaterThan(0));
+            Assert.That(Convert.ToInt32(result["height"]), Is.GreaterThan(0));
+            Assert.That(File.Exists(GetAbsolutePath(screenshotPath)), Is.True);
+        }
+
+        [Test]
+        public void ProjectToolNamesStayReadableAndBelowClientLimit()
+        {
+            var method = typeof(MCPToolMetadata).GetMethod("ProjectToolNameToToolName",
+                BindingFlags.Static | BindingFlags.NonPublic | BindingFlags.Public);
+            Assert.That(method, Is.Not.Null);
+
+            string runtimeName = method.Invoke(null,
+                new object[] { "battleidle/get-runtime-ready-state", "" }).ToString();
+            string validationName = method.Invoke(null,
+                new object[] { "vmframework/validate-visual-element-paths", "" }).ToString();
+            Assert.That(runtimeName, Is.EqualTo("unity_pt_battle_get_runtime_ready_state"));
+            Assert.That(validationName, Is.EqualTo("unity_pt_vmf_validate_ui_el_paths"));
+            Assert.That(runtimeName.Length, Is.LessThanOrEqualTo(48));
+            Assert.That(validationName.Length, Is.LessThanOrEqualTo(48));
         }
 
         [Test]

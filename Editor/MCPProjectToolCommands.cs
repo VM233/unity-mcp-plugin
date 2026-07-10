@@ -13,6 +13,8 @@ namespace UnityMCP.Editor
 
         public string Description { get; set; }
 
+        public string ShortName { get; set; }
+
         public string InputSchemaJson { get; set; }
 
         public bool ReadOnly { get; set; }
@@ -273,6 +275,7 @@ namespace UnityMCP.Editor
         {
             public string ToolName;
             public string Description;
+            public string ShortName;
             public string Source;
             public string ValidationError;
             public Dictionary<string, object> InputSchema;
@@ -291,6 +294,7 @@ namespace UnityMCP.Editor
                 var descriptor = new ProjectToolDescriptor
                 {
                     ToolName = attribute.ToolName,
+                    ShortName = attribute.ShortName ?? "",
                     Description = attribute.Description ?? "",
                     Source = method.DeclaringType.FullName + "." + method.Name,
                     ReadOnly = attribute.ReadOnly,
@@ -313,6 +317,7 @@ namespace UnityMCP.Editor
                 var descriptor = new ProjectToolDescriptor
                 {
                     ToolName = attribute.ToolName,
+                    ShortName = attribute.ShortName ?? "",
                     Description = attribute.Description ?? "",
                     Source = type.FullName,
                     ReadOnly = attribute.ReadOnly,
@@ -352,6 +357,7 @@ namespace UnityMCP.Editor
                 return new Dictionary<string, object>
                 {
                     { "toolName", ToolName },
+                    { "shortName", ShortName },
                     { "description", Description },
                     { "source", Source },
                     { "route", GetDirectRoute(ToolName) },
