@@ -160,6 +160,7 @@ namespace UnityMCP.Editor
                 "localization/create-locale",
                 "localization/create-collection",
                 "localization/upsert-entry",
+                "localization/upsert-entries",
                 "localization/remove-entry",
                 "localization/settings",
                 "localization/upsert-variable",
@@ -948,6 +949,8 @@ namespace UnityMCP.Editor
                     return "Read paginated String or Asset Table entries across Locale tables.";
                 case "localization/upsert-entry":
                     return "Create or update a localized String, Smart String, or Asset Table entry.";
+                case "localization/upsert-entries":
+                    return "Batch create or update localized String or Smart String entries across multiple Locales with one save.";
                 case "localization/remove-entry":
                     return "Remove a localization entry from one Locale table or the entire collection.";
                 case "localization/validate":
@@ -1035,6 +1038,8 @@ namespace UnityMCP.Editor
                         Prop("subAssetName", "string", "Optional exact sub-asset name at assetPath."),
                         Prop("createTable", "boolean", "Create a missing Locale table. Defaults to true.")
                     ), "collection", "locale", "key");
+                case "localization/upsert-entries":
+                    return LocalizationUpsertEntriesSchema();
                 case "localization/remove-entry":
                     return Schema(Props(
                         Prop("collection", "string", "Table Collection name or GUID."),
@@ -2026,6 +2031,33 @@ namespace UnityMCP.Editor
             };
 
             return Schema(properties, "moves");
+        }
+
+        private static Dictionary<string, object> LocalizationUpsertEntriesSchema()
+        {
+            var translationSchema = new Dictionary<string, object>
+            {
+                { "type", "object" },
+                { "description", "Localized values keyed by registered Locale code, for example en-US or zh-CN." },
+                { "additionalProperties", new Dictionary<string, object> { { "type", "string" } } },
+            };
+            var entryProperties = Props(
+                Prop("key", "string", "Shared localization key."),
+                Prop("smart", "boolean", "Optional Smart String flag applied to every supplied translation."));
+            entryProperties["translations"] = translationSchema;
+
+            var properties = Props(
+                Prop("collection", "string", "String Table Collection name or GUID."),
+                Prop("type", "string", "Collection type. Only string is supported; defaults to string."),
+                Prop("createTables", "boolean", "Create missing Locale tables. Defaults to true."));
+            properties["entries"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "Up to 500 unique localization keys. The entire batch is validated before changes are made." },
+                { "items", Schema(entryProperties, "key", "translations") },
+            };
+
+            return Schema(properties, "collection", "entries");
         }
 
         private static Dictionary<string, object> EditorWindowSchema(Dictionary<string, object> extraProps)

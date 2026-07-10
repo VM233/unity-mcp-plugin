@@ -42,6 +42,7 @@ http://127.0.0.1:7890/api/ping
 | Testing | `unity_testing_get_job` | `testing/get-job` | Poll test progress and detailed results. |
 | Package testing | `unity_testing_run_package_tests` | `testing/run-package-tests` | Temporarily enable Git package tests, run them across domain reloads, and restore the package manifest exactly. |
 | Package testing | `unity_testing_get_package_job` | `testing/get-package-job` | Poll the persistent package test workflow and its final test result. |
+| Localization | `unity_localization_upsert_entries` | `localization/upsert-entries` | Prevalidate and upsert multiple String/Smart String keys and Locale translations with one asset save. |
 | Multi-editor safety | `unity_instance_current` | `instance/current` | Return the current Editor MCP instance identity, including project path and port. |
 | Multi-editor safety | `unity_instance_list` | `instance/list` | List registered Editor MCP instances across open Unity projects. |
 | Multi-editor safety | `unity_instance_resolve` | `instance/resolve` | Resolve exactly one Editor MCP instance by project path, project name, or port. |

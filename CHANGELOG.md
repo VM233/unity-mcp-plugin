@@ -4,6 +4,8 @@ All notable changes to this package will be documented in this file.
 
 ## Unreleased
 
+- Added `unity_localization_upsert_entries` for prevalidated batch String/Smart String entry updates across multiple Locales with one asset save.
+
 ### Added
 - **Optional Unity Localization tools** - When `com.unity.localization` is installed, first-class tools expose Locale management, String/Asset Table Collections, localized entry CRUD, Smart String flags and persistent variables, validation, and Localization Settings. The integration assembly and tool metadata stay hidden when the package is absent.
 - **Completed visual capture results** - `screenshot/game` now waits for a stable, decodable PNG and reports dimensions, byte size, elapsed time, and readiness instead of returning before the next frame writes the file.

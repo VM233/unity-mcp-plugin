@@ -40,6 +40,8 @@ namespace UnityMCP.Editor.Localization
                         return ListEntries(args);
                     case "localization/upsert-entry":
                         return UpsertEntry(args);
+                    case "localization/upsert-entries":
+                        return UpsertEntries(args);
                     case "localization/remove-entry":
                         return RemoveEntry(args);
                     case "localization/validate":
@@ -328,6 +330,170 @@ namespace UnityMCP.Editor.Localization
                 { "locale", locale.Identifier.Code },
                 { "key", key },
                 { "keyId", sharedEntry?.Id ?? 0 },
+            };
+        }
+
+        private static object UpsertEntries(Dictionary<string, object> args)
+        {
+            string type = NormalizeCollectionType(GetString(args, "type"));
+            if (type == null)
+                return Error("type must be string");
+            if (type != "string")
+                return Error("Batch upsert currently supports String Table Collections only");
+
+            string collectionName = GetString(args, "collection");
+            var collection = GetCollection(collectionName, type) as StringTableCollection;
+            if (collection == null)
+                return Error($"string Table Collection '{collectionName}' was not found");
+
+            if (args == null || !args.TryGetValue("entries", out object rawEntries) ||
+                rawEntries == null || rawEntries is string || !(rawEntries is IEnumerable entries))
+                return Error("entries must be a non-empty array");
+
+            var entryPlans = new List<LocalizationBatchEntry>();
+            var keys = new HashSet<string>(StringComparer.Ordinal);
+            int entryIndex = 0;
+            foreach (object rawEntry in entries)
+            {
+                if (entryPlans.Count >= 500)
+                    return Error("entries is capped at 500 items");
+
+                var entryArgs = AsDictionary(rawEntry);
+                if (entryArgs == null)
+                    return Error($"entries[{entryIndex}] must be an object");
+
+                string key = GetString(entryArgs, "key");
+                if (string.IsNullOrWhiteSpace(key))
+                    return Error($"entries[{entryIndex}].key is required");
+                if (!keys.Add(key))
+                    return Error($"Duplicate key '{key}' in entries");
+
+                if (!entryArgs.TryGetValue("translations", out object rawTranslations))
+                    return Error($"entries[{entryIndex}].translations must be a non-empty object");
+                var translations = AsDictionary(rawTranslations);
+                if (translations == null || translations.Count == 0)
+                    return Error($"entries[{entryIndex}].translations must be a non-empty object");
+
+                var translationPlans = new List<LocalizationBatchTranslation>();
+                var localeCodes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var translation in translations)
+                {
+                    var locale = FindLocale(translation.Key, out string localeError);
+                    if (locale == null)
+                        return Error($"entries[{entryIndex}]: {localeError}");
+                    string localeCode = locale.Identifier.Code;
+                    if (!localeCodes.Add(localeCode))
+                        return Error($"entries[{entryIndex}] contains duplicate Locale '{localeCode}'");
+                    if (!(translation.Value is string value))
+                        return Error($"entries[{entryIndex}].translations['{translation.Key}'] must be a string");
+
+                    translationPlans.Add(new LocalizationBatchTranslation(locale, value));
+                }
+
+                entryPlans.Add(new LocalizationBatchEntry(
+                    key,
+                    entryArgs.ContainsKey("smart"),
+                    GetBool(entryArgs, "smart", false),
+                    translationPlans));
+                entryIndex++;
+            }
+
+            if (entryPlans.Count == 0)
+                return Error("entries must be a non-empty array");
+
+            bool createTables = GetBool(args, "createTables", true);
+            var locales = entryPlans.SelectMany(entry => entry.Translations)
+                .Select(translation => translation.Locale)
+                .GroupBy(locale => locale.Identifier.Code, StringComparer.OrdinalIgnoreCase)
+                .Select(group => group.First())
+                .ToList();
+            foreach (var locale in locales)
+            {
+                if (collection.GetTable(locale.Identifier) == null && !createTables)
+                    return Error($"Collection '{collectionName}' has no table for Locale '{locale.Identifier.Code}'");
+            }
+
+            var tables = new Dictionary<string, StringTable>(StringComparer.OrdinalIgnoreCase);
+            var createdTables = new List<string>();
+            foreach (var locale in locales)
+            {
+                var table = collection.GetTable(locale.Identifier) as StringTable;
+                if (table == null)
+                {
+                    table = collection.AddNewTable(locale.Identifier) as StringTable;
+                    if (table == null)
+                        throw new InvalidOperationException(
+                            $"Failed to create String Table for Locale '{locale.Identifier.Code}'");
+                    createdTables.Add(locale.Identifier.Code);
+                }
+                tables[locale.Identifier.Code] = table;
+            }
+
+            int createdKeyCount = 0;
+            int createdTranslationCount = 0;
+            int updatedTranslationCount = 0;
+            var results = new List<Dictionary<string, object>>();
+            foreach (var entryPlan in entryPlans)
+            {
+                bool createdKey = collection.SharedData.GetEntry(entryPlan.Key) == null;
+                if (createdKey)
+                    createdKeyCount++;
+
+                var translationResults = new List<Dictionary<string, object>>();
+                foreach (var translationPlan in entryPlan.Translations)
+                {
+                    var table = tables[translationPlan.Locale.Identifier.Code];
+                    var entry = table.GetEntry(entryPlan.Key);
+                    bool createdTranslation = entry == null;
+                    if (createdTranslation)
+                    {
+                        entry = table.AddEntry(entryPlan.Key, translationPlan.Value);
+                        createdTranslationCount++;
+                    }
+                    else
+                    {
+                        updatedTranslationCount++;
+                    }
+
+                    entry.Value = translationPlan.Value;
+                    if (entryPlan.HasSmart)
+                        entry.IsSmart = entryPlan.Smart;
+                    EditorUtility.SetDirty(table);
+
+                    translationResults.Add(new Dictionary<string, object>
+                    {
+                        { "locale", translationPlan.Locale.Identifier.Code },
+                        { "created", createdTranslation },
+                    });
+                }
+
+                var sharedEntry = collection.SharedData.GetEntry(entryPlan.Key);
+                results.Add(new Dictionary<string, object>
+                {
+                    { "key", entryPlan.Key },
+                    { "keyId", sharedEntry?.Id ?? 0 },
+                    { "created", createdKey },
+                    { "translations", translationResults },
+                });
+            }
+
+            EditorUtility.SetDirty(collection);
+            EditorUtility.SetDirty(collection.SharedData);
+            AssetDatabase.SaveAssets();
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "collection", collection.TableCollectionName },
+                { "type", type },
+                { "entryCount", entryPlans.Count },
+                { "translationCount", entryPlans.Sum(entry => entry.Translations.Count) },
+                { "createdKeyCount", createdKeyCount },
+                { "createdTranslationCount", createdTranslationCount },
+                { "updatedTranslationCount", updatedTranslationCount },
+                { "createdTableCount", createdTables.Count },
+                { "createdTables", createdTables },
+                { "saved", true },
+                { "entries", results },
             };
         }
 
@@ -966,6 +1132,51 @@ namespace UnityMCP.Editor.Localization
                     result.Add(item.ToString());
             }
             return result;
+        }
+
+        private static Dictionary<string, object> AsDictionary(object value)
+        {
+            if (value is Dictionary<string, object> dictionary)
+                return dictionary;
+            if (!(value is IDictionary rawDictionary))
+                return null;
+
+            var result = new Dictionary<string, object>();
+            foreach (DictionaryEntry entry in rawDictionary)
+            {
+                if (entry.Key != null)
+                    result[entry.Key.ToString()] = entry.Value;
+            }
+            return result;
+        }
+
+        private sealed class LocalizationBatchEntry
+        {
+            public LocalizationBatchEntry(string key, bool hasSmart, bool smart,
+                List<LocalizationBatchTranslation> translations)
+            {
+                Key = key;
+                HasSmart = hasSmart;
+                Smart = smart;
+                Translations = translations;
+            }
+
+            public string Key { get; }
+            public bool HasSmart { get; }
+            public bool Smart { get; }
+            public List<LocalizationBatchTranslation> Translations { get; }
+        }
+
+        private sealed class LocalizationBatchTranslation
+        {
+            public LocalizationBatchTranslation(Locale locale, string value)
+            {
+                Locale = locale;
+                Value = value;
+            }
+
+            public Locale Locale { get; }
+            public string Value { get; }
         }
 
         private static Dictionary<string, object> Error(string message)

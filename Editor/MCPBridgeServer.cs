@@ -1530,6 +1530,7 @@ namespace UnityMCP.Editor
                 case "localization/create-collection":
                 case "localization/entries":
                 case "localization/upsert-entry":
+                case "localization/upsert-entries":
                 case "localization/remove-entry":
                 case "localization/validate":
                 case "localization/settings":

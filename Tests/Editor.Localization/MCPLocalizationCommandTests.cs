@@ -54,9 +54,121 @@ namespace UnityMCP.Editor.Localization.Tests
                 category: "localization"));
             var tools = (List<Dictionary<string, object>>)result["tools"];
 
-            Assert.That(tools, Has.Count.EqualTo(14));
+            Assert.That(tools, Has.Count.EqualTo(15));
             Assert.That(tools.All(tool => tool["route"].ToString().StartsWith("localization/")), Is.True);
             Assert.That(tools.All(tool => tool.ContainsKey("inputSchema")), Is.True);
+            Assert.That(tools.Any(tool => tool["route"].ToString() == "localization/upsert-entries"), Is.True);
+        }
+
+        [Test]
+        public void BatchStringEntryWorkflow_PrevalidatesThenUpsertsAllTranslations()
+        {
+            CreateLocale(EnglishCode, "English");
+            CreateLocale(ChineseCode, "Chinese");
+
+            var collection = Execute("localization/create-collection", new Dictionary<string, object>
+            {
+                { "name", "MCP Batch Strings" },
+                { "type", "string" },
+                { "assetDirectory", TestFolder + "/Batch Tables" },
+                { "locales", new[] { EnglishCode, ChineseCode } },
+            });
+            Assert.That(collection["success"], Is.EqualTo(true));
+
+            var invalid = Execute("localization/upsert-entries", new Dictionary<string, object>
+            {
+                { "collection", "MCP Batch Strings" },
+                { "entries", new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "key", "Character" },
+                            { "translations", new Dictionary<string, object> { { EnglishCode, "Character" } } },
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "key", "Inventory" },
+                            { "translations", new Dictionary<string, object> { { "x-mcp-missing", "Inventory" } } },
+                        },
+                    }
+                },
+            });
+            Assert.That(invalid["success"], Is.EqualTo(false));
+
+            var afterInvalid = Execute("localization/entries", new Dictionary<string, object>
+            {
+                { "collection", "MCP Batch Strings" },
+            });
+            Assert.That(Convert.ToInt32(afterInvalid["total"]), Is.EqualTo(0));
+
+            var batch = Execute("localization/upsert-entries", new Dictionary<string, object>
+            {
+                { "collection", "MCP Batch Strings" },
+                { "entries", new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "key", "Character" },
+                            { "translations", new Dictionary<string, object>
+                                {
+                                    { EnglishCode, "Character" },
+                                    { ChineseCode, "角色" },
+                                }
+                            },
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "key", "InventoryCount" },
+                            { "smart", true },
+                            { "translations", new Dictionary<string, object>
+                                {
+                                    { EnglishCode, "Inventory: {count}" },
+                                    { ChineseCode, "背包：{count}" },
+                                }
+                            },
+                        },
+                    }
+                },
+            });
+            Assert.That(batch["success"], Is.EqualTo(true));
+            Assert.That(Convert.ToInt32(batch["entryCount"]), Is.EqualTo(2));
+            Assert.That(Convert.ToInt32(batch["translationCount"]), Is.EqualTo(4));
+            Assert.That(Convert.ToInt32(batch["createdKeyCount"]), Is.EqualTo(2));
+            Assert.That(Convert.ToInt32(batch["createdTranslationCount"]), Is.EqualTo(4));
+            Assert.That(batch["saved"], Is.EqualTo(true));
+
+            var updated = Execute("localization/upsert-entries", new Dictionary<string, object>
+            {
+                { "collection", "MCP Batch Strings" },
+                { "entries", new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "key", "Character" },
+                            { "translations", new Dictionary<string, object> { { EnglishCode, "Hero" } } },
+                        },
+                    }
+                },
+            });
+            Assert.That(Convert.ToInt32(updated["createdKeyCount"]), Is.EqualTo(0));
+            Assert.That(Convert.ToInt32(updated["createdTranslationCount"]), Is.EqualTo(0));
+            Assert.That(Convert.ToInt32(updated["updatedTranslationCount"]), Is.EqualTo(1));
+
+            var listed = Execute("localization/entries", new Dictionary<string, object>
+            {
+                { "collection", "MCP Batch Strings" },
+            });
+            Assert.That(Convert.ToInt32(listed["total"]), Is.EqualTo(2));
+            var listedEntries = (List<Dictionary<string, object>>)listed["entries"];
+            var inventory = listedEntries.Single(entry => entry["key"].ToString() == "InventoryCount");
+            var values = (List<Dictionary<string, object>>)inventory["values"];
+            Assert.That(values.Single(value => value["locale"].ToString() == EnglishCode)["value"],
+                Is.EqualTo("Inventory: {count}"));
+            Assert.That(values.All(value => value["smart"].Equals(true)), Is.True);
+            var character = listedEntries.Single(entry => entry["key"].ToString() == "Character");
+            var characterValues = (List<Dictionary<string, object>>)character["values"];
+            Assert.That(characterValues.Single(value => value["locale"].ToString() == EnglishCode)["value"],
+                Is.EqualTo("Hero"));
         }
 
         [Test]
