@@ -7,6 +7,9 @@ using UnityEditor;
 using UnityEditor.AddressableAssets;
 using UnityEditor.Localization;
 using UnityEngine;
+using UnityEngine.Localization.Settings;
+using UnityEngine.Localization.SmartFormat.Extensions;
+using UnityEngine.Localization.SmartFormat.PersistentVariables;
 
 namespace UnityMCP.Editor.Localization.Tests
 {
@@ -15,6 +18,7 @@ namespace UnityMCP.Editor.Localization.Tests
         private const string TestFolder = "Assets/__UnityMCPLocalizationTests";
         private const string EnglishCode = "x-mcp-en";
         private const string ChineseCode = "x-mcp-zh";
+        private const string VariableGroup = "mcp-test";
 
         private readonly Dictionary<string, byte[]> m_AssetSnapshots = new();
 
@@ -22,6 +26,7 @@ namespace UnityMCP.Editor.Localization.Tests
         public void SetUp()
         {
             CleanupLocales();
+            CleanupVariableGroup();
             CleanupAddressables();
             AssetDatabase.DeleteAsset(TestFolder);
             AssetDatabase.SaveAssets();
@@ -33,6 +38,7 @@ namespace UnityMCP.Editor.Localization.Tests
         public void TearDown()
         {
             CleanupLocales();
+            CleanupVariableGroup();
             AssetDatabase.DeleteAsset(TestFolder);
             CleanupAddressables();
             AssetDatabase.SaveAssets();
@@ -48,7 +54,7 @@ namespace UnityMCP.Editor.Localization.Tests
                 category: "localization"));
             var tools = (List<Dictionary<string, object>>)result["tools"];
 
-            Assert.That(tools, Has.Count.EqualTo(11));
+            Assert.That(tools, Has.Count.EqualTo(14));
             Assert.That(tools.All(tool => tool["route"].ToString().StartsWith("localization/")), Is.True);
             Assert.That(tools.All(tool => tool.ContainsKey("inputSchema")), Is.True);
         }
@@ -148,6 +154,49 @@ namespace UnityMCP.Editor.Localization.Tests
             Assert.That(Convert.ToInt32(listed["count"]), Is.EqualTo(1));
         }
 
+        [Test]
+        public void PersistentVariableWorkflow_CreatesUpdatesListsAndRemovesVariables()
+        {
+            var created = Execute("localization/upsert-variable", new Dictionary<string, object>
+            {
+                { "group", VariableGroup },
+                { "name", "score" },
+                { "type", "int" },
+                { "value", 7 },
+                { "groupAssetPath", TestFolder + "/MCP Variables.asset" },
+            });
+            Assert.That(created["success"], Is.EqualTo(true));
+            Assert.That(created["createdGroup"], Is.EqualTo(true));
+            Assert.That(created["createdVariable"], Is.EqualTo(true));
+
+            var updated = Execute("localization/upsert-variable", new Dictionary<string, object>
+            {
+                { "group", VariableGroup },
+                { "name", "score" },
+                { "type", "int" },
+                { "value", 9 },
+            });
+            Assert.That(updated["createdGroup"], Is.EqualTo(false));
+            Assert.That(updated["createdVariable"], Is.EqualTo(false));
+
+            var listed = Execute("localization/variables", new Dictionary<string, object>
+            {
+                { "group", VariableGroup },
+            });
+            Assert.That(Convert.ToInt32(listed["groupCount"]), Is.EqualTo(1));
+            var group = RequireDictionary(((List<Dictionary<string, object>>)listed["groups"])[0]);
+            var variable = RequireDictionary(((List<Dictionary<string, object>>)group["variables"])[0]);
+            Assert.That(variable["name"], Is.EqualTo("score"));
+            Assert.That(Convert.ToInt32(variable["value"]), Is.EqualTo(9));
+
+            var removed = Execute("localization/remove-variable", new Dictionary<string, object>
+            {
+                { "group", VariableGroup },
+                { "name", "score" },
+            });
+            Assert.That(removed["removed"], Is.EqualTo(true));
+        }
+
         private static void CreateLocale(string code, string name)
         {
             var result = Execute("localization/create-locale", new Dictionary<string, object>
@@ -211,6 +260,9 @@ namespace UnityMCP.Editor.Localization.Tests
         private void CaptureAddressableSnapshots()
         {
             m_AssetSnapshots.Clear();
+            CaptureSnapshot(AssetDatabase.GetAssetPath(LocalizationEditorSettings.ActiveLocalizationSettings));
+            CaptureSnapshot(AssetDatabase.GetAssetPath(LocalizationSettings.StringDatabase));
+
             var settings = AddressableAssetSettingsDefaultObject.Settings;
             if (settings == null)
                 return;
@@ -243,6 +295,17 @@ namespace UnityMCP.Editor.Localization.Tests
         {
             string projectRoot = Directory.GetParent(Application.dataPath).FullName;
             return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
+        }
+
+        private static void CleanupVariableGroup()
+        {
+            var database = LocalizationSettings.StringDatabase;
+            var source = database?.SmartFormatter.GetSourceExtension<PersistentVariablesSource>();
+            if (source == null || !source.Remove(VariableGroup))
+                return;
+
+            if (LocalizationSettings.StringDatabase != null)
+                EditorUtility.SetDirty(LocalizationSettings.StringDatabase);
         }
     }
 }

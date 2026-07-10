@@ -1533,6 +1533,9 @@ namespace UnityMCP.Editor
                 case "localization/remove-entry":
                 case "localization/validate":
                 case "localization/settings":
+                case "localization/variables":
+                case "localization/upsert-variable":
+                case "localization/remove-variable":
                     return MCPLocalizationBridge.Execute(path, ParseJson(body));
 
                 // ─── Package Manager ───

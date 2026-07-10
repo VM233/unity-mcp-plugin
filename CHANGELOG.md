@@ -5,7 +5,7 @@ All notable changes to this package will be documented in this file.
 ## Unreleased
 
 ### Added
-- **Optional Unity Localization tools** - When `com.unity.localization` is installed, first-class tools expose Locale management, String/Asset Table Collections, localized entry CRUD, Smart String flags, validation, and Localization Settings. The integration assembly and tool metadata stay hidden when the package is absent.
+- **Optional Unity Localization tools** - When `com.unity.localization` is installed, first-class tools expose Locale management, String/Asset Table Collections, localized entry CRUD, Smart String flags and persistent variables, validation, and Localization Settings. The integration assembly and tool metadata stay hidden when the package is absent.
 - **Completed visual capture results** - `screenshot/game` now waits for a stable, decodable PNG and reports dimensions, byte size, elapsed time, and readiness instead of returning before the next frame writes the file.
 - **Readable project-tool names** - project tools expose compact `unity_pt_*` names capped for MCP clients, retain the legacy name in metadata, and can opt into an explicit `MCPProjectToolAttribute.ShortName`.
 - **First-class testing tools** - Test discovery, test execution, job polling, and persistent Git package self-tests now expose concrete tools and schemas.

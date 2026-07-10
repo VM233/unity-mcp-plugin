@@ -9,6 +9,8 @@ using UnityEngine;
 using UnityEngine.Localization;
 using UnityEngine.Localization.Pseudo;
 using UnityEngine.Localization.Settings;
+using UnityEngine.Localization.SmartFormat.Extensions;
+using UnityEngine.Localization.SmartFormat.PersistentVariables;
 using UnityEngine.Localization.Tables;
 using Object = UnityEngine.Object;
 
@@ -44,6 +46,12 @@ namespace UnityMCP.Editor.Localization
                         return Validate(args);
                     case "localization/settings":
                         return UpdateSettings(args);
+                    case "localization/variables":
+                        return ListVariables(args);
+                    case "localization/upsert-variable":
+                        return UpsertVariable(args);
+                    case "localization/remove-variable":
+                        return RemoveVariable(args);
                     default:
                         return Error($"Unknown Localization route '{route}'");
                 }
@@ -470,6 +478,229 @@ namespace UnityMCP.Editor.Localization
             result["success"] = true;
             result["changed"] = changed;
             return result;
+        }
+
+        private static object ListVariables(Dictionary<string, object> args)
+        {
+            var source = GetPersistentVariablesSource(out string error);
+            if (source == null)
+                return Error(error);
+            string groupFilter = GetString(args, "group");
+            string nameContains = GetString(args, "nameContains");
+            var groups = source
+                .Where(pair => string.IsNullOrEmpty(groupFilter) ||
+                               string.Equals(pair.Key, groupFilter, StringComparison.OrdinalIgnoreCase))
+                .OrderBy(pair => pair.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(pair => new Dictionary<string, object>
+                {
+                    { "name", pair.Key },
+                    { "assetPath", AssetDatabase.GetAssetPath(pair.Value) },
+                    { "variables", pair.Value
+                        .Where(variable => string.IsNullOrEmpty(nameContains) ||
+                                           variable.Key.IndexOf(nameContains,
+                                               StringComparison.OrdinalIgnoreCase) >= 0)
+                        .OrderBy(variable => variable.Key, StringComparer.OrdinalIgnoreCase)
+                        .Select(variable => BuildVariableInfo(variable.Key, variable.Value))
+                        .ToList() },
+                })
+                .ToList();
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "groupCount", groups.Count },
+                { "groups", groups },
+            };
+        }
+
+        private static object UpsertVariable(Dictionary<string, object> args)
+        {
+            string groupName = GetString(args, "group");
+            string variableName = GetString(args, "name");
+            string variableType = GetString(args, "type").ToLowerInvariant();
+            if (string.IsNullOrWhiteSpace(groupName))
+                return Error("group is required");
+            if (string.IsNullOrWhiteSpace(variableName))
+                return Error("name is required");
+            if (groupName.Any(char.IsWhiteSpace) || variableName.Any(char.IsWhiteSpace))
+                return Error("group and name must not contain whitespace");
+            if (!args.TryGetValue("value", out object rawValue))
+                return Error("value is required");
+
+            var source = GetPersistentVariablesSource(out string error);
+            if (source == null)
+                return Error(error);
+            bool createdGroup = false;
+            if (!source.TryGetValue(groupName, out VariablesGroupAsset group))
+            {
+                string groupAssetPath = NormalizeAssetPath(GetString(args, "groupAssetPath"));
+                if (!IsAssetPath(groupAssetPath, ".asset"))
+                    return Error("groupAssetPath under Assets ending in .asset is required for a new group");
+                if (AssetDatabase.LoadMainAssetAtPath(groupAssetPath) != null)
+                    return Error($"An asset already exists at '{groupAssetPath}'");
+
+                EnsureAssetDirectory(Path.GetDirectoryName(groupAssetPath)?.Replace('\\', '/'));
+                group = ScriptableObject.CreateInstance<VariablesGroupAsset>();
+                group.name = Path.GetFileNameWithoutExtension(groupAssetPath);
+                AssetDatabase.CreateAsset(group, groupAssetPath);
+                source.Add(groupName, group);
+                createdGroup = true;
+            }
+
+            IVariable variable = CreateVariable(variableType, rawValue, out error);
+            if (variable == null)
+                return Error(error);
+            bool createdVariable = !group.ContainsKey(variableName);
+            if (!createdVariable)
+                group.Remove(variableName);
+            group.Add(variableName, variable);
+
+            EditorUtility.SetDirty(group);
+            if (createdGroup && LocalizationSettings.StringDatabase != null)
+                EditorUtility.SetDirty(LocalizationSettings.StringDatabase);
+            AssetDatabase.SaveAssets();
+
+            var result = BuildVariableInfo(variableName, variable);
+            result["success"] = true;
+            result["group"] = groupName;
+            result["groupAssetPath"] = AssetDatabase.GetAssetPath(group);
+            result["createdGroup"] = createdGroup;
+            result["createdVariable"] = createdVariable;
+            return result;
+        }
+
+        private static object RemoveVariable(Dictionary<string, object> args)
+        {
+            string groupName = GetString(args, "group");
+            string variableName = GetString(args, "name");
+            var source = GetPersistentVariablesSource(out string error);
+            if (source == null)
+                return Error(error);
+            if (!source.TryGetValue(groupName, out VariablesGroupAsset group))
+                return Error($"Persistent variable group '{groupName}' was not found");
+
+            bool removed = group.Remove(variableName);
+            if (removed)
+            {
+                EditorUtility.SetDirty(group);
+                AssetDatabase.SaveAssets();
+            }
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "removed", removed },
+                { "group", groupName },
+                { "name", variableName },
+            };
+        }
+
+        private static PersistentVariablesSource GetPersistentVariablesSource(out string error)
+        {
+            error = "";
+            var database = LocalizationSettings.StringDatabase;
+            if (database == null)
+            {
+                error = "Localization String Database is not configured";
+                return null;
+            }
+
+            var source = database.SmartFormatter.GetSourceExtension<PersistentVariablesSource>();
+            if (source == null)
+                error = "PersistentVariablesSource is not configured on the Localization SmartFormatter";
+            return source;
+        }
+
+        private static IVariable CreateVariable(string type, object value, out string error)
+        {
+            error = "";
+            switch (type)
+            {
+                case "bool":
+                    if (bool.TryParse(value?.ToString(), out bool boolValue))
+                        return new BoolVariable { Value = boolValue };
+                    break;
+                case "int":
+                    if (int.TryParse(value?.ToString(), out int intValue))
+                        return new IntVariable { Value = intValue };
+                    break;
+                case "long":
+                    if (long.TryParse(value?.ToString(), out long longValue))
+                        return new LongVariable { Value = longValue };
+                    break;
+                case "float":
+                    if (float.TryParse(value?.ToString(), out float floatValue))
+                        return new FloatVariable { Value = floatValue };
+                    break;
+                case "double":
+                    if (double.TryParse(value?.ToString(), out double doubleValue))
+                        return new DoubleVariable { Value = doubleValue };
+                    break;
+                case "string":
+                    return new StringVariable { Value = value?.ToString() ?? "" };
+                case "object":
+                    string assetPath = NormalizeAssetPath(value?.ToString());
+                    Object asset = AssetDatabase.LoadMainAssetAtPath(assetPath);
+                    if (asset != null)
+                        return new ObjectVariable { Value = asset };
+                    error = $"Object variable asset was not found at '{assetPath}'";
+                    return null;
+                default:
+                    error = "type must be bool, int, long, float, double, string, or object";
+                    return null;
+            }
+
+            error = $"Value '{value}' is invalid for variable type '{type}'";
+            return null;
+        }
+
+        private static Dictionary<string, object> BuildVariableInfo(string name, IVariable variable)
+        {
+            object value;
+            string type;
+            string assetPath = "";
+            switch (variable)
+            {
+                case BoolVariable typed:
+                    type = "bool";
+                    value = typed.Value;
+                    break;
+                case IntVariable typed:
+                    type = "int";
+                    value = typed.Value;
+                    break;
+                case LongVariable typed:
+                    type = "long";
+                    value = typed.Value;
+                    break;
+                case FloatVariable typed:
+                    type = "float";
+                    value = typed.Value;
+                    break;
+                case DoubleVariable typed:
+                    type = "double";
+                    value = typed.Value;
+                    break;
+                case StringVariable typed:
+                    type = "string";
+                    value = typed.Value;
+                    break;
+                case ObjectVariable typed:
+                    type = "object";
+                    value = typed.Value != null ? typed.Value.name : "";
+                    assetPath = typed.Value != null ? AssetDatabase.GetAssetPath(typed.Value) : "";
+                    break;
+                default:
+                    type = variable.GetType().FullName;
+                    value = variable.GetSourceValue(null)?.ToString() ?? "";
+                    break;
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "name", name },
+                { "type", type },
+                { "value", value },
+                { "assetPath", assetPath },
+            };
         }
 
         private static Dictionary<string, object> BuildLocaleInfo(Locale locale)

@@ -115,6 +115,7 @@ namespace UnityMCP.Editor
                 "localization/collections",
                 "localization/entries",
                 "localization/validate",
+                "localization/variables",
                 "packages/list",
                 "packages/info",
                 "packages/status",
@@ -160,7 +161,9 @@ namespace UnityMCP.Editor
                 "localization/create-collection",
                 "localization/upsert-entry",
                 "localization/remove-entry",
-                "localization/settings");
+                "localization/settings",
+                "localization/upsert-variable",
+                "localization/remove-variable");
 
             AddProfile(profiles, ToolProfile.FirstClass(),
                 "localization/set-selected-locale");
@@ -951,6 +954,12 @@ namespace UnityMCP.Editor
                     return "Find missing, empty, and duplicate localization entries across Locale tables.";
                 case "localization/settings":
                     return "Read or update Localization Settings, project Locale, and selected Locale.";
+                case "localization/variables":
+                    return "List Smart String persistent variable groups and values.";
+                case "localization/upsert-variable":
+                    return "Create or update a Smart String persistent variable and optionally create its group asset.";
+                case "localization/remove-variable":
+                    return "Remove a Smart String persistent variable from a registered group.";
                 case "project-tools/list":
                     return "List project-defined MCP extension tools discovered in loaded Unity editor assemblies.";
                 case "project-tools/execute":
@@ -1046,6 +1055,24 @@ namespace UnityMCP.Editor
                         Prop("projectLocale", "string", "Optional registered project Locale code."),
                         Prop("selectedLocale", "string", "Optional registered selected Locale code.")
                     ));
+                case "localization/variables":
+                    return Schema(Props(
+                        Prop("group", "string", "Optional case-insensitive persistent variable group filter."),
+                        Prop("nameContains", "string", "Optional case-insensitive variable name filter.")
+                    ));
+                case "localization/upsert-variable":
+                    return Schema(Props(
+                        Prop("group", "string", "Persistent variable group name."),
+                        Prop("name", "string", "Variable name inside the group."),
+                        Prop("type", "string", "Variable type: bool, int, long, float, double, string, or object."),
+                        Prop("value", "object", "Variable value. Object variables accept an Assets path."),
+                        Prop("groupAssetPath", "string", "Required asset path when creating a missing VariablesGroupAsset.")
+                    ), "group", "name", "type", "value");
+                case "localization/remove-variable":
+                    return Schema(Props(
+                        Prop("group", "string", "Persistent variable group name."),
+                        Prop("name", "string", "Variable name to remove.")
+                    ), "group", "name");
                 case "packages/update-git":
                     return Schema(Props(
                         Prop("name", "string", "Package name, e.g. com.example.package"),
