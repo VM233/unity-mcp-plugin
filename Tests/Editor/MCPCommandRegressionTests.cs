@@ -163,7 +163,7 @@ namespace UnityMCP.Editor.Tests
             var result = RequireDictionary(MCPPrefabAssetCommands.TransactionEdit(new Dictionary<string, object>
             {
                 { "assetPath", PREFAB_PATH },
-                { "operations", new object[]
+                { "operations", new List<object>
                     {
                         new Dictionary<string, object>
                         {
