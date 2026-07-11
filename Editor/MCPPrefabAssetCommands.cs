@@ -2331,8 +2331,13 @@ namespace UnityMCP.Editor
             string[] afterLines = CanonicalYamlText(afterBlock.Text).Split('\n');
             var addedLines = new List<string>();
             int beforeIndex = 0;
+            string currentPropertyRoot = "";
             foreach (string afterLine in afterLines)
             {
+                string propertyRoot = GetTopLevelYamlPropertyName(afterLine);
+                if (string.IsNullOrEmpty(propertyRoot) == false)
+                    currentPropertyRoot = propertyRoot;
+
                 if (beforeIndex < beforeLines.Length && afterLine == beforeLines[beforeIndex])
                 {
                     beforeIndex++;
@@ -2340,6 +2345,9 @@ namespace UnityMCP.Editor
                 else
                 {
                     addedLines.Add(afterLine);
+                    if (explicitYamlPropertyRoots != null &&
+                        explicitYamlPropertyRoots.Contains(currentPropertyRoot))
+                        return false;
                 }
             }
 
@@ -2363,6 +2371,19 @@ namespace UnityMCP.Editor
             }
 
             return true;
+        }
+
+        private static string GetTopLevelYamlPropertyName(string line)
+        {
+            if (string.IsNullOrEmpty(line) || line.Length < 3 || line[0] != ' ' || line[1] != ' ' ||
+                line[2] == ' ' || line[2] == '\t' || line[2] == '-')
+                return "";
+
+            int colonIndex = line.IndexOf(':', 2);
+            if (colonIndex <= 2)
+                return "";
+
+            return line.Substring(2, colonIndex - 2);
         }
 
         private static bool YamlFilesHaveSameBlockKeys(YamlFile left, YamlFile right)
