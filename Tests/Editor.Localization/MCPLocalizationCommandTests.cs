@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -10,6 +11,7 @@ using UnityEngine;
 using UnityEngine.Localization.Settings;
 using UnityEngine.Localization.SmartFormat.Extensions;
 using UnityEngine.Localization.SmartFormat.PersistentVariables;
+using UnityEngine.TestTools;
 
 namespace UnityMCP.Editor.Localization.Tests
 {
@@ -54,10 +56,11 @@ namespace UnityMCP.Editor.Localization.Tests
                 category: "localization"));
             var tools = (List<Dictionary<string, object>>)result["tools"];
 
-            Assert.That(tools, Has.Count.EqualTo(15));
+            Assert.That(tools, Has.Count.EqualTo(14));
             Assert.That(tools.All(tool => tool["route"].ToString().StartsWith("localization/")), Is.True);
             Assert.That(tools.All(tool => tool.ContainsKey("inputSchema")), Is.True);
-            Assert.That(tools.Any(tool => tool["route"].ToString() == "localization/upsert-entries"), Is.True);
+            Assert.That(tools.Any(tool => tool["route"].ToString() == "localization/upsert-entry"), Is.True);
+            Assert.That(tools.Any(tool => tool["route"].ToString() == "localization/upsert-entries"), Is.False);
         }
 
         [Test]
@@ -75,20 +78,18 @@ namespace UnityMCP.Editor.Localization.Tests
             });
             Assert.That(collection["success"], Is.EqualTo(true));
 
-            var invalid = Execute("localization/upsert-entries", new Dictionary<string, object>
+            var invalid = Execute("localization/upsert-entry", new Dictionary<string, object>
             {
                 { "collection", "MCP Batch Strings" },
                 { "entries", new object[]
                     {
                         new Dictionary<string, object>
                         {
-                            { "key", "Character" },
-                            { "translations", new Dictionary<string, object> { { EnglishCode, "Character" } } },
+                            { "key", "Character" }, { "locale", EnglishCode }, { "value", "Character" },
                         },
                         new Dictionary<string, object>
                         {
-                            { "key", "Inventory" },
-                            { "translations", new Dictionary<string, object> { { "x-mcp-missing", "Inventory" } } },
+                            { "key", "Inventory" }, { "locale", "x-mcp-missing" }, { "value", "Inventory" },
                         },
                     }
                 },
@@ -101,58 +102,53 @@ namespace UnityMCP.Editor.Localization.Tests
             });
             Assert.That(Convert.ToInt32(afterInvalid["total"]), Is.EqualTo(0));
 
-            var batch = Execute("localization/upsert-entries", new Dictionary<string, object>
+            var batch = Execute("localization/upsert-entry", new Dictionary<string, object>
             {
                 { "collection", "MCP Batch Strings" },
                 { "entries", new object[]
                     {
                         new Dictionary<string, object>
                         {
-                            { "key", "Character" },
-                            { "translations", new Dictionary<string, object>
-                                {
-                                    { EnglishCode, "Character" },
-                                    { ChineseCode, "角色" },
-                                }
-                            },
+                            { "key", "Character" }, { "locale", EnglishCode }, { "value", "Character" },
                         },
                         new Dictionary<string, object>
                         {
-                            { "key", "InventoryCount" },
-                            { "smart", true },
-                            { "translations", new Dictionary<string, object>
-                                {
-                                    { EnglishCode, "Inventory: {count}" },
-                                    { ChineseCode, "背包：{count}" },
-                                }
-                            },
+                            { "key", "Character" }, { "locale", ChineseCode }, { "value", "角色" },
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "key", "InventoryCount" }, { "locale", EnglishCode },
+                            { "value", "Inventory: {count}" }, { "smart", true },
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "key", "InventoryCount" }, { "locale", ChineseCode },
+                            { "value", "背包：{count}" }, { "smart", true },
                         },
                     }
                 },
             });
             Assert.That(batch["success"], Is.EqualTo(true));
-            Assert.That(Convert.ToInt32(batch["entryCount"]), Is.EqualTo(2));
-            Assert.That(Convert.ToInt32(batch["translationCount"]), Is.EqualTo(4));
+            Assert.That(Convert.ToInt32(batch["entryCount"]), Is.EqualTo(4));
             Assert.That(Convert.ToInt32(batch["createdKeyCount"]), Is.EqualTo(2));
-            Assert.That(Convert.ToInt32(batch["createdTranslationCount"]), Is.EqualTo(4));
+            Assert.That(Convert.ToInt32(batch["createdEntryCount"]), Is.EqualTo(4));
             Assert.That(batch["saved"], Is.EqualTo(true));
 
-            var updated = Execute("localization/upsert-entries", new Dictionary<string, object>
+            var updated = Execute("localization/upsert-entry", new Dictionary<string, object>
             {
                 { "collection", "MCP Batch Strings" },
                 { "entries", new object[]
                     {
                         new Dictionary<string, object>
                         {
-                            { "key", "Character" },
-                            { "translations", new Dictionary<string, object> { { EnglishCode, "Hero" } } },
+                            { "key", "Character" }, { "locale", EnglishCode }, { "value", "Hero" },
                         },
                     }
                 },
             });
             Assert.That(Convert.ToInt32(updated["createdKeyCount"]), Is.EqualTo(0));
-            Assert.That(Convert.ToInt32(updated["createdTranslationCount"]), Is.EqualTo(0));
-            Assert.That(Convert.ToInt32(updated["updatedTranslationCount"]), Is.EqualTo(1));
+            Assert.That(Convert.ToInt32(updated["createdEntryCount"]), Is.EqualTo(0));
+            Assert.That(Convert.ToInt32(updated["updatedEntryCount"]), Is.EqualTo(1));
 
             var listed = Execute("localization/entries", new Dictionary<string, object>
             {
@@ -169,6 +165,54 @@ namespace UnityMCP.Editor.Localization.Tests
             var characterValues = (List<Dictionary<string, object>>)character["values"];
             Assert.That(characterValues.Single(value => value["locale"].ToString() == EnglishCode)["value"],
                 Is.EqualTo("Hero"));
+        }
+
+        [UnityTest]
+        public IEnumerator UpsertEntry_BatchedExecutionProcessesAcrossFrames()
+        {
+            CreateLocale(EnglishCode, "English");
+            var collection = Execute("localization/create-collection", new Dictionary<string, object>
+            {
+                { "name", "MCP Deferred Strings" },
+                { "type", "string" },
+                { "assetDirectory", TestFolder + "/Deferred Tables" },
+                { "locales", new[] { EnglishCode } },
+            });
+            Assert.That(collection["success"], Is.EqualTo(true));
+
+            object completed = null;
+            MCPLocalizationCommands.ExecuteDeferred("localization/upsert-entry", new Dictionary<string, object>
+            {
+                { "collection", "MCP Deferred Strings" },
+                { "entries", new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "locale", EnglishCode }, { "key", "First" }, { "value", "First" },
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "locale", EnglishCode }, { "key", "Second" }, { "value", "Second" },
+                        },
+                    }
+                },
+                { "execution", new Dictionary<string, object>
+                    {
+                        { "mode", "batched" }, { "operationsPerFrame", 1 }, { "frameBudgetMs", 1 },
+                    }
+                },
+            }, result => completed = result, _ => { });
+
+            double timeoutAt = EditorApplication.timeSinceStartup + 10d;
+            while (completed == null && EditorApplication.timeSinceStartup < timeoutAt)
+                yield return null;
+
+            Assert.That(completed, Is.Not.Null);
+            var result = RequireDictionary(completed);
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(Convert.ToInt32(result["processedCount"]), Is.EqualTo(2));
+            var execution = RequireDictionary(result["execution"]);
+            Assert.That(execution["resolvedMode"], Is.EqualTo("batched"));
         }
 
         [Test]
@@ -189,10 +233,12 @@ namespace UnityMCP.Editor.Localization.Tests
             var english = Execute("localization/upsert-entry", new Dictionary<string, object>
             {
                 { "collection", "MCP Test Strings" },
-                { "locale", EnglishCode },
-                { "key", "Greeting" },
-                { "value", "Hello {player}" },
-                { "smart", true },
+                { "entries", new object[] { new Dictionary<string, object>
+                    {
+                        { "locale", EnglishCode }, { "key", "Greeting" },
+                        { "value", "Hello {player}" }, { "smart", true },
+                    }
+                } },
             });
             Assert.That(english["success"], Is.EqualTo(true));
 
@@ -206,10 +252,12 @@ namespace UnityMCP.Editor.Localization.Tests
             var chinese = Execute("localization/upsert-entry", new Dictionary<string, object>
             {
                 { "collection", "MCP Test Strings" },
-                { "locale", ChineseCode },
-                { "key", "Greeting" },
-                { "value", "你好，{player}" },
-                { "smart", true },
+                { "entries", new object[] { new Dictionary<string, object>
+                    {
+                        { "locale", ChineseCode }, { "key", "Greeting" },
+                        { "value", "你好，{player}" }, { "smart", true },
+                    }
+                } },
             });
             Assert.That(chinese["success"], Is.EqualTo(true));
 

@@ -152,7 +152,6 @@ namespace UnityMCP.Editor
                 "asset/refresh",
                 "asset/rename",
                 "asset/move",
-                "asset/move-batch",
                 "asset/export-unitypackage",
                 "uitoolkit/runtime-repaint",
                 "uitoolkit/refresh",
@@ -160,14 +159,14 @@ namespace UnityMCP.Editor
                 "localization/create-locale",
                 "localization/create-collection",
                 "localization/upsert-entry",
-                "localization/upsert-entries",
                 "localization/remove-entry",
                 "localization/settings",
                 "localization/upsert-variable",
                 "localization/remove-variable");
 
             AddProfile(profiles, ToolProfile.FirstClass(),
-                "localization/set-selected-locale");
+                "localization/set-selected-locale",
+                "component/set-reference");
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true,
                     mayReloadDomain: true),
@@ -797,10 +796,10 @@ namespace UnityMCP.Editor
                     return "Remove a child GameObject from inside a prefab asset.";
                 case "prefab-asset/find":
                     return "Find GameObjects inside a prefab asset by name/path, component type, and serialized property value.";
-                case "prefab-asset/batch-edit":
-                    return "Apply multiple prefab asset edits in one transaction, save once, and return operation summaries plus prefab YAML diff.";
                 case "prefab-asset/transaction-edit":
-                    return "High-level prefab asset transaction edit with default summary diff for minimal-change review.";
+                    return "Apply ordered prefab edits in one transaction with configurable immediate or frame-batched execution.";
+                case "component/set-reference":
+                    return "Assign one or more component ObjectReference properties with configurable immediate or frame-batched execution.";
                 case "serialized-object/get":
                     return "Read serialized properties from a scene object, component, or asset via SerializedObject.";
                 case "serialized-object/set":
@@ -810,9 +809,7 @@ namespace UnityMCP.Editor
                 case "asset/rename":
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
-                    return "Safely move a Unity asset using AssetDatabase while preserving its .meta GUID.";
-                case "asset/move-batch":
-                    return "Preflight and move multiple Unity assets in one AssetDatabase editing block, preserving .meta GUIDs and rolling back completed moves if a later move fails.";
+                    return "Preflight and move one or more Unity assets with configurable execution, GUID preservation, and rollback.";
                 case "asset/export-unitypackage":
                     return "Export one or more Unity assets to a .unitypackage file using AssetDatabase.ExportPackage.";
                 case "console/query":
@@ -948,9 +945,7 @@ namespace UnityMCP.Editor
                 case "localization/entries":
                     return "Read paginated String or Asset Table entries across Locale tables.";
                 case "localization/upsert-entry":
-                    return "Create or update a localized String, Smart String, or Asset Table entry.";
-                case "localization/upsert-entries":
-                    return "Batch create or update localized String or Smart String entries across multiple Locales with one save.";
+                    return "Create or update one or more localized String, Smart String, or Asset Table entries with configurable execution.";
                 case "localization/remove-entry":
                     return "Remove a localization entry from one Locale table or the entire collection.";
                 case "localization/validate":
@@ -978,7 +973,7 @@ namespace UnityMCP.Editor
             {
                 case "advanced/execute":
                     return Schema(Props(
-                        Prop("route", "string", "Unity route to execute, e.g. prefab-asset/batch-edit or project-tools/execute."),
+                        Prop("route", "string", "Unity route to execute, e.g. prefab-asset/transaction-edit or project-tools/execute."),
                         Prop("method", "string", "HTTP-like method used for the nested route. Defaults to POST."),
                         Prop("args", "object", "Arguments passed to the nested route."),
                         Prop("arguments", "object", "Alias for args."),
@@ -1027,18 +1022,6 @@ namespace UnityMCP.Editor
                         Prop("limit", "number", "Maximum keys returned. Defaults to 100; capped at 500.")
                     ), "collection");
                 case "localization/upsert-entry":
-                    return Schema(Props(
-                        Prop("collection", "string", "Table Collection name or GUID."),
-                        Prop("type", "string", "Collection type: string or asset. Defaults to string."),
-                        Prop("locale", "string", "Target Locale code."),
-                        Prop("key", "string", "Shared localization key."),
-                        Prop("value", "string", "String or Smart String value."),
-                        Prop("smart", "boolean", "Mark a String entry as a Smart String."),
-                        Prop("assetPath", "string", "Asset path for an Asset Table entry."),
-                        Prop("subAssetName", "string", "Optional exact sub-asset name at assetPath."),
-                        Prop("createTable", "boolean", "Create a missing Locale table. Defaults to true.")
-                    ), "collection", "locale", "key");
-                case "localization/upsert-entries":
                     return LocalizationUpsertEntriesSchema();
                 case "localization/remove-entry":
                     return Schema(Props(
@@ -1344,10 +1327,10 @@ namespace UnityMCP.Editor
                         Prop("propertyValue", "string", "Optional serialized property value to match."),
                         Prop("maxResults", "number", "Maximum returned matches. Defaults to 50.")
                     ), "assetPath");
-                case "prefab-asset/batch-edit":
-                    return PrefabAssetBatchEditSchema();
                 case "prefab-asset/transaction-edit":
-                    return PrefabAssetBatchEditSchema();
+                    return PrefabAssetTransactionEditSchema();
+                case "component/set-reference":
+                    return ComponentSetReferenceSchema();
                 case "serialized-object/get":
                     return Schema(Props(
                         Prop("instanceId", "number", "Target Unity object instance id."),
@@ -1391,16 +1374,7 @@ namespace UnityMCP.Editor
                         Prop("saveAssets", "boolean", "Call AssetDatabase.SaveAssets after refresh/import. Defaults to false.")
                     ));
                 case "asset/move":
-                    return Schema(Props(
-                        Prop("path", "string", "Current asset path."),
-                        Prop("assetPath", "string", "Alias for path."),
-                        Prop("destinationPath", "string", "Destination asset path, or an existing folder path to keep the same file name."),
-                        Prop("targetPath", "string", "Alias for destinationPath."),
-                        Prop("destinationFolder", "string", "Existing folder path to keep the same file name."),
-                        Prop("dryRun", "boolean", "Validate and return expected paths without moving.")
-                    ));
-                case "asset/move-batch":
-                    return AssetMoveBatchSchema();
+                    return AssetMoveSchema();
                 case "console/query":
                     return Schema(Props(
                         Prop("count", "number", "Maximum returned entries. Defaults to 50; capped at 200."),
@@ -1960,7 +1934,51 @@ namespace UnityMCP.Editor
             }
         }
 
-        private static Dictionary<string, object> PrefabAssetBatchEditSchema()
+        private static Dictionary<string, object> ExecutionSchema(bool includeContinueOnError = true)
+        {
+            var properties = Props(
+                Prop("operationsPerFrame", "number", "Maximum operations processed in one editor frame. Defaults to 25."),
+                Prop("frameBudgetMs", "number", "Soft per-frame execution budget in milliseconds. Defaults to 8."),
+                Prop("timeoutMs", "number", "Maximum total execution time in milliseconds. Defaults to 90000."));
+            properties["mode"] = new Dictionary<string, object>
+            {
+                { "type", "string" },
+                { "description", "Execution mode. auto batches multi-operation requests, immediate runs in one frame, and batched yields across frames." },
+                { "enum", new List<object> { "auto", "immediate", "batched" } },
+            };
+            if (includeContinueOnError)
+                properties["continueOnError"] = Prop("continueOnError", "boolean",
+                    "Continue processing later operations after one fails. Defaults to false.").Value;
+            return Schema(properties);
+        }
+
+        private static Dictionary<string, object> ComponentSetReferenceSchema()
+        {
+            var referenceProperties = Props(
+                Prop("path", "string", "Target scene GameObject path or name."),
+                Prop("instanceId", "string", "Target scene GameObject instance ID."),
+                Prop("componentType", "string", "Component containing the property."),
+                Prop("propertyName", "string", "ObjectReference property to assign."),
+                Prop("assetPath", "string", "Asset path to assign."),
+                Prop("referenceGameObject", "string", "Scene GameObject path or name to assign."),
+                Prop("referenceComponentType", "string", "Component type on the referenced GameObject."),
+                Prop("referenceInstanceId", "number", "Unity object instance ID to assign."),
+                Prop("clear", "boolean", "Clear the reference."));
+            var properties = Props(
+                Prop("path", "string", "Default target GameObject inherited by reference items."),
+                Prop("instanceId", "string", "Default target instance ID inherited by reference items."),
+                Prop("componentType", "string", "Default component type inherited by reference items."));
+            properties["execution"] = ExecutionSchema();
+            properties["references"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "Reference assignments. Every item requires propertyName and one reference source or clear=true." },
+                { "items", Schema(referenceProperties, "propertyName") },
+            };
+            return Schema(properties, "references");
+        }
+
+        private static Dictionary<string, object> PrefabAssetTransactionEditSchema()
         {
             var properties = Props(
                 Prop("assetPath", "string", "Prefab asset path to edit."),
@@ -1968,9 +1986,6 @@ namespace UnityMCP.Editor
                 Prop("typeResolveTimeoutMs", "number", "Maximum type wait time in milliseconds. Defaults to 30000."),
                 Prop("typeResolveStableMs", "number", "Continuous idle time after type resolution before editing. Defaults to 500."),
                 Prop("refreshAssets", "boolean", "When referenced component types are missing, return a retryable response and schedule AssetDatabase.Refresh after the response. The refresh is skipped when all types are already loaded. Defaults to true."),
-                Prop("batchEditTimeoutMs", "number", "Maximum deferred batch edit time before returning a structured timeout with partial progress. Defaults to 90000."),
-                Prop("operationsPerFrame", "number", "Maximum operations to apply per editor frame in deferred batch mode. Defaults to 25."),
-                Prop("operationFrameBudgetMs", "number", "Soft per-frame operation budget in milliseconds in deferred batch mode. Defaults to 8."),
                 Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                 Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
                 Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
@@ -1978,6 +1993,7 @@ namespace UnityMCP.Editor
                 Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
                 Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
             );
+            properties["execution"] = ExecutionSchema(includeContinueOnError: false);
 
             properties["operations"] = new Dictionary<string, object>
             {
@@ -2010,7 +2026,7 @@ namespace UnityMCP.Editor
             return Schema(properties, "assetPath", "operations");
         }
 
-        private static Dictionary<string, object> AssetMoveBatchSchema()
+        private static Dictionary<string, object> AssetMoveSchema()
         {
             var moveProperties = Props(
                 Prop("path", "string", "Current asset path."),
@@ -2023,6 +2039,7 @@ namespace UnityMCP.Editor
 
             var properties = Props(
                 Prop("dryRun", "boolean", "Validate every move and return expected paths without moving."));
+            properties["execution"] = ExecutionSchema();
             properties["moves"] = new Dictionary<string, object>
             {
                 { "type", "array" },
@@ -2035,26 +2052,24 @@ namespace UnityMCP.Editor
 
         private static Dictionary<string, object> LocalizationUpsertEntriesSchema()
         {
-            var translationSchema = new Dictionary<string, object>
-            {
-                { "type", "object" },
-                { "description", "Localized values keyed by registered Locale code, for example en-US or zh-CN." },
-                { "additionalProperties", new Dictionary<string, object> { { "type", "string" } } },
-            };
             var entryProperties = Props(
                 Prop("key", "string", "Shared localization key."),
-                Prop("smart", "boolean", "Optional Smart String flag applied to every supplied translation."));
-            entryProperties["translations"] = translationSchema;
+                Prop("locale", "string", "Target Locale code."),
+                Prop("value", "string", "String or Smart String value when type is string."),
+                Prop("smart", "boolean", "Optional Smart String flag when type is string."),
+                Prop("assetPath", "string", "Asset path when type is asset."),
+                Prop("subAssetName", "string", "Optional exact sub-asset name at assetPath."));
 
             var properties = Props(
-                Prop("collection", "string", "String Table Collection name or GUID."),
-                Prop("type", "string", "Collection type. Only string is supported; defaults to string."),
+                Prop("collection", "string", "Table Collection name or GUID."),
+                Prop("type", "string", "Collection type: string or asset. Defaults to string."),
                 Prop("createTables", "boolean", "Create missing Locale tables. Defaults to true."));
+            properties["execution"] = ExecutionSchema();
             properties["entries"] = new Dictionary<string, object>
             {
                 { "type", "array" },
-                { "description", "Up to 500 unique localization keys. The entire batch is validated before changes are made." },
-                { "items", Schema(entryProperties, "key", "translations") },
+                { "description", "Up to 500 Locale entry writes. The entire request is validated before changes are made." },
+                { "items", Schema(entryProperties, "key", "locale") },
             };
 
             return Schema(properties, "collection", "entries");

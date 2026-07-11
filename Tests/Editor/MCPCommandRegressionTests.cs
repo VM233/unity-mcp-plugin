@@ -229,6 +229,13 @@ namespace UnityMCP.Editor.Tests
                 { "assetPath", PREFAB_PATH },
                 { "refreshAssets", true },
                 { "typeResolveStableMs", 0 },
+                { "execution", new Dictionary<string, object>
+                    {
+                        { "mode", "batched" },
+                        { "operationsPerFrame", 1 },
+                        { "frameBudgetMs", 1 },
+                    }
+                },
                 { "operations", new List<object>
                     {
                         new Dictionary<string, object>
@@ -255,13 +262,145 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
-        public void TransactionEdit_IsRegisteredAsDeferredRoute()
+        public void UnifiedExecutionRoutes_AreDeferredAndLegacyBatchRoutesAreRemoved()
         {
             var routesProperty = typeof(MCPBridgeServer).GetProperty("DeferredRouteNames",
                 BindingFlags.Static | BindingFlags.NonPublic);
             Assert.That(routesProperty, Is.Not.Null);
             var routes = (IEnumerable<string>)routesProperty.GetValue(null);
             Assert.That(routes, Does.Contain("prefab-asset/transaction-edit"));
+            Assert.That(routes, Does.Contain("asset/move"));
+            Assert.That(routes, Does.Contain("component/set-reference"));
+            Assert.That(routes, Does.Contain("localization/upsert-entry"));
+
+            var registered = RequireDictionary(MCPToolMetadata.GetRegisteredRoutes());
+            var registeredRoutes = (List<string>)registered["routes"];
+            Assert.That(registeredRoutes, Does.Not.Contain("prefab-asset/batch-edit"));
+            Assert.That(registeredRoutes, Does.Not.Contain("asset/move-batch"));
+            Assert.That(registeredRoutes, Does.Not.Contain("component/batch-wire"));
+            Assert.That(registeredRoutes, Does.Not.Contain("localization/upsert-entries"));
+        }
+
+        [Test]
+        public void ExecutionOptions_ParseAndResolveMode()
+        {
+            Assert.That(MCPExecutionOptions.TryParse(new Dictionary<string, object>(), out var automatic,
+                out string automaticError), Is.True, automaticError);
+            Assert.That(automatic.ResolveMode(1), Is.EqualTo(MCPExecutionMode.Immediate));
+            Assert.That(automatic.ResolveMode(2), Is.EqualTo(MCPExecutionMode.Batched));
+
+            Assert.That(MCPExecutionOptions.TryParse(new Dictionary<string, object>
+            {
+                { "execution", new Dictionary<string, object>
+                    {
+                        { "mode", "batched" },
+                        { "operationsPerFrame", 3 },
+                        { "frameBudgetMs", 4 },
+                        { "timeoutMs", 5000 },
+                        { "continueOnError", true },
+                    }
+                },
+            }, out var options, out string error), Is.True, error);
+            Assert.That(options.ResolveMode(1), Is.EqualTo(MCPExecutionMode.Batched));
+            Assert.That(options.OperationsPerFrame, Is.EqualTo(3));
+            Assert.That(options.FrameBudgetMs, Is.EqualTo(4));
+            Assert.That(options.TimeoutMs, Is.EqualTo(5000));
+            Assert.That(options.ContinueOnError, Is.True);
+
+            Assert.That(MCPExecutionOptions.TryParse(new Dictionary<string, object>
+            {
+                { "execution", new Dictionary<string, object> { { "mode", "parallel" } } },
+            }, out _, out error), Is.False);
+            Assert.That(error, Does.Contain("auto, immediate, or batched"));
+        }
+
+        [UnityTest]
+        public IEnumerator AssetMoveDeferred_BatchedModeMovesAllAssets()
+        {
+            string first = TEST_FOLDER + "/First.txt";
+            string second = TEST_FOLDER + "/Second.txt";
+            string movedFirst = TEST_FOLDER + "/Moved First.txt";
+            string movedSecond = TEST_FOLDER + "/Moved Second.txt";
+            File.WriteAllText(GetAbsolutePath(first), "first");
+            File.WriteAllText(GetAbsolutePath(second), "second");
+            AssetDatabase.ImportAsset(first, ImportAssetOptions.ForceUpdate);
+            AssetDatabase.ImportAsset(second, ImportAssetOptions.ForceUpdate);
+
+            object completed = null;
+            MCPAssetCommands.MoveDeferred(new Dictionary<string, object>
+            {
+                { "moves", new object[]
+                    {
+                        new Dictionary<string, object> { { "path", first }, { "destinationPath", movedFirst } },
+                        new Dictionary<string, object> { { "path", second }, { "destinationPath", movedSecond } },
+                    }
+                },
+                { "execution", new Dictionary<string, object>
+                    {
+                        { "mode", "batched" },
+                        { "operationsPerFrame", 1 },
+                        { "frameBudgetMs", 1 },
+                    }
+                },
+            }, result => completed = result, _ => { });
+
+            double timeoutAt = EditorApplication.timeSinceStartup + 10d;
+            while (completed == null && EditorApplication.timeSinceStartup < timeoutAt)
+                yield return null;
+
+            Assert.That(completed, Is.Not.Null);
+            Assert.That(RequireDictionary(completed)["success"], Is.EqualTo(true));
+            Assert.That(AssetDatabase.LoadAssetAtPath<TextAsset>(movedFirst), Is.Not.Null);
+            Assert.That(AssetDatabase.LoadAssetAtPath<TextAsset>(movedSecond), Is.Not.Null);
+        }
+
+        [UnityTest]
+        public IEnumerator ComponentSetReferencesDeferred_BatchedModeProcessesEveryReference()
+        {
+            var first = new GameObject("__MCP Reference First");
+            var second = new GameObject("__MCP Reference Second");
+            var firstCamera = first.AddComponent<Camera>();
+            var secondCamera = second.AddComponent<Camera>();
+            var renderTexture = new RenderTexture(8, 8, 0);
+            string renderTexturePath = TEST_FOLDER + "/Reference Render Texture.asset";
+            AssetDatabase.CreateAsset(renderTexture, renderTexturePath);
+
+            object completed = null;
+            MCPComponentCommands.SetReferencesDeferred(new Dictionary<string, object>
+            {
+                { "references", new object[]
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "path", first.name }, { "componentType", typeof(Camera).FullName },
+                            { "propertyName", "m_TargetTexture" }, { "assetPath", renderTexturePath },
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "path", second.name }, { "componentType", typeof(Camera).FullName },
+                            { "propertyName", "m_TargetTexture" }, { "assetPath", renderTexturePath },
+                        },
+                    }
+                },
+                { "execution", new Dictionary<string, object>
+                    {
+                        { "mode", "batched" }, { "operationsPerFrame", 1 }, { "frameBudgetMs", 1 },
+                    }
+                },
+            }, result => completed = result, _ => { });
+
+            double timeoutAt = EditorApplication.timeSinceStartup + 10d;
+            while (completed == null && EditorApplication.timeSinceStartup < timeoutAt)
+                yield return null;
+
+            bool firstAssigned = firstCamera.targetTexture == renderTexture;
+            bool secondAssigned = secondCamera.targetTexture == renderTexture;
+            Object.DestroyImmediate(first);
+            Object.DestroyImmediate(second);
+            Assert.That(completed, Is.Not.Null);
+            Assert.That(RequireDictionary(completed)["success"], Is.EqualTo(true));
+            Assert.That(firstAssigned, Is.True);
+            Assert.That(secondAssigned, Is.True);
         }
 
         [Test]

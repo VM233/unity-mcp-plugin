@@ -56,8 +56,11 @@ namespace UnityMCP.Editor
             { "build/run-test", (args, resolve, _) => MCPBuildCommands.BuildAndRunTestDeferred(args, resolve) },
             { "packages/update-git", (args, resolve, _) => MCPPackageManagerCommands.UpdateGitPackageDeferred(args, resolve) },
             { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },
-            { "prefab-asset/batch-edit", MCPPrefabAssetCommands.BatchEditDeferred },
             { "prefab-asset/transaction-edit", MCPPrefabAssetCommands.TransactionEditDeferred },
+            { "asset/move", MCPAssetCommands.MoveDeferred },
+            { "component/set-reference", MCPComponentCommands.SetReferencesDeferred },
+            { "localization/upsert-entry", (args, resolve, progress) =>
+                MCPLocalizationBridge.ExecuteDeferred("localization/upsert-entry", args, resolve, progress) },
         };
 
         internal static IEnumerable<string> DeferredRouteNames => _deferredRoutes.Keys;
@@ -775,9 +778,7 @@ namespace UnityMCP.Editor
                 case "component/set-property":
                     return MCPComponentCommands.SetProperty(ParseJson(body));
                 case "component/set-reference":
-                    return MCPComponentCommands.SetReference(ParseJson(body));
-                case "component/batch-wire":
-                    return MCPComponentCommands.BatchWireReferences(ParseJson(body));
+                    return MCPComponentCommands.SetReferences(ParseJson(body));
                 case "component/get-referenceable":
                     return MCPComponentCommands.GetReferenceableObjects(ParseJson(body));
 
@@ -802,8 +803,6 @@ namespace UnityMCP.Editor
                     return MCPAssetCommands.Rename(ParseJson(body));
                 case "asset/move":
                     return MCPAssetCommands.Move(ParseJson(body));
-                case "asset/move-batch":
-                    return MCPAssetCommands.MoveBatch(ParseJson(body));
                 case "asset/create-prefab":
                     return MCPAssetCommands.CreatePrefab(ParseJson(body));
                 case "asset/instantiate-prefab":
@@ -977,8 +976,6 @@ namespace UnityMCP.Editor
                     return MCPPrefabAssetCommands.MoveGameObject(ParseJson(body));
                 case "prefab-asset/find":
                     return MCPPrefabAssetCommands.Find(ParseJson(body));
-                case "prefab-asset/batch-edit":
-                    return MCPPrefabAssetCommands.BatchEdit(ParseJson(body));
                 case "prefab-asset/transaction-edit":
                     return MCPPrefabAssetCommands.TransactionEdit(ParseJson(body));
 
@@ -1531,7 +1528,6 @@ namespace UnityMCP.Editor
                 case "localization/create-collection":
                 case "localization/entries":
                 case "localization/upsert-entry":
-                case "localization/upsert-entries":
                 case "localization/remove-entry":
                 case "localization/validate":
                 case "localization/settings":

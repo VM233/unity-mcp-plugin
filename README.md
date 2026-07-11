@@ -42,14 +42,14 @@ http://127.0.0.1:7890/api/ping
 | Testing | `unity_testing_get_job` | `testing/get-job` | Poll test progress and detailed results. |
 | Package testing | `unity_testing_run_package_tests` | `testing/run-package-tests` | Temporarily enable Git package tests, run them across domain reloads, and restore the package manifest exactly. |
 | Package testing | `unity_testing_get_package_job` | `testing/get-package-job` | Poll the persistent package test workflow and its final test result. |
-| Localization | `unity_localization_upsert_entries` | `localization/upsert-entries` | Prevalidate and upsert multiple String/Smart String keys and Locale translations with one asset save. |
+| Localization | `unity_localization_upsert_entry` | `localization/upsert-entry` | Prevalidate and upsert one or more String, Smart String, or Asset Table entries with `execution.mode` controlling immediate or frame-batched execution. |
 | Multi-editor safety | `unity_instance_current` | `instance/current` | Return the current Editor MCP instance identity, including project path and port. |
 | Multi-editor safety | `unity_instance_list` | `instance/list` | List registered Editor MCP instances across open Unity projects. |
 | Multi-editor safety | `unity_instance_resolve` | `instance/resolve` | Resolve exactly one Editor MCP instance by project path, project name, or port. |
 | Multi-editor safety | `unity_instance_assert_project` | `instance/assert-project` | Verify that a request reached the expected Unity project. |
 | Prefab asset editing | `unity_prefab_asset_add_component` | `prefab-asset/add-component` | Add a component after waiting for a newly compiled script type to become available; returns prefab YAML diff by default. |
 | Prefab asset editing | `unity_prefab_asset_add_gameobject` | `prefab-asset/add-gameobject` | Create a child GameObject inside a prefab asset. |
-| Prefab asset editing | `unity_prefab_asset_batch_edit` | `prefab-asset/batch-edit` | Apply ordered prefab asset edits in one load/save transaction, such as adding a component and setting its fields before a single save. |
+| Prefab asset editing | `unity_prefab_asset_transaction_edit` | `prefab-asset/transaction-edit` | Apply ordered prefab edits in one load/save transaction with `execution.mode` controlling immediate or frame-batched execution. |
 | Prefab asset editing | `unity_prefab_asset_instantiate_prefab` | `prefab-asset/instantiate-prefab` | Instantiate one prefab asset inside another prefab asset under a selected child path. |
 | Prefab asset editing | `unity_prefab_asset_instantiate_child_prefab` | `prefab-asset/instantiate-child-prefab` | Clearer alias for `prefab-asset/instantiate-prefab`; use this when editing a prefab asset, not the scene. |
 | Prefab asset editing | `unity_prefab_asset_move_gameobject` | `prefab-asset/move-gameobject` | Move or reorder a GameObject inside a prefab asset without opening Prefab Mode manually. |
@@ -64,8 +64,8 @@ http://127.0.0.1:7890/api/ping
 | Scene editing | `unity_scene_instantiate_prefab` | `scene/instantiate-prefab` | Instantiate a prefab asset into the currently open scene. |
 | Safe assets | `unity_asset_refresh` | `asset/refresh` | Refresh AssetDatabase, optionally forcing update or importing specific asset paths before prefab/package operations. |
 | Safe assets | `unity_asset_rename` | `asset/rename` | Rename an asset through `AssetDatabase.RenameAsset`, preserving `.meta`, GUID, and references. |
-| Safe assets | `unity_asset_move` | `asset/move` | Move an asset through `AssetDatabase.MoveAsset`, preserving `.meta`, GUID, and references. |
-| Safe assets | `unity_asset_move_batch` | `asset/move-batch` | Preflight and move multiple assets in one editing block, preserving `.meta` GUIDs and rolling back completed moves if a later move fails. |
+| Safe assets | `unity_asset_move` | `asset/move` | Preflight and move one or more assets, preserving `.meta` GUIDs and rolling back completed moves when configured to stop on failure. |
+| Scene references | `unity_component_set_reference` | `component/set-reference` | Assign one or more ObjectReference properties with `execution.mode` and shared target defaults. |
 | Serialization | `unity_serialized_object_get` | `serialized-object/get` | Read serialized properties from a scene object, component, or asset. |
 | Serialization | `unity_serialized_object_set` | `serialized-object/set` | Set one serialized property on a scene object, component, or asset. |
 | Console inspection | `unity_console_query` | `console/query` | Filter recent console entries by time, log type, message, source stack frame, full stack text, or only entries after the last Play transition. |

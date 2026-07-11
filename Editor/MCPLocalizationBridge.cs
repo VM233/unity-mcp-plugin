@@ -43,6 +43,49 @@ namespace UnityMCP.Editor
             }
         }
 
+        public static void ExecuteDeferred(string route, Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
+        {
+            var commandType = ResolveCommandType();
+            if (commandType == null)
+            {
+                resolve(new
+                {
+                    success = false,
+                    errorCode = "localization_package_missing",
+                    error = "Unity Localization is not installed. Add com.unity.localization to expose localization tools.",
+                });
+                return;
+            }
+
+            var execute = commandType.GetMethod("ExecuteDeferred", BindingFlags.Public | BindingFlags.Static);
+            if (execute == null)
+            {
+                resolve(new { success = false, error = "Localization deferred command entry point was not found" });
+                return;
+            }
+
+            try
+            {
+                execute.Invoke(null, new object[]
+                {
+                    route,
+                    args ?? new Dictionary<string, object>(),
+                    resolve,
+                    progress,
+                });
+            }
+            catch (TargetInvocationException exception)
+            {
+                var cause = exception.InnerException ?? exception;
+                resolve(new { success = false, error = cause.Message, stackTrace = cause.StackTrace });
+            }
+            catch (Exception exception)
+            {
+                resolve(new { success = false, error = exception.Message, stackTrace = exception.StackTrace });
+            }
+        }
+
         private static Type ResolveCommandType()
         {
             return Type.GetType(CommandTypeName, false);

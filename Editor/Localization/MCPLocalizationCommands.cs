@@ -39,8 +39,6 @@ namespace UnityMCP.Editor.Localization
                     case "localization/entries":
                         return ListEntries(args);
                     case "localization/upsert-entry":
-                        return UpsertEntry(args);
-                    case "localization/upsert-entries":
                         return UpsertEntries(args);
                     case "localization/remove-entry":
                         return RemoveEntry(args);
@@ -67,6 +65,18 @@ namespace UnityMCP.Editor.Localization
                     { "stackTrace", exception.StackTrace },
                 };
             }
+        }
+
+        public static void ExecuteDeferred(string route, Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
+        {
+            if (route != "localization/upsert-entry")
+            {
+                resolve(Execute(route, args));
+                return;
+            }
+
+            UpsertEntriesDeferred(args, resolve, progress);
         }
 
         private static object GetStatus()
@@ -272,68 +282,7 @@ namespace UnityMCP.Editor.Localization
             };
         }
 
-        private static object UpsertEntry(Dictionary<string, object> args)
-        {
-            string type = NormalizeCollectionType(GetString(args, "type"));
-            if (type == null)
-                return Error("type must be string or asset");
-            string collectionName = GetString(args, "collection");
-            string localeCode = GetString(args, "locale");
-            string key = GetString(args, "key");
-            if (string.IsNullOrWhiteSpace(key))
-                return Error("key is required");
-
-            var collection = GetCollection(collectionName, type);
-            if (collection == null)
-                return Error($"{type} Table Collection '{collectionName}' was not found");
-            var locale = FindLocale(localeCode, out string localeError);
-            if (locale == null)
-                return Error(localeError);
-
-            var table = collection.GetTable(locale.Identifier);
-            if (table == null && GetBool(args, "createTable", true))
-                table = collection.AddNewTable(locale.Identifier);
-            if (table == null)
-                return Error($"Collection '{collectionName}' has no table for Locale '{localeCode}'");
-
-            bool created = collection.SharedData.GetEntry(key) == null;
-            if (type == "string")
-            {
-                string value = GetString(args, "value");
-                var stringTable = (StringTable)table;
-                var entry = stringTable.GetEntry(key) ?? stringTable.AddEntry(key, value);
-                entry.Value = value;
-                if (args.ContainsKey("smart"))
-                    entry.IsSmart = GetBool(args, "smart", false);
-                EditorUtility.SetDirty(stringTable);
-                EditorUtility.SetDirty(stringTable.SharedData);
-            }
-            else
-            {
-                string assetPath = NormalizeAssetPath(GetString(args, "assetPath"));
-                if (!IsAssetPath(assetPath))
-                    return Error("assetPath under Assets is required for an Asset Table entry");
-                Object asset = LoadAsset(assetPath, GetString(args, "subAssetName"));
-                if (asset == null)
-                    return Error($"Asset was not found at '{assetPath}'");
-                ((AssetTableCollection)collection).AddAssetToTable(locale.Identifier, key, asset);
-            }
-
-            AssetDatabase.SaveAssets();
-            var sharedEntry = collection.SharedData.GetEntry(key);
-            return new Dictionary<string, object>
-            {
-                { "success", true },
-                { "created", created },
-                { "collection", collection.TableCollectionName },
-                { "type", type },
-                { "locale", locale.Identifier.Code },
-                { "key", key },
-                { "keyId", sharedEntry?.Id ?? 0 },
-            };
-        }
-
-        private static object UpsertEntries(Dictionary<string, object> args)
+        private static object UpsertGroupedEntriesLegacy(Dictionary<string, object> args)
         {
             string type = NormalizeCollectionType(GetString(args, "type"));
             if (type == null)
@@ -494,6 +443,319 @@ namespace UnityMCP.Editor.Localization
                 { "createdTables", createdTables },
                 { "saved", true },
                 { "entries", results },
+            };
+        }
+
+        private static object UpsertEntries(Dictionary<string, object> args)
+        {
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+                return Error(executionError);
+            if (!TryPrepareUpsertEntries(args, execution, out var state, out object preparationError))
+                return preparationError;
+            return ExecutePreparedUpserts(state);
+        }
+
+        private static void UpsertEntriesDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
+        {
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+            {
+                resolve(Error(executionError));
+                return;
+            }
+            if (!TryPrepareUpsertEntries(args, execution, out var state, out object preparationError))
+            {
+                resolve(preparationError);
+                return;
+            }
+            if (execution.ResolveMode(state.Plans.Count) == MCPExecutionMode.Immediate)
+            {
+                resolve(ExecutePreparedUpserts(state));
+                return;
+            }
+
+            double startedAt = EditorApplication.timeSinceStartup;
+            EditorApplication.CallbackFunction tick = null;
+            Action<object> complete = result =>
+            {
+                if (tick != null)
+                    EditorApplication.update -= tick;
+                resolve(result);
+            };
+            tick = () =>
+            {
+                int elapsedMs = (int)((EditorApplication.timeSinceStartup - startedAt) * 1000d);
+                if (elapsedMs >= execution.TimeoutMs)
+                {
+                    FinishPreparedUpserts(state);
+                    state.Errors.Add($"Localization upsert timed out after {execution.TimeoutMs} ms");
+                    complete(BuildUpsertResult(state));
+                    return;
+                }
+
+                double frameStartedAt = EditorApplication.timeSinceStartup;
+                int processedThisFrame = 0;
+                while (state.NextPlanIndex < state.Plans.Count)
+                {
+                    var plan = state.Plans[state.NextPlanIndex++];
+                    try
+                    {
+                        ApplyUpsertPlan(state, plan);
+                    }
+                    catch (Exception exception)
+                    {
+                        state.Errors.Add($"entries[{plan.Index}] failed: {exception.Message}");
+                        if (!execution.ContinueOnError)
+                        {
+                            FinishPreparedUpserts(state);
+                            complete(BuildUpsertResult(state));
+                            return;
+                        }
+                    }
+
+                    processedThisFrame++;
+                    progress?.Invoke(new Dictionary<string, object>
+                    {
+                        { "phase", "upserting" },
+                        { "processedCount", state.NextPlanIndex },
+                        { "entryCount", state.Plans.Count },
+                        { "elapsedMs", elapsedMs },
+                        { "execution", execution.ToResult(state.Plans.Count) },
+                    });
+                    double frameElapsedMs = (EditorApplication.timeSinceStartup - frameStartedAt) * 1000d;
+                    if (processedThisFrame >= execution.OperationsPerFrame ||
+                        frameElapsedMs >= execution.FrameBudgetMs)
+                        break;
+                }
+
+                if (state.NextPlanIndex < state.Plans.Count)
+                    return;
+                FinishPreparedUpserts(state);
+                complete(BuildUpsertResult(state));
+            };
+            EditorApplication.update += tick;
+            tick();
+        }
+
+        private static bool TryPrepareUpsertEntries(Dictionary<string, object> args, MCPExecutionOptions execution,
+            out LocalizationUpsertState state, out object errorResult)
+        {
+            state = null;
+            errorResult = null;
+            string type = NormalizeCollectionType(GetString(args, "type"));
+            if (type == null)
+            {
+                errorResult = Error("type must be string or asset");
+                return false;
+            }
+
+            string collectionName = GetString(args, "collection");
+            var collection = GetCollection(collectionName, type);
+            if (collection == null)
+            {
+                errorResult = Error($"{type} Table Collection '{collectionName}' was not found");
+                return false;
+            }
+            if (args == null || !args.TryGetValue("entries", out object rawEntries) ||
+                rawEntries == null || rawEntries is string || !(rawEntries is IEnumerable entries))
+            {
+                errorResult = Error("entries must be a non-empty array");
+                return false;
+            }
+
+            state = new LocalizationUpsertState
+            {
+                Type = type,
+                Collection = collection,
+                AssetCollection = collection as AssetTableCollection,
+                Execution = execution,
+            };
+            var uniqueEntries = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int index = 0;
+            foreach (object rawEntry in entries)
+            {
+                if (state.Plans.Count >= 500)
+                {
+                    errorResult = Error("entries is capped at 500 items");
+                    return false;
+                }
+                var entry = AsDictionary(rawEntry);
+                if (entry == null)
+                {
+                    errorResult = Error($"entries[{index}] must be an object");
+                    return false;
+                }
+                string key = GetString(entry, "key");
+                string localeCode = GetString(entry, "locale");
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    errorResult = Error($"entries[{index}].key is required");
+                    return false;
+                }
+                var locale = FindLocale(localeCode, out string localeError);
+                if (locale == null)
+                {
+                    errorResult = Error($"entries[{index}]: {localeError}");
+                    return false;
+                }
+                string uniqueKey = locale.Identifier.Code + "\n" + key;
+                if (!uniqueEntries.Add(uniqueKey))
+                {
+                    errorResult = Error($"Duplicate key '{key}' for Locale '{locale.Identifier.Code}'");
+                    return false;
+                }
+
+                var plan = new LocalizationUpsertPlan
+                {
+                    Index = index,
+                    Key = key,
+                    Locale = locale,
+                    HasSmart = entry.ContainsKey("smart"),
+                    Smart = GetBool(entry, "smart", false),
+                };
+                if (type == "string")
+                {
+                    if (!entry.TryGetValue("value", out object rawValue) || !(rawValue is string value))
+                    {
+                        errorResult = Error($"entries[{index}].value must be a string");
+                        return false;
+                    }
+                    plan.StringValue = value;
+                }
+                else
+                {
+                    string assetPath = NormalizeAssetPath(GetString(entry, "assetPath"));
+                    if (!IsAssetPath(assetPath))
+                    {
+                        errorResult = Error($"entries[{index}].assetPath under Assets is required");
+                        return false;
+                    }
+                    plan.Asset = LoadAsset(assetPath, GetString(entry, "subAssetName"));
+                    if (plan.Asset == null)
+                    {
+                        errorResult = Error($"entries[{index}] asset was not found at '{assetPath}'");
+                        return false;
+                    }
+                }
+                state.Plans.Add(plan);
+                index++;
+            }
+            if (state.Plans.Count == 0)
+            {
+                errorResult = Error("entries must be a non-empty array");
+                return false;
+            }
+
+            bool createTables = GetBool(args, "createTables", true);
+            foreach (var locale in state.Plans.Select(plan => plan.Locale)
+                         .GroupBy(locale => locale.Identifier.Code, StringComparer.OrdinalIgnoreCase)
+                         .Select(group => group.First()))
+            {
+                var table = collection.GetTable(locale.Identifier);
+                if (table == null && !createTables)
+                {
+                    errorResult = Error($"Collection '{collectionName}' has no table for Locale '{locale.Identifier.Code}'");
+                    return false;
+                }
+                if (table == null)
+                {
+                    table = collection.AddNewTable(locale.Identifier);
+                    state.CreatedTables.Add(locale.Identifier.Code);
+                }
+                if (type == "string")
+                    state.StringTables[locale.Identifier.Code] = (StringTable)table;
+                else
+                    state.AssetTables[locale.Identifier.Code] = (AssetTable)table;
+            }
+            return true;
+        }
+
+        private static object ExecutePreparedUpserts(LocalizationUpsertState state)
+        {
+            foreach (var plan in state.Plans)
+            {
+                try
+                {
+                    ApplyUpsertPlan(state, plan);
+                }
+                catch (Exception exception)
+                {
+                    state.Errors.Add($"entries[{plan.Index}] failed: {exception.Message}");
+                    if (!state.Execution.ContinueOnError)
+                        break;
+                }
+            }
+            FinishPreparedUpserts(state);
+            return BuildUpsertResult(state);
+        }
+
+        private static void ApplyUpsertPlan(LocalizationUpsertState state, LocalizationUpsertPlan plan)
+        {
+            bool createdKey = state.Collection.SharedData.GetEntry(plan.Key) == null;
+            bool createdEntry;
+            if (state.Type == "string")
+            {
+                var table = state.StringTables[plan.Locale.Identifier.Code];
+                var entry = table.GetEntry(plan.Key);
+                createdEntry = entry == null;
+                if (entry == null)
+                    entry = table.AddEntry(plan.Key, plan.StringValue);
+                entry.Value = plan.StringValue;
+                if (plan.HasSmart)
+                    entry.IsSmart = plan.Smart;
+                EditorUtility.SetDirty(table);
+            }
+            else
+            {
+                var table = state.AssetTables[plan.Locale.Identifier.Code];
+                createdEntry = table.GetEntry(plan.Key) == null;
+                state.AssetCollection.AddAssetToTable(plan.Locale.Identifier, plan.Key, plan.Asset);
+                EditorUtility.SetDirty(table);
+            }
+
+            if (createdKey)
+                state.CreatedKeys.Add(plan.Key);
+            if (createdEntry)
+                state.CreatedEntryCount++;
+            else
+                state.UpdatedEntryCount++;
+            state.Results.Add(new Dictionary<string, object>
+            {
+                { "index", plan.Index },
+                { "key", plan.Key },
+                { "locale", plan.Locale.Identifier.Code },
+                { "createdKey", createdKey },
+                { "createdEntry", createdEntry },
+            });
+            state.NextPlanIndex = Math.Max(state.NextPlanIndex, plan.Index + 1);
+        }
+
+        private static void FinishPreparedUpserts(LocalizationUpsertState state)
+        {
+            EditorUtility.SetDirty(state.Collection);
+            EditorUtility.SetDirty(state.Collection.SharedData);
+            AssetDatabase.SaveAssets();
+            state.Saved = true;
+        }
+
+        private static Dictionary<string, object> BuildUpsertResult(LocalizationUpsertState state)
+        {
+            return new Dictionary<string, object>
+            {
+                { "success", state.Errors.Count == 0 && state.Results.Count == state.Plans.Count },
+                { "collection", state.Collection.TableCollectionName },
+                { "type", state.Type },
+                { "entryCount", state.Plans.Count },
+                { "processedCount", state.Results.Count },
+                { "createdKeyCount", state.CreatedKeys.Count },
+                { "createdEntryCount", state.CreatedEntryCount },
+                { "updatedEntryCount", state.UpdatedEntryCount },
+                { "createdTableCount", state.CreatedTables.Count },
+                { "createdTables", state.CreatedTables },
+                { "saved", state.Saved },
+                { "errors", state.Errors },
+                { "entries", state.Results },
+                { "execution", state.Execution.ToResult(state.Plans.Count) },
             };
         }
 
@@ -1177,6 +1439,39 @@ namespace UnityMCP.Editor.Localization
 
             public Locale Locale { get; }
             public string Value { get; }
+        }
+
+        private sealed class LocalizationUpsertState
+        {
+            public string Type;
+            public LocalizationTableCollection Collection;
+            public AssetTableCollection AssetCollection;
+            public MCPExecutionOptions Execution;
+            public readonly List<LocalizationUpsertPlan> Plans = new List<LocalizationUpsertPlan>();
+            public readonly Dictionary<string, StringTable> StringTables =
+                new Dictionary<string, StringTable>(StringComparer.OrdinalIgnoreCase);
+            public readonly Dictionary<string, AssetTable> AssetTables =
+                new Dictionary<string, AssetTable>(StringComparer.OrdinalIgnoreCase);
+            public readonly HashSet<string> CreatedKeys = new HashSet<string>(StringComparer.Ordinal);
+            public readonly List<string> CreatedTables = new List<string>();
+            public readonly List<string> Errors = new List<string>();
+            public readonly List<Dictionary<string, object>> Results =
+                new List<Dictionary<string, object>>();
+            public int NextPlanIndex;
+            public int CreatedEntryCount;
+            public int UpdatedEntryCount;
+            public bool Saved;
+        }
+
+        private sealed class LocalizationUpsertPlan
+        {
+            public int Index;
+            public string Key;
+            public Locale Locale;
+            public string StringValue;
+            public Object Asset;
+            public bool HasSmart;
+            public bool Smart;
         }
 
         private static Dictionary<string, object> Error(string message)

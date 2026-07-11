@@ -135,7 +135,7 @@ namespace UnityMCP.Editor
         /// component type on a GameObject, or instanceId.
         /// This is the critical wiring feature for connecting objects together.
         /// </summary>
-        public static object SetReference(Dictionary<string, object> args)
+        private static object SetSingleReference(Dictionary<string, object> args)
         {
             var go = MCPGameObjectCommands.FindGameObject(args);
             if (go == null) return new { error = "GameObject not found. Provide 'path' or 'instanceId' for the target GameObject." };
@@ -272,70 +272,167 @@ namespace UnityMCP.Editor
             };
         }
 
-        // ─── New: Batch Wire References ───
-
-        /// <summary>
-        /// Wire multiple references at once. Each entry specifies a target GO,
-        /// property, and what to wire to it. Ideal for scene setup automation.
-        /// </summary>
-        public static object BatchWireReferences(Dictionary<string, object> args)
+        public static object SetReferences(Dictionary<string, object> args)
         {
-            if (!args.ContainsKey("references"))
-                return new { error = "references array is required" };
-
-            var refList = args["references"] as List<object>;
-            if (refList == null || refList.Count == 0)
-                return new { error = "references must be a non-empty array" };
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+                return new { success = false, error = executionError };
+            if (!TryGetReferenceRequests(args, out var requests, out string requestError))
+                return new { success = false, error = requestError };
 
             var results = new List<Dictionary<string, object>>();
-            int successCount = 0;
-            int errorCount = 0;
-
-            // Inherit parent-level path/instanceId/componentType into each ref entry
-            string[] inheritKeys = { "path", "instanceId", "componentType" };
-
-            foreach (var item in refList)
+            foreach (var request in requests)
             {
-                var refArgs = item as Dictionary<string, object>;
-                if (refArgs == null)
-                {
-                    results.Add(new Dictionary<string, object> { { "error", "Invalid reference entry" } });
-                    errorCount++;
+                var result = ToResultDictionary(SetSingleReference(request));
+                results.Add(result);
+                if (IsSuccessfulResult(result) || execution.ContinueOnError)
                     continue;
-                }
-
-                // Merge parent keys into each ref if not already specified
-                foreach (var key in inheritKeys)
-                {
-                    if (!refArgs.ContainsKey(key) && args.ContainsKey(key))
-                        refArgs[key] = args[key];
-                }
-
-                var result = SetReference(refArgs);
-                if (result is Dictionary<string, object> dict && dict.ContainsKey("success"))
-                {
-                    results.Add(dict);
-                    successCount++;
-                }
-                else
-                {
-                    // Convert anonymous type to dict for error entries
-                    var errDict = new Dictionary<string, object>();
-                    foreach (var prop in result.GetType().GetProperties())
-                        errDict[prop.Name] = prop.GetValue(result);
-                    results.Add(errDict);
-                    errorCount++;
-                }
+                break;
             }
 
+            return BuildReferenceResults(requests.Count, results, execution);
+        }
+
+        public static void SetReferencesDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
+        {
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+            {
+                resolve(new { success = false, error = executionError });
+                return;
+            }
+            if (!TryGetReferenceRequests(args, out var requests, out string requestError))
+            {
+                resolve(new { success = false, error = requestError });
+                return;
+            }
+            if (execution.ResolveMode(requests.Count) == MCPExecutionMode.Immediate)
+            {
+                resolve(SetReferences(args));
+                return;
+            }
+
+            var results = new List<Dictionary<string, object>>();
+            int nextIndex = 0;
+            double startedAt = EditorApplication.timeSinceStartup;
+            EditorApplication.CallbackFunction tick = null;
+            Action<object> complete = result =>
+            {
+                if (tick != null)
+                    EditorApplication.update -= tick;
+                resolve(result);
+            };
+            tick = () =>
+            {
+                int elapsedMs = (int)((EditorApplication.timeSinceStartup - startedAt) * 1000d);
+                if (elapsedMs >= execution.TimeoutMs)
+                {
+                    var timeout = BuildReferenceResults(requests.Count, results, execution);
+                    timeout["success"] = false;
+                    timeout["error"] = $"Reference assignment timed out after {execution.TimeoutMs} ms";
+                    complete(timeout);
+                    return;
+                }
+
+                double frameStartedAt = EditorApplication.timeSinceStartup;
+                int processedThisFrame = 0;
+                while (nextIndex < requests.Count)
+                {
+                    var result = ToResultDictionary(SetSingleReference(requests[nextIndex++]));
+                    results.Add(result);
+                    processedThisFrame++;
+                    progress?.Invoke(new Dictionary<string, object>
+                    {
+                        { "phase", "assigning" },
+                        { "processedCount", nextIndex },
+                        { "referenceCount", requests.Count },
+                        { "elapsedMs", elapsedMs },
+                        { "execution", execution.ToResult(requests.Count) },
+                    });
+
+                    if (!IsSuccessfulResult(result) && !execution.ContinueOnError)
+                    {
+                        complete(BuildReferenceResults(requests.Count, results, execution));
+                        return;
+                    }
+
+                    double frameElapsedMs = (EditorApplication.timeSinceStartup - frameStartedAt) * 1000d;
+                    if (processedThisFrame >= execution.OperationsPerFrame ||
+                        frameElapsedMs >= execution.FrameBudgetMs)
+                        break;
+                }
+
+                if (nextIndex >= requests.Count)
+                    complete(BuildReferenceResults(requests.Count, results, execution));
+            };
+            EditorApplication.update += tick;
+            tick();
+        }
+
+        private static bool TryGetReferenceRequests(Dictionary<string, object> args,
+            out List<Dictionary<string, object>> requests, out string error)
+        {
+            requests = new List<Dictionary<string, object>>();
+            error = "";
+            if (args == null || !args.TryGetValue("references", out object rawReferences) ||
+                !(rawReferences is IList referenceList) || referenceList.Count == 0)
+            {
+                error = "references must be a non-empty array";
+                return false;
+            }
+
+            string[] inheritKeys = { "path", "instanceId", "componentType" };
+            for (int index = 0; index < referenceList.Count; index++)
+            {
+                if (!(referenceList[index] is Dictionary<string, object> request))
+                {
+                    error = $"references[{index}] must be an object";
+                    return false;
+                }
+                foreach (string key in inheritKeys)
+                {
+                    if (!request.ContainsKey(key) && args.ContainsKey(key))
+                        request[key] = args[key];
+                }
+                requests.Add(request);
+            }
+            return true;
+        }
+
+        private static Dictionary<string, object> BuildReferenceResults(int requestCount,
+            List<Dictionary<string, object>> results, MCPExecutionOptions execution)
+        {
+            int succeeded = results.FindAll(IsSuccessfulResult).Count;
+            int failed = results.Count - succeeded;
             return new Dictionary<string, object>
             {
-                { "success", errorCount == 0 },
-                { "total", refList.Count },
-                { "succeeded", successCount },
-                { "failed", errorCount },
+                { "success", failed == 0 && results.Count == requestCount },
+                { "referenceCount", requestCount },
+                { "processedCount", results.Count },
+                { "succeeded", succeeded },
+                { "failed", failed },
                 { "results", results },
+                { "execution", execution.ToResult(requestCount) },
             };
+        }
+
+        private static bool IsSuccessfulResult(Dictionary<string, object> result)
+        {
+            return result.TryGetValue("success", out object success) && success is bool value && value;
+        }
+
+        private static Dictionary<string, object> ToResultDictionary(object result)
+        {
+            if (result is Dictionary<string, object> dictionary)
+                return dictionary;
+            var converted = new Dictionary<string, object>();
+            if (result == null)
+            {
+                converted["error"] = "Reference assignment returned no result";
+                return converted;
+            }
+            foreach (var property in result.GetType().GetProperties())
+                converted[property.Name] = property.GetValue(result);
+            return converted;
         }
 
         // ─── New: Get Referenceable Objects ───

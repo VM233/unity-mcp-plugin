@@ -1563,7 +1563,7 @@ namespace UnityMCP.Editor
         /// Apply multiple prefab asset edits in one load/save transaction.
         /// If any operation fails, no prefab asset save is performed.
         /// </summary>
-        public static object BatchEdit(Dictionary<string, object> args)
+        private static object ApplyTransactionImmediate(Dictionary<string, object> args)
         {
             string assetPath = GetString(args, "assetPath");
             if (string.IsNullOrEmpty(assetPath))
@@ -1629,7 +1629,7 @@ namespace UnityMCP.Editor
             }
             catch (Exception ex)
             {
-                return new { error = $"Failed to batch edit prefab: {ex.Message}", stackTrace = ex.StackTrace };
+                return new { error = $"Failed to edit prefab transaction: {ex.Message}", stackTrace = ex.StackTrace };
             }
             finally
             {
@@ -1642,14 +1642,41 @@ namespace UnityMCP.Editor
         public static object TransactionEdit(Dictionary<string, object> args)
         {
             args = PrepareTransactionEditArguments(args);
-            return AddTransactionEditMetadata(BatchEdit(args), args);
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+                return new { success = false, error = executionError };
+            if (execution.ContinueOnError)
+                return new { success = false, error = "execution.continueOnError is not supported by atomic prefab transactions" };
+            var result = AddTransactionEditMetadata(ApplyTransactionImmediate(args), args);
+            AddExecutionMetadata(result, execution, GetDictionaryList(args, "operations").Count);
+            return result;
         }
 
         public static void TransactionEditDeferred(Dictionary<string, object> args, Action<object> resolve,
             Action<object> progress)
         {
             args = PrepareTransactionEditArguments(args);
-            BatchEditDeferred(args, result => resolve(AddTransactionEditMetadata(result, args)), progress);
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+            {
+                resolve(new { success = false, error = executionError });
+                return;
+            }
+            if (execution.ContinueOnError)
+            {
+                resolve(new { success = false, error = "execution.continueOnError is not supported by atomic prefab transactions" });
+                return;
+            }
+            BatchEditDeferred(args, execution, result =>
+            {
+                result = AddTransactionEditMetadata(result, args);
+                AddExecutionMetadata(result, execution, GetDictionaryList(args, "operations").Count);
+                resolve(result);
+            }, progress);
+        }
+
+        private static void AddExecutionMetadata(object result, MCPExecutionOptions execution, int operationCount)
+        {
+            if (result is Dictionary<string, object> dictionary)
+                dictionary["execution"] = execution.ToResult(operationCount);
         }
 
         private static Dictionary<string, object> PrepareTransactionEditArguments(Dictionary<string, object> args)
@@ -1684,19 +1711,15 @@ namespace UnityMCP.Editor
             return result;
         }
 
-        public static void BatchEditDeferred(Dictionary<string, object> args, Action<object> resolve)
-        {
-            BatchEditDeferred(args, resolve, _ => { });
-        }
-
-        public static void BatchEditDeferred(Dictionary<string, object> args, Action<object> resolve,
+        private static void BatchEditDeferred(Dictionary<string, object> args, MCPExecutionOptions execution,
+            Action<object> resolve,
             Action<object> progress)
         {
             var componentTypes = CollectBatchEditComponentTypes(args);
             bool refreshAssets = GetBool(args, "refreshAssets", true);
             if (GetBool(args, "waitForTypes", true) == false || componentTypes.Count == 0)
             {
-                StartBatchEditDeferred(args, resolve, progress);
+                StartBatchEditDeferred(args, execution, resolve, progress);
                 return;
             }
 
@@ -1761,7 +1784,7 @@ namespace UnityMCP.Editor
                         {
                             if (tick != null)
                                 EditorApplication.update -= tick;
-                            StartBatchEditDeferred(args, resolve, progress);
+                            StartBatchEditDeferred(args, execution, resolve, progress);
                             return;
                         }
                     }
@@ -1864,11 +1887,13 @@ namespace UnityMCP.Editor
             public int TimeoutMs;
             public int OperationsPerFrame;
             public int FrameBudgetMs;
+            public MCPExecutionOptions Execution;
             public bool SaveAttempted;
             public bool Saved;
         }
 
-        private static void StartBatchEditDeferred(Dictionary<string, object> args, Action<object> resolve,
+        private static void StartBatchEditDeferred(Dictionary<string, object> args, MCPExecutionOptions execution,
+            Action<object> resolve,
             Action<object> progress)
         {
             string assetPath = GetString(args, "assetPath");
@@ -1903,15 +1928,17 @@ namespace UnityMCP.Editor
                 return;
             }
 
+            bool runBatched = execution.ResolveMode(operations.Count) == MCPExecutionMode.Batched;
             var state = new BatchEditDeferredState
             {
                 AssetPath = assetPath,
                 Operations = operations,
                 BeforeSnapshot = CaptureAssetText(assetPath),
                 StartedAt = EditorApplication.timeSinceStartup,
-                TimeoutMs = Math.Max(1, GetInt(args, "batchEditTimeoutMs", 90000)),
-                OperationsPerFrame = Math.Max(1, GetInt(args, "operationsPerFrame", 25)),
-                FrameBudgetMs = Math.Max(1, GetInt(args, "operationFrameBudgetMs", 8)),
+                TimeoutMs = execution.TimeoutMs,
+                OperationsPerFrame = runBatched ? execution.OperationsPerFrame : int.MaxValue,
+                FrameBudgetMs = runBatched ? execution.FrameBudgetMs : int.MaxValue,
+                Execution = execution,
             };
 
             try
@@ -1972,8 +1999,8 @@ namespace UnityMCP.Editor
                     if (elapsedMs >= state.TimeoutMs)
                     {
                         complete(BuildBatchEditFailure(state, args,
-                            $"Batch edit timed out after {state.TimeoutMs} ms before saving.",
-                            "batch_edit_timeout", true, elapsedMs, state.NextOperationIndex));
+                            $"Prefab transaction timed out after {state.TimeoutMs} ms before saving.",
+                            "transaction_edit_timeout", true, elapsedMs, state.NextOperationIndex));
                         return;
                     }
 
@@ -2033,6 +2060,7 @@ namespace UnityMCP.Editor
                         { "appliedOperationCount", state.Summaries.Count },
                         { "operationSummaries", state.Summaries },
                         { "elapsedMs", (int)((EditorApplication.timeSinceStartup - state.StartedAt) * 1000d) },
+                        { "execution", state.Execution.ToResult(state.Operations.Count) },
                     };
                     AddPrefabFileDiff(result, state.BeforeSnapshot, state.AssetPath, args);
                     complete(result);
@@ -2041,7 +2069,7 @@ namespace UnityMCP.Editor
                 {
                     int elapsedMs = (int)((EditorApplication.timeSinceStartup - state.StartedAt) * 1000d);
                     complete(BuildBatchEditFailure(state, args,
-                        $"Failed to batch edit prefab: {ex.Message}", "batch_edit_exception",
+                        $"Failed to edit prefab transaction: {ex.Message}", "transaction_edit_exception",
                         false, elapsedMs, state.NextOperationIndex, null, ex.StackTrace));
                 }
             };
@@ -2069,6 +2097,7 @@ namespace UnityMCP.Editor
                 { "partialPersisted", saveAttemptedWithoutSuccess ? (object)null : false },
                 { "partialPersistedKnown", saveAttemptedWithoutSuccess == false },
                 { "persistedState", state.Saved ? "complete" : saveAttemptedWithoutSuccess ? "unknown" : "none" },
+                { "execution", state.Execution.ToResult(state.Operations.Count) },
             };
         }
 
@@ -2084,7 +2113,7 @@ namespace UnityMCP.Editor
                 { "errorCode", errorCode },
                 { "retryable", retryable },
                 { "success", false },
-                { "timedOut", errorCode == "batch_edit_timeout" },
+                { "timedOut", errorCode == "transaction_edit_timeout" },
                 { "saved", state.Saved },
                 { "saveAttempted", state.SaveAttempted },
                 { "partialPersisted", saveAttemptedWithoutSuccess ? (object)null : false },
@@ -2098,6 +2127,7 @@ namespace UnityMCP.Editor
                 { "operationSummaries", state.Summaries },
                 { "elapsedMs", elapsedMs },
                 { "timeoutMs", state.TimeoutMs },
+                { "execution", state.Execution.ToResult(state.Operations.Count) },
             };
 
             if (failedOperation != null)

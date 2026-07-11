@@ -315,110 +315,146 @@ namespace UnityMCP.Editor
 
         public static object Move(Dictionary<string, object> args)
         {
-            string path = NormalizeAssetPath(GetFirstString(args, "path", "assetPath"));
-            string destinationPath = NormalizeAssetPath(GetFirstString(args, "destinationPath", "targetPath",
-                "destinationFolder", "targetFolder", "folder"));
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+                return new { success = false, error = executionError };
             bool dryRun = GetBool(args, "dryRun", false);
-
-            if (string.IsNullOrEmpty(path))
-                return new { error = "path or assetPath is required" };
-            if (string.IsNullOrEmpty(destinationPath))
-                return new { error = "destinationPath, targetPath, or destinationFolder is required" };
-            if (!AssetExists(path))
-                return new { error = $"Asset not found at '{path}'" };
-
-            string oldGuid = AssetDatabase.AssetPathToGUID(path);
-            string oldMetaPath = GetMetaPath(path);
-            bool oldMetaExists = File.Exists(GetAbsolutePath(oldMetaPath));
-            string targetPath = NormalizeMoveTargetPath(path, destinationPath);
-            string targetDirectory = Path.GetDirectoryName(targetPath)?.Replace('\\', '/') ?? "";
-            bool sourceIsFolder = AssetDatabase.IsValidFolder(path);
-
-            if (!sourceIsFolder && !AssetDatabase.IsValidFolder(destinationPath))
-            {
-                string sourceExtension = Path.GetExtension(path);
-                string targetExtension = Path.GetExtension(targetPath);
-                if (string.IsNullOrEmpty(targetExtension))
-                    return new { error = "destinationPath must be an existing folder or include the asset file extension" };
-                if (!string.Equals(sourceExtension, targetExtension, StringComparison.OrdinalIgnoreCase))
-                    return new { error = $"Changing file extension is not supported: '{sourceExtension}' to '{targetExtension}'" };
-            }
-
-            if (!string.IsNullOrEmpty(targetDirectory) && !AssetDatabase.IsValidFolder(targetDirectory))
-                return new { error = $"Target directory does not exist: '{targetDirectory}'" };
-            if (!string.Equals(path, targetPath, StringComparison.OrdinalIgnoreCase) && AssetExists(targetPath))
-                return new { error = $"Target asset already exists at '{targetPath}'" };
+            if (!TryPrepareMoves(args, out var entries, out object preparationError))
+                return preparationError;
 
             if (dryRun)
-            {
-                return new Dictionary<string, object>
-                {
-                    { "success", true },
-                    { "dryRun", true },
-                    { "oldPath", path },
-                    { "requestedDestinationPath", destinationPath },
-                    { "targetPath", targetPath },
-                    { "oldGuid", oldGuid },
-                    { "oldMetaPath", oldMetaPath },
-                    { "targetMetaPath", GetMetaPath(targetPath) },
-                    { "oldMetaExists", oldMetaExists },
-                };
-            }
-
-            string error = AssetDatabase.MoveAsset(path, targetPath);
-            if (!string.IsNullOrEmpty(error))
-                return new { error };
-
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
-
-            string newPath = AssetDatabase.GUIDToAssetPath(oldGuid);
-            string newGuid = string.IsNullOrEmpty(newPath) ? "" : AssetDatabase.AssetPathToGUID(newPath);
-            bool guidChanged = !string.Equals(oldGuid, newGuid, StringComparison.Ordinal);
-            string newMetaPath = string.IsNullOrEmpty(newPath) ? "" : GetMetaPath(newPath);
-            bool newMetaExists = !string.IsNullOrEmpty(newMetaPath) && File.Exists(GetAbsolutePath(newMetaPath));
-
-            return new Dictionary<string, object>
-            {
-                { "success", true },
-                { "dryRun", false },
-                { "oldPath", path },
-                { "requestedDestinationPath", destinationPath },
-                { "newPath", newPath },
-                { "targetPath", targetPath },
-                { "actualPathMatchesTarget", string.Equals(newPath, targetPath, StringComparison.OrdinalIgnoreCase) },
-                { "oldGuid", oldGuid },
-                { "newGuid", newGuid },
-                { "guidChanged", guidChanged },
-                { "metaPreserved", !guidChanged },
-                { "oldMetaPath", oldMetaPath },
-                { "newMetaPath", newMetaPath },
-                { "oldMetaExists", oldMetaExists },
-                { "newMetaExists", newMetaExists },
-            };
+                return BuildMoveResult(entries, execution, true, new List<string>());
+            return ExecutePreparedMoves(entries, execution);
         }
 
-        public static object MoveBatch(Dictionary<string, object> args)
+        public static void MoveDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
         {
-            bool dryRun = GetBool(args, "dryRun", false);
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+            {
+                resolve(new { success = false, error = executionError });
+                return;
+            }
+            if (!TryPrepareMoves(args, out var entries, out object preparationError))
+            {
+                resolve(preparationError);
+                return;
+            }
+            if (GetBool(args, "dryRun", false))
+            {
+                resolve(BuildMoveResult(entries, execution, true, new List<string>()));
+                return;
+            }
+            if (execution.ResolveMode(entries.Count) == MCPExecutionMode.Immediate)
+            {
+                resolve(ExecutePreparedMoves(entries, execution));
+                return;
+            }
+
+            int nextIndex = 0;
+            double startedAt = EditorApplication.timeSinceStartup;
+            var errors = new List<string>();
+            EditorApplication.CallbackFunction tick = null;
+            Action<object> complete = result =>
+            {
+                if (tick != null)
+                    EditorApplication.update -= tick;
+                resolve(result);
+            };
+            tick = () =>
+            {
+                int elapsedMs = (int)((EditorApplication.timeSinceStartup - startedAt) * 1000d);
+                if (elapsedMs >= execution.TimeoutMs)
+                {
+                    string timeoutError = $"Asset moves timed out after {execution.TimeoutMs} ms";
+                    errors.Add(timeoutError);
+                    var rollbackErrors = RollbackMoves(entries);
+                    errors.AddRange(rollbackErrors);
+                    FinishAssetMoves();
+                    complete(BuildMoveFailure(entries, execution, timeoutError, errors));
+                    return;
+                }
+
+                double frameStartedAt = EditorApplication.timeSinceStartup;
+                int processedThisFrame = 0;
+                AssetDatabase.StartAssetEditing();
+                try
+                {
+                    while (nextIndex < entries.Count)
+                    {
+                        var entry = entries[nextIndex++];
+                        string error = AssetDatabase.MoveAsset(entry.OldPath, entry.TargetPath);
+                        if (string.IsNullOrEmpty(error))
+                            entry.Moved = true;
+                        else
+                        {
+                            entry.Error = error;
+                            errors.Add($"Move {entry.Index} failed: {error}");
+                            if (!execution.ContinueOnError)
+                                break;
+                        }
+
+                        processedThisFrame++;
+                        progress?.Invoke(BuildMoveProgress(entries, execution, nextIndex, elapsedMs));
+                        double frameElapsedMs = (EditorApplication.timeSinceStartup - frameStartedAt) * 1000d;
+                        if (processedThisFrame >= execution.OperationsPerFrame ||
+                            frameElapsedMs >= execution.FrameBudgetMs)
+                            break;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    errors.Add(exception.Message);
+                }
+                finally
+                {
+                    AssetDatabase.StopAssetEditing();
+                }
+
+                if (errors.Count > 0 && !execution.ContinueOnError)
+                {
+                    errors.AddRange(RollbackMoves(entries));
+                    FinishAssetMoves();
+                    complete(BuildMoveFailure(entries, execution, errors[0], errors));
+                    return;
+                }
+                if (nextIndex < entries.Count)
+                    return;
+
+                FinishAssetMoves();
+                if (errors.Count > 0)
+                    complete(BuildMoveFailure(entries, execution, "One or more asset moves failed", errors));
+                else
+                    complete(BuildMoveResult(entries, execution, false, errors));
+            };
+            EditorApplication.update += tick;
+            tick();
+        }
+
+        private static bool TryPrepareMoves(Dictionary<string, object> args, out List<BatchMoveEntry> entries,
+            out object errorResult)
+        {
+            entries = new List<BatchMoveEntry>();
+            errorResult = null;
             List<Dictionary<string, object>> requestedMoves = GetDictionaryList(args, "moves");
             if (requestedMoves.Count == 0)
-                return new { error = "moves must contain at least one move request" };
+            {
+                errorResult = new { error = "moves must contain at least one move request" };
+                return false;
+            }
 
-            var entries = new List<BatchMoveEntry>();
             for (int index = 0; index < requestedMoves.Count; index++)
             {
                 var request = requestedMoves[index];
                 string path = NormalizeAssetPath(GetFirstString(request, "path", "assetPath"));
                 string destinationPath = NormalizeAssetPath(GetFirstString(request, "destinationPath", "targetPath",
                     "destinationFolder", "targetFolder", "folder"));
-
                 if (string.IsNullOrEmpty(path))
-                    return BatchMoveValidationError(index, "path or assetPath is required");
+                    return FailMovePreparation(index, "path or assetPath is required", out errorResult);
                 if (string.IsNullOrEmpty(destinationPath))
-                    return BatchMoveValidationError(index, "destinationPath, targetPath, or destinationFolder is required");
+                    return FailMovePreparation(index,
+                        "destinationPath, targetPath, or destinationFolder is required", out errorResult);
                 if (!AssetExists(path))
-                    return BatchMoveValidationError(index, $"Asset not found at '{path}'");
+                    return FailMovePreparation(index, $"Asset not found at '{path}'", out errorResult);
 
                 string targetPath = NormalizeMoveTargetPath(path, destinationPath);
                 string targetDirectory = Path.GetDirectoryName(targetPath)?.Replace('\\', '/') ?? "";
@@ -428,18 +464,22 @@ namespace UnityMCP.Editor
                     string sourceExtension = Path.GetExtension(path);
                     string targetExtension = Path.GetExtension(targetPath);
                     if (string.IsNullOrEmpty(targetExtension))
-                        return BatchMoveValidationError(index, "destinationPath must be an existing folder or include the asset file extension");
+                        return FailMovePreparation(index,
+                            "destinationPath must be an existing folder or include the asset file extension",
+                            out errorResult);
                     if (!string.Equals(sourceExtension, targetExtension, StringComparison.OrdinalIgnoreCase))
-                        return BatchMoveValidationError(index,
-                            $"Changing file extension is not supported: '{sourceExtension}' to '{targetExtension}'");
+                        return FailMovePreparation(index,
+                            $"Changing file extension is not supported: '{sourceExtension}' to '{targetExtension}'",
+                            out errorResult);
                 }
 
                 if (!string.IsNullOrEmpty(targetDirectory) && !AssetDatabase.IsValidFolder(targetDirectory))
-                    return BatchMoveValidationError(index, $"Target directory does not exist: '{targetDirectory}'");
+                    return FailMovePreparation(index, $"Target directory does not exist: '{targetDirectory}'",
+                        out errorResult);
                 if (string.Equals(path, targetPath, StringComparison.OrdinalIgnoreCase))
-                    return BatchMoveValidationError(index, "Source and target paths are the same");
+                    return FailMovePreparation(index, "Source and target paths are the same", out errorResult);
                 if (AssetExists(targetPath))
-                    return BatchMoveValidationError(index, $"Target asset already exists at '{targetPath}'");
+                    return FailMovePreparation(index, $"Target asset already exists at '{targetPath}'", out errorResult);
 
                 entries.Add(new BatchMoveEntry
                 {
@@ -459,97 +499,128 @@ namespace UnityMCP.Editor
                 {
                     if (string.Equals(entries[index].OldPath, entries[otherIndex].OldPath,
                             StringComparison.OrdinalIgnoreCase))
-                        return BatchMoveValidationError(otherIndex, $"Duplicate source path '{entries[otherIndex].OldPath}'");
+                        return FailMovePreparation(otherIndex,
+                            $"Duplicate source path '{entries[otherIndex].OldPath}'", out errorResult);
                     if (string.Equals(entries[index].TargetPath, entries[otherIndex].TargetPath,
                             StringComparison.OrdinalIgnoreCase))
-                        return BatchMoveValidationError(otherIndex, $"Duplicate target path '{entries[otherIndex].TargetPath}'");
+                        return FailMovePreparation(otherIndex,
+                            $"Duplicate target path '{entries[otherIndex].TargetPath}'", out errorResult);
                 }
             }
 
-            if (dryRun)
-            {
-                return new Dictionary<string, object>
-                {
-                    { "success", true },
-                    { "dryRun", true },
-                    { "moves", entries.ConvertAll(CreateBatchMoveResult) },
-                };
-            }
+            return true;
+        }
 
-            string moveError = "";
-            var rollbackErrors = new List<string>();
+        private static bool FailMovePreparation(int index, string error, out object errorResult)
+        {
+            errorResult = BatchMoveValidationError(index, error);
+            return false;
+        }
+
+        private static object ExecutePreparedMoves(List<BatchMoveEntry> entries, MCPExecutionOptions execution)
+        {
+            var errors = new List<string>();
             AssetDatabase.StartAssetEditing();
             try
             {
-                foreach (BatchMoveEntry entry in entries)
+                foreach (var entry in entries)
                 {
                     string error = AssetDatabase.MoveAsset(entry.OldPath, entry.TargetPath);
-                    if (!string.IsNullOrEmpty(error))
+                    if (string.IsNullOrEmpty(error))
                     {
-                        moveError = $"Move {entry.Index} failed: {error}";
+                        entry.Moved = true;
+                        continue;
+                    }
+
+                    entry.Error = error;
+                    errors.Add($"Move {entry.Index} failed: {error}");
+                    if (!execution.ContinueOnError)
                         break;
-                    }
-
-                    entry.Moved = true;
-                }
-
-                if (!string.IsNullOrEmpty(moveError))
-                {
-                    for (int index = entries.Count - 1; index >= 0; index--)
-                    {
-                        BatchMoveEntry entry = entries[index];
-                        if (!entry.Moved)
-                            continue;
-
-                        string rollbackError = AssetDatabase.MoveAsset(entry.TargetPath, entry.OldPath);
-                        if (string.IsNullOrEmpty(rollbackError))
-                            entry.RolledBack = true;
-                        else
-                            rollbackErrors.Add($"Rollback {entry.Index} failed: {rollbackError}");
-                    }
                 }
             }
             catch (Exception exception)
             {
-                moveError = $"Batch move threw: {exception.Message}";
-                for (int index = entries.Count - 1; index >= 0; index--)
-                {
-                    BatchMoveEntry entry = entries[index];
-                    if (!entry.Moved || entry.RolledBack)
-                        continue;
-
-                    string rollbackError = AssetDatabase.MoveAsset(entry.TargetPath, entry.OldPath);
-                    if (string.IsNullOrEmpty(rollbackError))
-                        entry.RolledBack = true;
-                    else
-                        rollbackErrors.Add($"Rollback {entry.Index} failed: {rollbackError}");
-                }
+                errors.Add(exception.Message);
             }
             finally
             {
                 AssetDatabase.StopAssetEditing();
             }
 
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
+            if (errors.Count > 0 && !execution.ContinueOnError)
+                errors.AddRange(RollbackMoves(entries));
+            FinishAssetMoves();
+            return errors.Count == 0
+                ? BuildMoveResult(entries, execution, false, errors)
+                : BuildMoveFailure(entries, execution, errors[0], errors);
+        }
 
-            if (!string.IsNullOrEmpty(moveError))
+        private static List<string> RollbackMoves(List<BatchMoveEntry> entries)
+        {
+            var rollbackErrors = new List<string>();
+            AssetDatabase.StartAssetEditing();
+            try
             {
-                return new Dictionary<string, object>
+                for (int index = entries.Count - 1; index >= 0; index--)
                 {
-                    { "success", false },
-                    { "error", moveError },
-                    { "rolledBack", rollbackErrors.Count == 0 },
-                    { "rollbackErrors", rollbackErrors },
-                    { "moves", entries.ConvertAll(CreateBatchMoveResult) },
-                };
+                    var entry = entries[index];
+                    if (!entry.Moved || entry.RolledBack)
+                        continue;
+                    string error = AssetDatabase.MoveAsset(entry.TargetPath, entry.OldPath);
+                    if (string.IsNullOrEmpty(error))
+                        entry.RolledBack = true;
+                    else
+                        rollbackErrors.Add($"Rollback {entry.Index} failed: {error}");
+                }
             }
+            finally
+            {
+                AssetDatabase.StopAssetEditing();
+            }
+            return rollbackErrors;
+        }
 
+        private static void FinishAssetMoves()
+        {
+            AssetDatabase.SaveAssets();
+        }
+
+        private static Dictionary<string, object> BuildMoveResult(List<BatchMoveEntry> entries,
+            MCPExecutionOptions execution, bool dryRun, List<string> errors)
+        {
             return new Dictionary<string, object>
             {
-                { "success", true },
-                { "dryRun", false },
+                { "success", errors.Count == 0 },
+                { "dryRun", dryRun },
+                { "moveCount", entries.Count },
+                { "movedCount", entries.FindAll(entry => entry.Moved && !entry.RolledBack).Count },
+                { "failedCount", entries.FindAll(entry => !string.IsNullOrEmpty(entry.Error)).Count },
                 { "moves", entries.ConvertAll(CreateBatchMoveResult) },
+                { "execution", execution.ToResult(entries.Count) },
+            };
+        }
+
+        private static Dictionary<string, object> BuildMoveFailure(List<BatchMoveEntry> entries,
+            MCPExecutionOptions execution, string error, List<string> errors)
+        {
+            var result = BuildMoveResult(entries, execution, false, errors);
+            result["success"] = false;
+            result["error"] = error;
+            result["errors"] = errors;
+            result["rolledBack"] = entries.TrueForAll(entry => !entry.Moved || entry.RolledBack);
+            return result;
+        }
+
+        private static Dictionary<string, object> BuildMoveProgress(List<BatchMoveEntry> entries,
+            MCPExecutionOptions execution, int nextIndex, int elapsedMs)
+        {
+            return new Dictionary<string, object>
+            {
+                { "phase", "moving" },
+                { "moveCount", entries.Count },
+                { "processedCount", nextIndex },
+                { "elapsedMs", elapsedMs },
+                { "execution", execution.ToResult(entries.Count) },
             };
         }
 
@@ -852,6 +923,7 @@ namespace UnityMCP.Editor
                 { "currentMetaExists", !string.IsNullOrEmpty(currentMetaPath) && File.Exists(GetAbsolutePath(currentMetaPath)) },
                 { "moved", entry.Moved },
                 { "rolledBack", entry.RolledBack },
+                { "error", entry.Error ?? "" },
             };
         }
 
@@ -866,6 +938,7 @@ namespace UnityMCP.Editor
             public bool OldMetaExists;
             public bool Moved;
             public bool RolledBack;
+            public string Error;
         }
     }
 }
