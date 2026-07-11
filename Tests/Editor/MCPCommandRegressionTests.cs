@@ -482,7 +482,10 @@ namespace UnityMCP.Editor.Tests
 
             Assert.That(response["success"], Is.EqualTo(true));
             Assert.That(response["reconciledExternalChanges"], Is.EqualTo(true));
-            Assert.That(AssetDatabase.AssetPathToGUID(deletedPath), Is.Empty);
+            Assert.That(File.Exists(GetAbsolutePath(deletedPath)), Is.False);
+            Assert.That(File.Exists(GetAbsolutePath(deletedPath) + ".meta"), Is.False);
+            Assert.That(AssetDatabase.LoadMainAssetAtPath(deletedPath), Is.Null);
+            Assert.That(AssetDatabase.GetMainAssetTypeAtPath(deletedPath), Is.Null);
         }
 
         [Test]
