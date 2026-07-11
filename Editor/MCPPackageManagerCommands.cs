@@ -617,7 +617,8 @@ namespace UnityMCP.Editor
             return string.Equals(lockInfo.version, identifier, StringComparison.OrdinalIgnoreCase);
         }
 
-        private static bool IsPackageInfoResolvedToIdentifier(PackageInfo packageInfo, string identifier)
+        private static bool IsPackageInfoResolvedToIdentifier(UnityEditor.PackageManager.PackageInfo packageInfo,
+            string identifier)
         {
             if (packageInfo == null || string.IsNullOrEmpty(packageInfo.packageId))
                 return false;
