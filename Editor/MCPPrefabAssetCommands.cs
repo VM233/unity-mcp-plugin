@@ -1641,6 +1641,19 @@ namespace UnityMCP.Editor
 
         public static object TransactionEdit(Dictionary<string, object> args)
         {
+            args = PrepareTransactionEditArguments(args);
+            return AddTransactionEditMetadata(BatchEdit(args), args);
+        }
+
+        public static void TransactionEditDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
+        {
+            args = PrepareTransactionEditArguments(args);
+            BatchEditDeferred(args, result => resolve(AddTransactionEditMetadata(result, args)), progress);
+        }
+
+        private static Dictionary<string, object> PrepareTransactionEditArguments(Dictionary<string, object> args)
+        {
             if (args == null)
                 args = new Dictionary<string, object>();
 
@@ -1651,7 +1664,11 @@ namespace UnityMCP.Editor
             if (args.ContainsKey("prefabFileDiffContextLines") == false)
                 args["prefabFileDiffContextLines"] = 0;
 
-            var batchResult = BatchEdit(args);
+            return args;
+        }
+
+        private static object AddTransactionEditMetadata(object batchResult, Dictionary<string, object> args)
+        {
             var result = batchResult as Dictionary<string, object>;
             if (result == null)
                 return batchResult;
@@ -1679,16 +1696,7 @@ namespace UnityMCP.Editor
             bool refreshAssets = GetBool(args, "refreshAssets", true);
             if (GetBool(args, "waitForTypes", true) == false || componentTypes.Count == 0)
             {
-                if (refreshAssets)
-                {
-                    RefreshAssetsThenDeferred(args, resolve,
-                        () => StartBatchEditDeferred(args, resolve, progress));
-                }
-                else
-                {
-                    StartBatchEditDeferred(args, resolve, progress);
-                }
-
+                StartBatchEditDeferred(args, resolve, progress);
                 return;
             }
 
@@ -1696,7 +1704,6 @@ namespace UnityMCP.Editor
             int stableMs = Math.Max(0, GetInt(args, "typeResolveStableMs", 500));
             double startTime = EditorApplication.timeSinceStartup;
             double stableStartTime = -1;
-            bool refreshRequested = false;
 
             EditorApplication.CallbackFunction tick = null;
             Action<object> complete = result =>
@@ -1710,16 +1717,39 @@ namespace UnityMCP.Editor
             {
                 try
                 {
-                    if (refreshAssets && refreshRequested == false)
-                    {
-                        refreshRequested = true;
-                        RefreshAssetDatabase(args);
-                    }
-
                     bool editorBusy = EditorApplication.isCompiling || EditorApplication.isUpdating;
                     var missingTypes = componentTypes
                         .Where(componentType => MCPComponentCommands.FindType(componentType) == null)
                         .ToList();
+
+                    if (refreshAssets && missingTypes.Count > 0 && editorBusy == false)
+                    {
+                        complete(BuildAssetRefreshScheduledResult(componentTypes, missingTypes));
+                        ScheduleAssetRefreshAfterResponse(args);
+                        return;
+                    }
+
+                    if (refreshAssets && editorBusy)
+                    {
+                        complete(new Dictionary<string, object>
+                        {
+                            { "success", false },
+                            { "error", "Unity is compiling or importing assets. Retry the prefab edit after the Editor reconnects and becomes idle." },
+                            { "message", "Unity is compiling or importing assets. Retry the prefab edit after the Editor reconnects and becomes idle." },
+                            { "errorCode", "editor_busy_before_prefab_edit" },
+                            { "retryable", true },
+                            { "typeResolution", new Dictionary<string, object>
+                                {
+                                    { "componentTypes", componentTypes },
+                                    { "missingTypes", missingTypes },
+                                    { "isCompiling", EditorApplication.isCompiling },
+                                    { "isUpdating", EditorApplication.isUpdating },
+                                    { "refreshedAssets", false },
+                                }
+                            },
+                        });
+                        return;
+                    }
 
                     if (missingTypes.Count == 0 && editorBusy == false)
                     {
@@ -1752,7 +1782,7 @@ namespace UnityMCP.Editor
                                     { "missingTypes", missingTypes },
                                     { "elapsedMs", (int)elapsedMs },
                                     { "timeoutMs", timeoutMs },
-                                    { "refreshedAssets", refreshRequested },
+                                    { "refreshedAssets", false },
                                     { "isCompiling", EditorApplication.isCompiling },
                                     { "isUpdating", EditorApplication.isUpdating },
                                     { "likelyReason", EditorApplication.isCompiling || EditorApplication.isUpdating ? "unity_busy" : "type_not_found" },
@@ -1769,6 +1799,57 @@ namespace UnityMCP.Editor
 
             EditorApplication.update += tick;
             tick();
+        }
+
+        private static Dictionary<string, object> BuildAssetRefreshScheduledResult(List<string> componentTypes,
+            List<string> missingTypes)
+        {
+            const string message = "Referenced component types are not loaded yet. An asset refresh was scheduled after this response; retry the prefab edit after Unity reconnects and becomes idle.";
+            return new Dictionary<string, object>
+            {
+                { "success", false },
+                { "error", message },
+                { "message", message },
+                { "errorCode", "asset_refresh_scheduled" },
+                { "retryable", true },
+                { "typeResolution", new Dictionary<string, object>
+                    {
+                        { "componentTypes", componentTypes },
+                        { "missingTypes", missingTypes },
+                        { "refreshScheduled", true },
+                        { "refreshedAssets", false },
+                    }
+                },
+            };
+        }
+
+        private static bool _assetRefreshScheduled;
+
+        private static void ScheduleAssetRefreshAfterResponse(Dictionary<string, object> args)
+        {
+            if (_assetRefreshScheduled)
+                return;
+
+            _assetRefreshScheduled = true;
+            double refreshAfter = EditorApplication.timeSinceStartup + 0.25d;
+            EditorApplication.CallbackFunction tick = null;
+            tick = () =>
+            {
+                if (EditorApplication.timeSinceStartup < refreshAfter)
+                    return;
+
+                EditorApplication.update -= tick;
+                _assetRefreshScheduled = false;
+                try
+                {
+                    RefreshAssetDatabase(args);
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogError($"[Unity MCP] Scheduled asset refresh failed: {ex.Message}");
+                }
+            };
+            EditorApplication.update += tick;
         }
 
         private sealed class BatchEditDeferredState

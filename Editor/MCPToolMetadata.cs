@@ -1967,7 +1967,7 @@ namespace UnityMCP.Editor
                 Prop("waitForTypes", "boolean", "Wait for all referenced component types before editing. Defaults to true."),
                 Prop("typeResolveTimeoutMs", "number", "Maximum type wait time in milliseconds. Defaults to 30000."),
                 Prop("typeResolveStableMs", "number", "Continuous idle time after type resolution before editing. Defaults to 500."),
-                Prop("refreshAssets", "boolean", "Call AssetDatabase.Refresh once before waiting. Defaults to true."),
+                Prop("refreshAssets", "boolean", "When referenced component types are missing, return a retryable response and schedule AssetDatabase.Refresh after the response. The refresh is skipped when all types are already loaded. Defaults to true."),
                 Prop("batchEditTimeoutMs", "number", "Maximum deferred batch edit time before returning a structured timeout with partial progress. Defaults to 90000."),
                 Prop("operationsPerFrame", "number", "Maximum operations to apply per editor frame in deferred batch mode. Defaults to 25."),
                 Prop("operationFrameBudgetMs", "number", "Soft per-frame operation budget in milliseconds in deferred batch mode. Defaults to 8."),

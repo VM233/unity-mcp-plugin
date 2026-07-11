@@ -181,6 +181,90 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void TransactionEdit_SetProperty_ChangesSerializedArraySize()
+        {
+            CreateTestPrefab(addRenderer: true);
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.TransactionEdit(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "operations", new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "type", "setProperty" },
+                            { "prefabPath", "Source" },
+                            { "componentType", typeof(MeshRenderer).FullName },
+                            { "propertyName", "m_Materials.Array.size" },
+                            { "value", 2 },
+                        },
+                    }
+                },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                Assert.That(root.transform.Find("Source").GetComponent<MeshRenderer>().sharedMaterials.Length,
+                    Is.EqualTo(2));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator TransactionEditDeferred_LoadedComponentTypes_DoNotRefreshAssets()
+        {
+            CreateTestPrefab();
+            const string sentinelPath = TEST_FOLDER + "/Refresh Sentinel.txt";
+            File.WriteAllText(GetAbsolutePath(sentinelPath), "not imported");
+            Assert.That(AssetDatabase.AssetPathToGUID(sentinelPath), Is.Empty);
+
+            object completedResult = null;
+            MCPPrefabAssetCommands.TransactionEditDeferred(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "refreshAssets", true },
+                { "typeResolveStableMs", 0 },
+                { "operations", new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "type", "setProperty" },
+                            { "prefabPath", "Source" },
+                            { "componentType", typeof(Transform).FullName },
+                            { "propertyName", "m_LocalPosition.x" },
+                            { "value", 3f },
+                        },
+                    }
+                },
+            }, result => completedResult = result, _ => { });
+
+            Assert.That(AssetDatabase.AssetPathToGUID(sentinelPath), Is.Empty,
+                "The transaction refreshed the AssetDatabase even though every referenced type was already loaded.");
+
+            double timeoutAt = EditorApplication.timeSinceStartup + 5d;
+            while (completedResult == null && EditorApplication.timeSinceStartup < timeoutAt)
+                yield return null;
+
+            Assert.That(completedResult, Is.Not.Null);
+            Assert.That(RequireDictionary(completedResult)["success"], Is.EqualTo(true));
+        }
+
+        [Test]
+        public void TransactionEdit_IsRegisteredAsDeferredRoute()
+        {
+            var routesProperty = typeof(MCPBridgeServer).GetProperty("DeferredRouteNames",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(routesProperty, Is.Not.Null);
+            var routes = (IEnumerable<string>)routesProperty.GetValue(null);
+            Assert.That(routes, Does.Contain("prefab-asset/transaction-edit"));
+        }
+
+        [Test]
         public void SceneHierarchy_ComponentFilter_ReturnsCompactMatches()
         {
             string objectName = "__UnityMCP_Component_Filter_Target";
@@ -546,7 +630,7 @@ namespace UnityMCP.Editor.Tests
             Assert.That(method.Invoke(null, new object[] { "scene/hierarchy", false }), Is.EqualTo(true));
         }
 
-        private static void CreateTestPrefab(bool addCollider = false)
+        private static void CreateTestPrefab(bool addCollider = false, bool addRenderer = false)
         {
             var root = new GameObject("MCP Test Prefab");
             try
@@ -567,6 +651,9 @@ namespace UnityMCP.Editor.Tests
                     collider.size = new Vector3(4, 5, 6);
                     collider.isTrigger = true;
                 }
+
+                if (addRenderer)
+                    source.AddComponent<MeshRenderer>();
 
                 Assert.That(PrefabUtility.SaveAsPrefabAsset(root, PREFAB_PATH), Is.Not.Null);
             }

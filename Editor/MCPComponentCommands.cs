@@ -574,6 +574,8 @@ namespace UnityMCP.Editor
                     return null;
                 case SerializedPropertyType.LayerMask:
                     return prop.intValue;
+                case SerializedPropertyType.ArraySize:
+                    return prop.intValue;
                 case SerializedPropertyType.Quaternion:
                     var q = prop.quaternionValue;
                     return new Dictionary<string, object> { { "x", q.x }, { "y", q.y }, { "z", q.z }, { "w", q.w } };
@@ -666,6 +668,13 @@ namespace UnityMCP.Editor
                     break;
                 case SerializedPropertyType.LayerMask:
                     prop.intValue = Convert.ToInt32(value);
+                    break;
+                case SerializedPropertyType.ArraySize:
+                    int arraySize = Convert.ToInt32(value);
+                    if (arraySize < 0)
+                        throw new ArgumentOutOfRangeException(nameof(value), arraySize,
+                            $"Array size for '{prop.propertyPath}' cannot be negative.");
+                    prop.intValue = arraySize;
                     break;
                 case SerializedPropertyType.Rect:
                     var rd = value as Dictionary<string, object>;

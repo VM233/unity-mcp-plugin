@@ -57,6 +57,7 @@ namespace UnityMCP.Editor
             { "packages/update-git", (args, resolve, _) => MCPPackageManagerCommands.UpdateGitPackageDeferred(args, resolve) },
             { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },
             { "prefab-asset/batch-edit", MCPPrefabAssetCommands.BatchEditDeferred },
+            { "prefab-asset/transaction-edit", MCPPrefabAssetCommands.TransactionEditDeferred },
         };
 
         internal static IEnumerable<string> DeferredRouteNames => _deferredRoutes.Keys;

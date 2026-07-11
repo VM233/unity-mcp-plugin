@@ -4,6 +4,8 @@ All notable changes to this package will be documented in this file.
 
 ## Unreleased
 
+- Fixed prefab transaction property writes rejecting serialized array-size paths such as `items.Array.size` with `Cannot set property type: ArraySize`.
+- Fixed prefab batch/transaction edits unconditionally refreshing assets before checking already-loaded component types. Missing types now produce a retryable response before a delayed refresh, so a script-triggered Domain Reload does not cut off the active MCP response.
 - Fixed prefab asset edits rewriting untouched YAML whitespace or serializing unrelated default component fields.
 - Added `unity_localization_upsert_entries` for prevalidated batch String/Smart String entry updates across multiple Locales with one asset save.
 
