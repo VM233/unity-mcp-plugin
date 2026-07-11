@@ -675,8 +675,7 @@ namespace UnityMCP.Editor.Tests
                 { "assetPath", PREFAB_PATH },
                 { "maxNodes", 10 },
             }));
-            var hierarchy = (List<object>)result["hierarchy"];
-            var root = RequireDictionary(hierarchy[0]);
+            var root = RequireDictionary(result["hierarchy"]);
             Assert.That(root.ContainsKey("localPosition"), Is.False);
             Assert.That(root.ContainsKey("localRotation"), Is.False);
             Assert.That(root.ContainsKey("localScale"), Is.False);

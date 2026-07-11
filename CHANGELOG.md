@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.3] - 2026-07-11
+
+- Corrected the prefab hierarchy identity-transform regression test to validate the returned root node shape.
+
 ## [3.1.2] - 2026-07-11
 
 - Omit identity Transform values from GameObject, scene hierarchy, prefab hierarchy/find, terrain, lighting, prefab instantiation, and physics overlap responses. Zero positions, identity rotations, and unit scales are no longer serialized.
