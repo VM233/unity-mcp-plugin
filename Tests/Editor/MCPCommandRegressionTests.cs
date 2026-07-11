@@ -152,6 +152,38 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void MoveComponent_RemapsDirectAndManagedReferencesToMovedComponent()
+        {
+            CreateTestPrefab(addCollider: true, addReferenceOwner: true);
+            var result = RequireDictionary(MCPPrefabAssetCommands.MoveComponent(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "sourcePrefabPath", "Source" },
+                { "targetPrefabPath", "Target" },
+                { "componentType", typeof(BoxCollider).FullName },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(System.Convert.ToInt32(result["remappedReferenceCount"]), Is.EqualTo(2));
+
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                var moved = root.transform.Find("Target").GetComponent<BoxCollider>();
+                var referenceOwner = root.transform.Find("Reference Owner")
+                    .GetComponent<MCPReferenceOwnerComponent>();
+
+                Assert.That(moved, Is.Not.Null);
+                Assert.That(referenceOwner.DirectReference, Is.SameAs(moved));
+                Assert.That(referenceOwner.ManagedReference, Is.SameAs(moved));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [Test]
         public void TransactionEdit_DoesNotSerializeDefaultsOnUntouchedComponents()
         {
             CreateTestPrefab(addCollider: true);
@@ -904,7 +936,8 @@ namespace UnityMCP.Editor.Tests
             Assert.That(method.Invoke(null, new object[] { "scene/hierarchy", false }), Is.EqualTo(true));
         }
 
-        private static void CreateTestPrefab(bool addCollider = false, bool addRenderer = false)
+        private static void CreateTestPrefab(bool addCollider = false, bool addRenderer = false,
+            bool addReferenceOwner = false)
         {
             var root = new GameObject("MCP Test Prefab");
             try
@@ -918,16 +951,26 @@ namespace UnityMCP.Editor.Tests
                 var target = new GameObject("Target");
                 target.transform.SetParent(root.transform, false);
 
+                Component referenceTarget = null;
                 if (addCollider)
                 {
                     var collider = source.AddComponent<BoxCollider>();
                     collider.center = new Vector3(1, 2, 3);
                     collider.size = new Vector3(4, 5, 6);
                     collider.isTrigger = true;
+                    referenceTarget = collider;
                 }
 
                 if (addRenderer)
                     source.AddComponent<MeshRenderer>();
+
+                if (addReferenceOwner)
+                {
+                    Assert.That(referenceTarget, Is.Not.Null);
+                    var referenceOwner = new GameObject("Reference Owner");
+                    referenceOwner.transform.SetParent(root.transform, false);
+                    referenceOwner.AddComponent<MCPReferenceOwnerComponent>().SetReferences(referenceTarget);
+                }
 
                 Assert.That(PrefabUtility.SaveAsPrefabAsset(root, PREFAB_PATH), Is.Not.Null);
             }

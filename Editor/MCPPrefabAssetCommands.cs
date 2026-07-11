@@ -473,6 +473,9 @@ namespace UnityMCP.Editor
                     return new { error = $"Component '{componentType}' was not added exactly once to '{target.name}'" };
                 }
 
+                var movedComponent = targetComponents[targetComponentCount];
+                int remappedReferenceCount = RemapComponentReferences(root, sourceComponent, movedComponent);
+
                 UnityEngine.Object.DestroyImmediate(sourceComponent);
                 if (source.GetComponents(type).Length != sourceComponents.Length - 1)
                     return new { error = $"Failed to remove component '{componentType}' from '{source.name}'" };
@@ -491,6 +494,7 @@ namespace UnityMCP.Editor
                     { "component", movedComponentType.Name },
                     { "fullType", movedComponentType.FullName },
                     { "componentIndex", componentIndex },
+                    { "remappedReferenceCount", remappedReferenceCount },
                 };
                 AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
                 return result;
@@ -505,6 +509,45 @@ namespace UnityMCP.Editor
                 if (!saved)
                     RestoreAssetSnapshot(beforeSnapshot);
             }
+        }
+
+        private static int RemapComponentReferences(GameObject prefabRoot, Component sourceComponent,
+            Component movedComponent)
+        {
+            int remappedReferenceCount = 0;
+            foreach (var owner in prefabRoot.GetComponentsInChildren<Component>(true))
+            {
+                if (owner == null || owner == sourceComponent)
+                    continue;
+
+                var serializedObject = new SerializedObject(owner);
+                serializedObject.UpdateIfRequiredOrScript();
+                var property = serializedObject.GetIterator();
+                bool changed = false;
+
+                while (property.Next(true))
+                {
+                    if (property.propertyType == SerializedPropertyType.ObjectReference &&
+                        property.objectReferenceValue == sourceComponent)
+                    {
+                        property.objectReferenceValue = movedComponent;
+                        remappedReferenceCount++;
+                        changed = true;
+                    }
+                    else if (property.propertyType == SerializedPropertyType.ExposedReference &&
+                             property.exposedReferenceValue == sourceComponent)
+                    {
+                        property.exposedReferenceValue = movedComponent;
+                        remappedReferenceCount++;
+                        changed = true;
+                    }
+                }
+
+                if (changed)
+                    serializedObject.ApplyModifiedPropertiesWithoutUndo();
+            }
+
+            return remappedReferenceCount;
         }
 
         // ─── Reference Wiring ───

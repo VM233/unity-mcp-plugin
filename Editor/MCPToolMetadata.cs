@@ -793,7 +793,7 @@ namespace UnityMCP.Editor
                 case "prefab-asset/move-gameobject":
                     return "Move or reorder a GameObject inside a prefab asset.";
                 case "prefab-asset/move-component":
-                    return "Atomically move a component between GameObjects inside one prefab asset while preserving serialized data.";
+                    return "Atomically move a component between GameObjects inside one prefab asset while preserving serialized data and remapping references to the moved component.";
                 case "prefab-asset/remove-component":
                     return "Remove a component from a GameObject inside a prefab asset.";
                 case "prefab-asset/remove-gameobject":

@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.7] - 2026-07-11
+
+- Preserve direct, nested managed-reference, and exposed references when `prefab-asset/move-component` replaces the source component with its destination copy.
+
 ## [3.1.6] - 2026-07-11
 
 - Limit MCP queue processing to one request per Editor update and pause processing during compilation, asset updates, and a short post-reload stabilization window, preventing reconnect backlogs from triggering long `MCPBridgeServer.OnEditorUpdate` stalls.
