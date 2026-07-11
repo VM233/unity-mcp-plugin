@@ -285,11 +285,15 @@ namespace UnityMCP.Editor
 
         /// <summary>
         /// Dequeue and execute requests on the main thread.
-        /// Processes 1 write OR up to 5 reads per call (batching reads).
+        /// Processes 1 write OR up to <paramref name="maxRequests"/> reads per call.
+        /// The bridge passes 1 so a post-reload backlog is spread across Editor updates.
         /// Also runs periodic cleanup.
         /// </summary>
-        public static void ProcessNextRequests()
+        public static int ProcessNextRequests(int maxRequests = MaxReadBatchSize)
         {
+            if (maxRequests <= 0)
+                return 0;
+
             // --- Cleanup cadence ---
             if (++_frameTick >= CleanupEveryNFrames)
             {
@@ -302,10 +306,11 @@ namespace UnityMCP.Editor
             lock (_queueLock)
             {
                 if (HasExecutingWriteLocked())
-                    return;
+                    return 0;
 
-                batch = DequeueNextBatch(allowWrites: _executingTickets.Count == 0);
-                if (batch == null || batch.Count == 0) return;
+                batch = DequeueNextBatch(allowWrites: _executingTickets.Count == 0,
+                    maxRequests: maxRequests);
+                if (batch == null || batch.Count == 0) return 0;
 
                 // Mark all as executing and track in-flight
                 foreach (var t in batch)
@@ -436,6 +441,8 @@ namespace UnityMCP.Editor
                     PersistTicketSnapshotsLocked();
                 }
             }
+
+            return batch.Count;
         }
 
         private static void CompleteTicketFromResult(RequestTicket ticket, object result)
@@ -584,10 +591,10 @@ namespace UnityMCP.Editor
         // ═══════════════════════════════════════════════════════
 
         /// <summary>
-        /// Fair round-robin dequeue. Returns 1 write OR up to MaxReadBatchSize reads.
+        /// Fair round-robin dequeue. Returns 1 write OR a caller-bounded read batch.
         /// Must be called under _queueLock.
         /// </summary>
-        private static List<RequestTicket> DequeueNextBatch(bool allowWrites)
+        private static List<RequestTicket> DequeueNextBatch(bool allowWrites, int maxRequests)
         {
             if (_rrOrder.Count == 0) return null;
 
@@ -633,7 +640,8 @@ namespace UnityMCP.Editor
                 int collected = 0;
                 int scanIdx = (_rrIndex - 1 + _rrOrder.Count) % _rrOrder.Count;
 
-                for (int pass = 0; collected < MaxReadBatchSize && pass < _rrOrder.Count * MaxReadBatchSize; pass++)
+                int readBatchSize = Math.Min(MaxReadBatchSize, maxRequests);
+                for (int pass = 0; collected < readBatchSize && pass < _rrOrder.Count * readBatchSize; pass++)
                 {
                     int idx = (scanIdx + pass) % _rrOrder.Count;
                     string agent = _rrOrder[idx];

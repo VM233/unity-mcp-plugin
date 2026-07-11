@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.6] - 2026-07-11
+
+- Limit MCP queue processing to one request per Editor update and pause processing during compilation, asset updates, and a short post-reload stabilization window, preventing reconnect backlogs from triggering long `MCPBridgeServer.OnEditorUpdate` stalls.
+- Remove the redundant unbounded legacy main-thread queue; synchronous HTTP requests now rely on the existing fair ticket queue for main-thread execution.
+
 ## [3.1.5] - 2026-07-11
 
 - Use Roslyn `Preview` for dynamic code because Unity 6.4 classifies `is not` patterns as preview syntax.

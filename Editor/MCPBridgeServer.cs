@@ -36,9 +36,6 @@ namespace UnityMCP.Editor
         /// <summary>The port this server is currently bound to (0 if not running).</summary>
         public static int ActivePort => _isRunning ? _activePort : 0;
 
-        // Legacy main-thread queue (kept for direct ExecuteOnMainThread calls)
-        private static readonly Queue<Action> _mainThreadQueue = new Queue<Action>();
-
         // Routes whose Unity APIs use async callbacks (fire on next editor frame).
         // Register here instead of adding per-route if-conditions in HandleRequest/HandleQueueSubmit.
         private delegate void DeferredRouteHandler(Dictionary<string, object> args, Action<object> resolve,
@@ -68,6 +65,13 @@ namespace UnityMCP.Editor
         // SessionState key to persist running state across domain reloads (Play Mode, recompile)
         private const string WasRunningKey = "UnityMCP_WasRunningBeforeReload";
 
+        // Keep MCP work from monopolizing the first Editor update after a compile/domain reload.
+        // Individual Unity API calls are not preemptible, so execute at most one queued request
+        // per update and wait for the asset pipeline to remain idle briefly before resuming.
+        internal const int MaxRequestsPerEditorUpdate = 1;
+        internal const double PostReloadProcessingDelaySeconds = 0.5;
+        private static double _requestProcessingNotBefore;
+
         // ─── Manual-port restart retry (unity-mcp-server issue #10) ───
         // Right after a domain reload the configured manual port can be briefly
         // unbindable while the previous listener's socket is released. Auto-port
@@ -94,6 +98,8 @@ namespace UnityMCP.Editor
             // These are short-lived, don't need MCP access, and would otherwise claim
             // ports in the 7890-7899 range and exhaust availability for real editors.
             if (Application.isBatchMode) return;
+
+            _requestProcessingNotBefore = EditorApplication.timeSinceStartup + PostReloadProcessingDelaySeconds;
 
             // Restart if: auto-start is allowed (respects the Virtual Player setting)
             // OR the server was running before a domain reload.
@@ -278,7 +284,7 @@ namespace UnityMCP.Editor
             Debug.Log("[AB-UMCP] Server stopped");
         }
 
-        // ─── EditorApplication.update — processes both legacy queue AND ticket queue ───
+        // ─── EditorApplication.update — processes the ticket queue on the main thread ───
 
         private static void OnEditorUpdate()
         {
@@ -291,11 +297,19 @@ namespace UnityMCP.Editor
                 Start();
             }
 
-            // 1. Process legacy main-thread actions
-            ProcessMainThreadQueue();
+            double now = EditorApplication.timeSinceStartup;
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+            {
+                _requestProcessingNotBefore = now + PostReloadProcessingDelaySeconds;
+                return;
+            }
 
-            // 2. Process ticket-based queue (fair round-robin)
-            MCPRequestQueue.ProcessNextRequests();
+            if (now < _requestProcessingNotBefore)
+                return;
+
+            // Limit main-thread MCP work to one request per Editor update. Backlogged
+            // clients are still served fairly by MCPRequestQueue across later frames.
+            MCPRequestQueue.ProcessNextRequests(MaxRequestsPerEditorUpdate);
         }
 
         // ─── HTTP Listener ───
@@ -395,7 +409,7 @@ namespace UnityMCP.Editor
                 // ═══ Legacy synchronous path (blocks until main thread processes) ═══
                 {
                     var result = MCPRequestQueue.ExecuteWithTracking(agentId, apiPath,
-                        () => ExecuteOnMainThread(() => RouteRequest(apiPath, request.HttpMethod, body)));
+                        () => RouteRequest(apiPath, request.HttpMethod, body));
                     SendJson(response, 200, result);
                 }
             }
@@ -1664,95 +1678,6 @@ namespace UnityMCP.Editor
 
             return MiniJson.Deserialize(json) as Dictionary<string, object>
                 ?? new Dictionary<string, object>();
-        }
-
-        /// <summary>
-        /// Execute a function on Unity's main thread and wait for the result.
-        /// Used by the legacy synchronous path.
-        /// </summary>
-        private static object ExecuteOnMainThread(Func<object> action)
-        {
-            if (Thread.CurrentThread.ManagedThreadId == 1)
-                return action();
-
-            object result = null;
-            Exception exception = null;
-            var resetEvent = new ManualResetEventSlim(false);
-
-            lock (_mainThreadQueue)
-            {
-                _mainThreadQueue.Enqueue(() =>
-                {
-                    try { result = action(); }
-                    catch (Exception ex) { exception = ex; }
-                    finally { resetEvent.Set(); }
-                });
-            }
-
-            if (!resetEvent.Wait(MCPRequestQueue.SyncTimeoutMs))
-                return new { error = $"Timeout waiting for Unity main thread after {MCPRequestQueue.SyncTimeoutMs / 1000}s" };
-
-            if (exception != null)
-                return new { error = exception.Message, stackTrace = exception.StackTrace };
-
-            return result;
-        }
-
-        /// <summary>
-        /// Execute an action on the main thread that completes asynchronously via callback.
-        /// Unlike ExecuteOnMainThread, the calling thread blocks until the resolve callback
-        /// is invoked — not when the action returns. Use for Unity APIs whose callbacks
-        /// fire on a subsequent editor frame (e.g. TestRunnerApi.RetrieveTestList).
-        /// </summary>
-        private static object ExecuteOnMainThreadDeferred(Action<Action<object>> asyncAction)
-        {
-            object result = null;
-            Exception exception = null;
-            var resetEvent = new ManualResetEventSlim(false);
-
-            lock (_mainThreadQueue)
-            {
-                _mainThreadQueue.Enqueue(() =>
-                {
-                    try
-                    {
-                        asyncAction(r =>
-                        {
-                            result = r;
-                            resetEvent.Set();
-                        });
-                    }
-                    catch (Exception ex)
-                    {
-                        exception = ex;
-                        resetEvent.Set();
-                    }
-                });
-            }
-
-            if (!resetEvent.Wait(MCPRequestQueue.SyncTimeoutMs))
-                return new { error = $"Timeout waiting for Unity callback after {MCPRequestQueue.SyncTimeoutMs / 1000}s" };
-
-            if (exception != null)
-                return new { error = exception.Message, stackTrace = exception.StackTrace };
-
-            return result;
-        }
-
-        private static void ProcessMainThreadQueue()
-        {
-            lock (_mainThreadQueue)
-            {
-                while (_mainThreadQueue.Count > 0)
-                {
-                    var action = _mainThreadQueue.Dequeue();
-                    try { action?.Invoke(); }
-                    catch (Exception ex)
-                    {
-                        Debug.LogError($"[AB-UMCP] Main thread action error: {ex}");
-                    }
-                }
-            }
         }
 
         // Response size limits (bytes) — prevents oversized payloads from crashing the MCP stdio pipe

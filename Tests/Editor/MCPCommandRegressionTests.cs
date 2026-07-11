@@ -282,6 +282,29 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void EditorUpdate_RequestProcessingIsBoundedAfterReload()
+        {
+            var maxRequestsField = typeof(MCPBridgeServer).GetField("MaxRequestsPerEditorUpdate",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(maxRequestsField, Is.Not.Null);
+            Assert.That(maxRequestsField.GetRawConstantValue(), Is.EqualTo(1));
+
+            var reloadDelayField = typeof(MCPBridgeServer).GetField("PostReloadProcessingDelaySeconds",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(reloadDelayField, Is.Not.Null);
+            Assert.That((double)reloadDelayField.GetRawConstantValue(), Is.GreaterThanOrEqualTo(0.25));
+
+            var processMethod = typeof(MCPRequestQueue).GetMethod("ProcessNextRequests",
+                BindingFlags.Static | BindingFlags.Public, null, new[] { typeof(int) }, null);
+            Assert.That(processMethod, Is.Not.Null);
+            Assert.That(processMethod.ReturnType, Is.EqualTo(typeof(int)));
+
+            Assert.That(typeof(MCPBridgeServer).GetField("_mainThreadQueue",
+                BindingFlags.Static | BindingFlags.NonPublic), Is.Null,
+                "A second unbounded main-thread queue must not be reintroduced beside MCPRequestQueue.");
+        }
+
+        [Test]
         public void ExecutionOptions_ParseAndResolveMode()
         {
             Assert.That(MCPExecutionOptions.TryParse(new Dictionary<string, object>(), out var automatic,

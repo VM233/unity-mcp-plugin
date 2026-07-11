@@ -34,6 +34,8 @@ namespace UnityMCP.Editor
                         { "useManualPort", MCPSettingsManager.UseManualPort },
                         { "configuredPort", MCPSettingsManager.Port },
                         { "startOnVirtualPlayers", MCPSettingsManager.StartOnVirtualPlayers },
+                        { "maxRequestsPerEditorUpdate", MCPBridgeServer.MaxRequestsPerEditorUpdate },
+                        { "postReloadProcessingDelaySeconds", MCPBridgeServer.PostReloadProcessingDelaySeconds },
                     }
                 },
                 { "editor", new Dictionary<string, object>
