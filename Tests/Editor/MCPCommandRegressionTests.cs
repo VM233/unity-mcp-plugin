@@ -450,6 +450,42 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void ExecuteCode_IsNotPatternUsesLatestSupportedLanguageVersion()
+        {
+            var response = RequireDictionary(MCPEditorCommands.ExecuteCode(new Dictionary<string, object>
+            {
+                { "code", "object value = \"ready\"; return value is not int;" },
+            }));
+
+            Assert.That(response["success"], Is.EqualTo(true));
+            Assert.That(response["result"], Is.EqualTo(true));
+        }
+
+        [Test]
+        public void AssetRefresh_TargetedImportReconcilesExternalDeletion()
+        {
+            const string deletedPath = TEST_FOLDER + "/Externally Deleted.txt";
+            const string importedPath = TEST_FOLDER + "/Imported First.txt";
+            File.WriteAllText(GetAbsolutePath(deletedPath), "delete me");
+            File.WriteAllText(GetAbsolutePath(importedPath), "keep me");
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            Assert.That(AssetDatabase.AssetPathToGUID(deletedPath), Is.Not.Empty);
+
+            File.Delete(GetAbsolutePath(deletedPath));
+            File.Delete(GetAbsolutePath(deletedPath) + ".meta");
+
+            var response = RequireDictionary(MCPAssetCommands.Refresh(new Dictionary<string, object>
+            {
+                { "assetPaths", new[] { importedPath } },
+                { "forceUpdate", true },
+            }));
+
+            Assert.That(response["success"], Is.EqualTo(true));
+            Assert.That(response["reconciledExternalChanges"], Is.EqualTo(true));
+            Assert.That(AssetDatabase.AssetPathToGUID(deletedPath), Is.Empty);
+        }
+
+        [Test]
         public void ExecuteCode_ResultBudgetTruncatesLargeCollections()
         {
             var response = RequireDictionary(MCPEditorCommands.ExecuteCode(new Dictionary<string, object>

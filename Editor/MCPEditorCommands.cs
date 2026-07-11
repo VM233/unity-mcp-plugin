@@ -310,26 +310,49 @@ namespace UnityMCP.Editor
                 // Unity 6000+ uses CoreCLR where CodeDom/mcs can't handle netstandard facades.
                 // Roslyn resolves type forwarding correctly.
 
-                // CSharpSyntaxTree.ParseText(string)
+                // Parse with the newest language version supported by Unity's bundled Roslyn.
+                // CSharpSyntaxTree.ParseText defaults to an older language version in some
+                // Unity releases even though the loaded parser supports newer syntax.
                 var syntaxTreeType = _roslynCSharpAsm.GetType("Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree");
-                var parseText = syntaxTreeType.GetMethod("ParseText",
-                    BindingFlags.Public | BindingFlags.Static,
-                    null, new[] { typeof(string) }, null);
-
-                // Fallback: ParseText may have more parameters; find the best match
-                if (parseText == null)
+                var parseOptionsType = _roslynCSharpAsm.GetType("Microsoft.CodeAnalysis.CSharp.CSharpParseOptions");
+                var languageVersionType = _roslynCSharpAsm.GetType("Microsoft.CodeAnalysis.CSharp.LanguageVersion");
+                object parseOptions = null;
+                if (parseOptionsType != null && languageVersionType != null)
                 {
-                    foreach (var m in syntaxTreeType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                    var defaultOptions = parseOptionsType.GetProperty("Default", BindingFlags.Public | BindingFlags.Static)
+                        ?.GetValue(null);
+                    var withLanguageVersion = parseOptionsType.GetMethod("WithLanguageVersion",
+                        BindingFlags.Public | BindingFlags.Instance,
+                        null, new[] { languageVersionType }, null);
+                    if (defaultOptions != null && withLanguageVersion != null)
                     {
-                        if (m.Name != "ParseText") continue;
-                        var pars = m.GetParameters();
-                        if (pars.Length >= 1 && pars[0].ParameterType == typeof(string))
-                        {
-                            parseText = m;
-                            break;
-                        }
+                        var latestLanguageVersion = Enum.Parse(languageVersionType, "Latest");
+                        parseOptions = withLanguageVersion.Invoke(defaultOptions, new[] { latestLanguageVersion });
                     }
                 }
+
+                MethodInfo parseText = null;
+                foreach (var method in syntaxTreeType.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                {
+                    if (method.Name != "ParseText")
+                        continue;
+
+                    var parameters = method.GetParameters();
+                    if (parameters.Length < 1 || parameters[0].ParameterType != typeof(string))
+                        continue;
+
+                    if (parseOptions != null && parameters.Any(parameter => parameter.ParameterType == parseOptionsType))
+                    {
+                        parseText = method;
+                        break;
+                    }
+
+                    if (parseText == null)
+                        parseText = method;
+                }
+
+                if (parseText == null)
+                    throw new MissingMethodException(syntaxTreeType.FullName, "ParseText");
 
                 // Build argument array matching ParseText signature (fill optional params with defaults)
                 object syntaxTree;
@@ -338,7 +361,11 @@ namespace UnityMCP.Editor
                     var invokeArgs = new object[pars.Length];
                     invokeArgs[0] = fullCode;
                     for (int i = 1; i < pars.Length; i++)
-                        invokeArgs[i] = pars[i].HasDefaultValue ? pars[i].DefaultValue : null;
+                    {
+                        invokeArgs[i] = parseOptions != null && pars[i].ParameterType == parseOptionsType
+                            ? parseOptions
+                            : pars[i].HasDefaultValue ? pars[i].DefaultValue : null;
+                    }
                     syntaxTree = parseText.Invoke(null, invokeArgs);
                 }
 

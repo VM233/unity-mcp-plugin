@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.4] - 2026-07-11
+
+- Compile `editor/execute-code` with the latest language version supported by Unity's bundled Roslyn, including `is not` patterns.
+- Targeted `asset/refresh` calls now reconcile external file creation and deletion by default, preventing stale deleted scripts from remaining in Unity's compiler source list.
+
 ## [3.1.3] - 2026-07-11
 
 - Corrected the prefab hierarchy identity-transform regression test to validate the returned root node shape.

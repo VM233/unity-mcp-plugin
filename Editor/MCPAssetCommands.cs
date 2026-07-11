@@ -87,6 +87,7 @@ namespace UnityMCP.Editor
         {
             bool forceUpdate = GetBool(args, "forceUpdate", true);
             bool saveAssets = GetBool(args, "saveAssets", false);
+            bool reconcileExternalChanges = GetBool(args, "reconcileExternalChanges", true);
             var assetPaths = GetStringList(args, "assetPaths");
 
             var options = forceUpdate ? ImportAssetOptions.ForceUpdate : ImportAssetOptions.Default;
@@ -103,6 +104,12 @@ namespace UnityMCP.Editor
                     AssetDatabase.ImportAsset(path, options);
                     importedPaths.Add(path);
                 }
+
+                // Targeted imports do not notice files deleted outside AssetDatabase.
+                // Reconcile once after the ordered imports so Unity rebuilds its script
+                // source list and removes stale compiler inputs such as deleted .cs files.
+                if (reconcileExternalChanges)
+                    AssetDatabase.Refresh(options);
             }
             else
             {
@@ -118,7 +125,8 @@ namespace UnityMCP.Editor
                 { "forceUpdate", forceUpdate },
                 { "saveAssets", saveAssets },
                 { "importedPaths", importedPaths },
-                { "refreshedAllAssets", importedPaths.Count == 0 },
+                { "reconciledExternalChanges", assetPaths.Count == 0 || reconcileExternalChanges },
+                { "refreshedAllAssets", importedPaths.Count == 0 || reconcileExternalChanges },
                 { "isUpdating", EditorApplication.isUpdating },
                 { "isCompiling", EditorApplication.isCompiling },
             };
