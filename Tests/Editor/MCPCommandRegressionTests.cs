@@ -152,9 +152,9 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
-        public void MoveComponent_RemapsDirectAndManagedReferencesToMovedComponent()
+        public void MoveComponent_RemapsNestedSerializedReferenceToMovedComponent()
         {
-            CreateTestPrefab(addCollider: true, addReferenceOwner: true);
+            CreateTestPrefab(addCollider: true, addParticleReference: true);
             var result = RequireDictionary(MCPPrefabAssetCommands.MoveComponent(new Dictionary<string, object>
             {
                 { "assetPath", PREFAB_PATH },
@@ -164,18 +164,17 @@ namespace UnityMCP.Editor.Tests
             }));
 
             Assert.That(result["success"], Is.EqualTo(true));
-            Assert.That(System.Convert.ToInt32(result["remappedReferenceCount"]), Is.EqualTo(2));
+            Assert.That(System.Convert.ToInt32(result["remappedReferenceCount"]), Is.EqualTo(1));
 
             var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
             try
             {
                 var moved = root.transform.Find("Target").GetComponent<BoxCollider>();
-                var referenceOwner = root.transform.Find("Reference Owner")
-                    .GetComponent<MCPReferenceOwnerComponent>();
+                var particleSystem = root.transform.Find("Reference Owner").GetComponent<ParticleSystem>();
+                var trigger = particleSystem.trigger;
 
                 Assert.That(moved, Is.Not.Null);
-                Assert.That(referenceOwner.DirectReference, Is.SameAs(moved));
-                Assert.That(referenceOwner.ManagedReference, Is.SameAs(moved));
+                Assert.That(trigger.GetCollider(0), Is.SameAs(moved));
             }
             finally
             {
@@ -937,7 +936,7 @@ namespace UnityMCP.Editor.Tests
         }
 
         private static void CreateTestPrefab(bool addCollider = false, bool addRenderer = false,
-            bool addReferenceOwner = false)
+            bool addParticleReference = false)
         {
             var root = new GameObject("MCP Test Prefab");
             try
@@ -964,12 +963,15 @@ namespace UnityMCP.Editor.Tests
                 if (addRenderer)
                     source.AddComponent<MeshRenderer>();
 
-                if (addReferenceOwner)
+                if (addParticleReference)
                 {
                     Assert.That(referenceTarget, Is.Not.Null);
                     var referenceOwner = new GameObject("Reference Owner");
                     referenceOwner.transform.SetParent(root.transform, false);
-                    referenceOwner.AddComponent<MCPReferenceOwnerComponent>().SetReferences(referenceTarget);
+                    var particleSystem = referenceOwner.AddComponent<ParticleSystem>();
+                    var trigger = particleSystem.trigger;
+                    trigger.enabled = true;
+                    trigger.SetCollider(0, referenceTarget);
                 }
 
                 Assert.That(PrefabUtility.SaveAsPrefabAsset(root, PREFAB_PATH), Is.Not.Null);

@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.8] - 2026-07-11
+
+- Validate nested serialized component-reference migration with a built-in runtime component instead of an Editor-only test component that Unity cannot attach to prefabs.
+
 ## [3.1.7] - 2026-07-11
 
 - Preserve direct, nested managed-reference, and exposed references when `prefab-asset/move-component` replaces the source component with its destination copy.
