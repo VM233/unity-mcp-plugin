@@ -45,6 +45,7 @@ namespace UnityMCP.Editor
                 { "fogDensity", RenderSettings.fogDensity },
                 { "skybox", RenderSettings.skybox != null ? RenderSettings.skybox.name : null },
             };
+            return result;
         }
 
         public static object CreateLight(Dictionary<string, object> args)
@@ -90,7 +91,7 @@ namespace UnityMCP.Editor
 
             Undo.RegisterCreatedObjectUndo(go, $"Create Light {name}");
 
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "success", true },
                 { "name", go.name },
@@ -155,6 +156,7 @@ namespace UnityMCP.Editor
                 { "fogColor", ColorToDict(RenderSettings.fogColor) },
                 { "fogDensity", RenderSettings.fogDensity },
             };
+            return result;
         }
 
         public static object CreateReflectionProbe(Dictionary<string, object> args)
@@ -182,7 +184,7 @@ namespace UnityMCP.Editor
 
             Undo.RegisterCreatedObjectUndo(go, $"Create Reflection Probe {name}");
 
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "success", true },
                 { "name", go.name },
