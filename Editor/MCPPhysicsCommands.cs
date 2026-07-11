@@ -65,13 +65,15 @@ namespace UnityMCP.Editor
             var results = new List<Dictionary<string, object>>();
             foreach (var col in colliders)
             {
-                results.Add(new Dictionary<string, object>
+                var collider = new Dictionary<string, object>
                 {
                     { "gameObject", col.gameObject.name },
                     { "colliderType", col.GetType().Name },
-                    { "position", MCPGameObjectCommands.Vector3ToDict(col.transform.position) },
                     { "instanceId", MCPObjectId.Get(col.gameObject) },
-                });
+                };
+                MCPTransformSerialization.AddVectorIfDifferent(collider, "position", col.transform.position,
+                    Vector3.zero);
+                results.Add(collider);
             }
 
             return new Dictionary<string, object>
@@ -94,13 +96,15 @@ namespace UnityMCP.Editor
             var results = new List<Dictionary<string, object>>();
             foreach (var col in colliders)
             {
-                results.Add(new Dictionary<string, object>
+                var collider = new Dictionary<string, object>
                 {
                     { "gameObject", col.gameObject.name },
                     { "colliderType", col.GetType().Name },
-                    { "position", MCPGameObjectCommands.Vector3ToDict(col.transform.position) },
                     { "instanceId", MCPObjectId.Get(col.gameObject) },
-                });
+                };
+                MCPTransformSerialization.AddVectorIfDifferent(collider, "position", col.transform.position,
+                    Vector3.zero);
+                results.Add(collider);
             }
 
             return new Dictionary<string, object>

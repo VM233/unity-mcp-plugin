@@ -111,11 +111,10 @@ namespace UnityMCP.Editor
                 });
             }
 
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "name", terrain.name },
                 { "instanceId", MCPObjectId.Get(terrain.gameObject) },
-                { "position", Vec3Dict(terrain.transform.position) },
                 { "size", Vec3Dict(data.size) },
                 { "heightmapResolution", data.heightmapResolution },
                 { "alphamapResolution", data.alphamapResolution },
@@ -131,6 +130,8 @@ namespace UnityMCP.Editor
                 { "basemapDistance", terrain.basemapDistance },
                 { "drawInstanced", terrain.drawInstanced },
             };
+            MCPTransformSerialization.AddWorld(result, terrain.transform);
+            return result;
         }
 
         /// <summary>List all terrains in the scene.</summary>
@@ -140,14 +141,15 @@ namespace UnityMCP.Editor
             var result = new List<Dictionary<string, object>>();
             foreach (var t in terrains)
             {
-                result.Add(new Dictionary<string, object>
+                var terrainInfo = new Dictionary<string, object>
                 {
                     { "name", t.name },
                     { "instanceId", MCPObjectId.Get(t.gameObject) },
-                    { "position", Vec3Dict(t.transform.position) },
                     { "size", Vec3Dict(t.terrainData.size) },
                     { "isActive", t == Terrain.activeTerrain },
-                });
+                };
+                MCPTransformSerialization.AddWorld(terrainInfo, t.transform);
+                result.Add(terrainInfo);
             }
             return new Dictionary<string, object>
             {

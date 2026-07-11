@@ -89,10 +89,6 @@ namespace UnityMCP.Editor
             bool saveAssets = GetBool(args, "saveAssets", false);
             var assetPaths = GetStringList(args, "assetPaths");
 
-            string singlePath = GetFirstString(args, "assetPath", "path");
-            if (!string.IsNullOrEmpty(singlePath))
-                assetPaths.Add(singlePath);
-
             var options = forceUpdate ? ImportAssetOptions.ForceUpdate : ImportAssetOptions.Default;
             var importedPaths = new List<string>();
 
@@ -131,21 +127,10 @@ namespace UnityMCP.Editor
         public static object ExportUnityPackage(Dictionary<string, object> args)
         {
             var assetPaths = GetStringList(args, "assetPaths");
-            if (assetPaths.Count == 0)
-            {
-                string singlePath = GetString(args, "assetPath");
-                if (string.IsNullOrEmpty(singlePath))
-                    singlePath = GetString(args, "path");
-                if (!string.IsNullOrEmpty(singlePath))
-                    assetPaths.Add(singlePath);
-            }
-
             string outputPath = GetString(args, "outputPath");
-            if (string.IsNullOrEmpty(outputPath))
-                outputPath = GetString(args, "filePath");
 
             if (assetPaths.Count == 0)
-                return new { error = "assetPaths, assetPath, or path is required" };
+                return new { error = "assetPaths is required" };
             if (string.IsNullOrEmpty(outputPath))
                 return new { error = "outputPath is required" };
 
@@ -228,14 +213,14 @@ namespace UnityMCP.Editor
 
         public static object Rename(Dictionary<string, object> args)
         {
-            string path = NormalizeAssetPath(GetFirstString(args, "path", "assetPath"));
-            string newName = GetFirstString(args, "newName", "name", "newAssetName");
+            string path = NormalizeAssetPath(GetString(args, "path"));
+            string newName = GetString(args, "newName");
             bool dryRun = GetBool(args, "dryRun", false);
 
             if (string.IsNullOrEmpty(path))
-                return new { error = "path or assetPath is required" };
+                return new { error = "path is required" };
             if (string.IsNullOrEmpty(newName))
-                return new { error = "newName or name is required" };
+                return new { error = "newName is required" };
             if (newName.Contains("/") || newName.Contains("\\"))
                 return new { error = "newName must be a file or folder name, not a path" };
             if (!AssetExists(path))
@@ -445,14 +430,14 @@ namespace UnityMCP.Editor
             for (int index = 0; index < requestedMoves.Count; index++)
             {
                 var request = requestedMoves[index];
-                string path = NormalizeAssetPath(GetFirstString(request, "path", "assetPath"));
-                string destinationPath = NormalizeAssetPath(GetFirstString(request, "destinationPath", "targetPath",
-                    "destinationFolder", "targetFolder", "folder"));
+                string path = NormalizeAssetPath(GetString(request, "path"));
+                string destinationPath = NormalizeAssetPath(GetFirstString(request, "destinationPath",
+                    "destinationFolder"));
                 if (string.IsNullOrEmpty(path))
-                    return FailMovePreparation(index, "path or assetPath is required", out errorResult);
+                    return FailMovePreparation(index, "path is required", out errorResult);
                 if (string.IsNullOrEmpty(destinationPath))
                     return FailMovePreparation(index,
-                        "destinationPath, targetPath, or destinationFolder is required", out errorResult);
+                        "destinationPath or destinationFolder is required", out errorResult);
                 if (!AssetExists(path))
                     return FailMovePreparation(index, $"Asset not found at '{path}'", out errorResult);
 
@@ -688,13 +673,14 @@ namespace UnityMCP.Editor
 
             Undo.RegisterCreatedObjectUndo(instance, $"Instantiate {prefab.name}");
 
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "success", true },
                 { "name", instance.name },
                 { "instanceId", MCPObjectId.Get(instance) },
-                { "position", MCPGameObjectCommands.Vector3ToDict(instance.transform.position) },
             };
+            MCPTransformSerialization.AddWorld(result, instance.transform);
+            return result;
         }
 
         public static object CreateMaterial(Dictionary<string, object> args)

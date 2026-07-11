@@ -224,9 +224,9 @@ namespace UnityMCP.Editor
                 new Dictionary<string, object>
                 {
                     { "jobId", _workflow.TestJobId },
-                    { "includeDetails", true },
+                    { "includeFailedOnly", true },
                     { "includeStackTrace", true },
-                    { "limit", 500 },
+                    { "limit", 100 },
                 }));
             if (jobResult == null)
                 return;

@@ -226,15 +226,16 @@ namespace UnityMCP.Editor
                             components.Add(component.GetType().Name);
                     }
 
-                    matches.Add(new Dictionary<string, object>
+                    var match = new Dictionary<string, object>
                     {
                         { "name", go.name },
                         { "path", path },
                         { "instanceId", MCPObjectId.Get(go) },
                         { "active", go.activeSelf },
                         { "components", components },
-                        { "position", VectorToDict(go.transform.position) },
-                    });
+                    };
+                    MCPTransformSerialization.AddWorld(match, go.transform);
+                    matches.Add(match);
                 }
             }
 
@@ -293,8 +294,8 @@ namespace UnityMCP.Editor
                 { "tag", go.tag },
                 { "layer", LayerMask.LayerToName(go.layer) },
                 { "components", components },
-                { "position", VectorToDict(go.transform.position) },
             };
+            MCPTransformSerialization.AddWorld(node, go.transform);
 
             if (depth < maxDepth && go.transform.childCount > 0)
             {
@@ -327,9 +328,5 @@ namespace UnityMCP.Editor
             return node;
         }
 
-        private static Dictionary<string, object> VectorToDict(Vector3 v)
-        {
-            return new Dictionary<string, object> { { "x", v.x }, { "y", v.y }, { "z", v.z } };
-        }
     }
 }

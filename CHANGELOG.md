@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.0] - 2026-07-11
+
+- Omit identity Transform values from GameObject, scene hierarchy, prefab hierarchy/find, terrain, lighting, prefab instantiation, and physics overlap responses. Zero positions, identity rotations, and unit scales are no longer serialized.
+- Package test workflows now retain summaries and failed/inconclusive details by default instead of every passing test result. Full passing details remain available from `testing/get-job` with `includeDetails=true`.
+- Remove compatibility aliases from tool schemas and use canonical request fields only.
+- Omit redundant MCP annotations whose values are false and remove annotation titles that duplicate tool names.
+
 ## [3.0.0] - 2026-07-11
 
 - Fixed prefab transaction property writes rejecting serialized array-size paths such as `items.Array.size` with `Cannot set property type: ArraySize`.

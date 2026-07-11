@@ -505,10 +505,6 @@ namespace UnityMCP.Editor
             string gitUrl = GetString(args, "gitUrl");
             string refName = GetString(args, "ref");
             if (string.IsNullOrEmpty(refName))
-                refName = GetString(args, "commit");
-            if (string.IsNullOrEmpty(refName))
-                refName = GetString(args, "branch");
-            if (string.IsNullOrEmpty(refName))
                 refName = "main";
 
             if (string.IsNullOrEmpty(gitUrl))

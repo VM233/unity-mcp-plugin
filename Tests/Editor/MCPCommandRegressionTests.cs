@@ -627,6 +627,62 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void TransformResponses_OmitIdentityValuesAndKeepNonDefaults()
+        {
+            var go = new GameObject("MCP Identity Transform");
+            try
+            {
+                var identity = RequireDictionary(MCPGameObjectCommands.GetInfo(new Dictionary<string, object>
+                {
+                    { "path", go.name },
+                }));
+                foreach (string key in new[]
+                         {
+                             "position", "localPosition", "rotation", "localRotation", "scale", "lossyScale"
+                         })
+                {
+                    Assert.That(identity.ContainsKey(key), Is.False, $"Identity response contained {key}");
+                }
+
+                go.transform.localPosition = new Vector3(1f, 2f, 3f);
+                go.transform.localRotation = Quaternion.Euler(0f, 45f, 0f);
+                go.transform.localScale = new Vector3(2f, 1f, 1f);
+
+                var changed = RequireDictionary(MCPGameObjectCommands.GetInfo(new Dictionary<string, object>
+                {
+                    { "path", go.name },
+                }));
+                foreach (string key in new[]
+                         {
+                             "position", "localPosition", "rotation", "localRotation", "scale", "lossyScale"
+                         })
+                {
+                    Assert.That(changed.ContainsKey(key), Is.True, $"Non-default response omitted {key}");
+                }
+            }
+            finally
+            {
+                Object.DestroyImmediate(go);
+            }
+        }
+
+        [Test]
+        public void PrefabHierarchy_OmitsIdentityLocalTransformValues()
+        {
+            CreateTestPrefab();
+            var result = RequireDictionary(MCPPrefabAssetCommands.GetHierarchy(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "maxNodes", 10 },
+            }));
+            var hierarchy = (List<object>)result["hierarchy"];
+            var root = RequireDictionary(hierarchy[0]);
+            Assert.That(root.ContainsKey("localPosition"), Is.False);
+            Assert.That(root.ContainsKey("localRotation"), Is.False);
+            Assert.That(root.ContainsKey("localScale"), Is.False);
+        }
+
+        [Test]
         public void PrefabSetReference_ResolvesSpriteSubAssetInsteadOfTextureMainAsset()
         {
             const string spritePath = TEST_FOLDER + "/Reference Sprite.png";
@@ -756,6 +812,24 @@ namespace UnityMCP.Editor.Tests
             Assert.That(tools.All(tool => !tool.ContainsKey("input_schema")), Is.True);
             Assert.That(result.ContainsKey("firstClassTools"), Is.False);
             Assert.That(result.ContainsKey("fallbackTools"), Is.False);
+        }
+
+        [Test]
+        public void ToolMetadata_FirstClassSchemasOmitCompatibilityAliasesAndFalseAnnotations()
+        {
+            var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: true, includeSchema: true, limit: 200));
+            var tools = (List<Dictionary<string, object>>)result["tools"];
+            string json = MiniJson.Serialize(tools);
+
+            Assert.That(json, Does.Not.Contain("Alias for"));
+            Assert.That(json, Does.Not.Contain("\"uidocumentInstanceId\""));
+            foreach (var tool in tools)
+            {
+                var annotations = RequireDictionary(tool["annotations"]);
+                Assert.That(annotations.ContainsKey("title"), Is.False);
+                Assert.That(annotations.Values.OfType<bool>().All(value => value), Is.True);
+            }
         }
 
         [Test]

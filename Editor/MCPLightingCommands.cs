@@ -33,7 +33,7 @@ namespace UnityMCP.Editor
                 lightList.Add(info);
             }
 
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "lightCount", lightList.Count },
                 { "lights", lightList },
@@ -97,8 +97,9 @@ namespace UnityMCP.Editor
                 { "instanceId", MCPObjectId.Get(go) },
                 { "lightType", lightType.ToString() },
                 { "intensity", light.intensity },
-                { "position", MCPGameObjectCommands.Vector3ToDict(go.transform.position) },
             };
+            MCPTransformSerialization.AddWorld(result, go.transform);
+            return result;
         }
 
         public static object SetEnvironment(Dictionary<string, object> args)
@@ -145,7 +146,7 @@ namespace UnityMCP.Editor
                 if (mat != null) RenderSettings.skybox = mat;
             }
 
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "success", true },
                 { "ambientMode", RenderSettings.ambientMode.ToString() },
@@ -186,9 +187,10 @@ namespace UnityMCP.Editor
                 { "success", true },
                 { "name", go.name },
                 { "instanceId", MCPObjectId.Get(go) },
-                { "position", MCPGameObjectCommands.Vector3ToDict(go.transform.position) },
                 { "size", MCPGameObjectCommands.Vector3ToDict(probe.size) },
             };
+            MCPTransformSerialization.AddWorld(result, go.transform);
+            return result;
         }
 
         public static object CreateLightProbeGroup(Dictionary<string, object> args)

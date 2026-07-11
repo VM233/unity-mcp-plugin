@@ -2653,10 +2653,8 @@ namespace UnityMCP.Editor
                 { "tag", go.tag },
                 { "layer", LayerMask.LayerToName(go.layer) },
                 { "components", components },
-                { "localPosition", VectorToDict(go.transform.localPosition) },
-                { "localRotation", VectorToDict(go.transform.localEulerAngles) },
-                { "localScale", VectorToDict(go.transform.localScale) },
             };
+            MCPTransformSerialization.AddLocal(node, go.transform);
 
             if (depth < maxDepth && go.transform.childCount > 0)
             {
@@ -3765,10 +3763,8 @@ namespace UnityMCP.Editor
                 { "prefabPath", GetPrefabPath(root, go) },
                 { "active", go.activeSelf },
                 { "layer", LayerMask.LayerToName(go.layer) },
-                { "localPosition", VectorToDict(go.transform.localPosition) },
-                { "localRotation", VectorToDict(go.transform.localEulerAngles) },
-                { "localScale", VectorToDict(go.transform.localScale) },
             };
+            MCPTransformSerialization.AddLocal(result, go.transform);
 
             if (component != null)
             {
@@ -3816,11 +3812,6 @@ namespace UnityMCP.Editor
                     StringComparison.OrdinalIgnoreCase);
 
             return string.Equals(actual.ToString(), expected.ToString(), StringComparison.OrdinalIgnoreCase);
-        }
-
-        private static Dictionary<string, object> VectorToDict(Vector3 v)
-        {
-            return new Dictionary<string, object> { { "x", v.x }, { "y", v.y }, { "z", v.z } };
         }
 
         private static Vector3 ParseVector3(object value)

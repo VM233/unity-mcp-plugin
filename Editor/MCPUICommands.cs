@@ -423,10 +423,6 @@ namespace UnityMCP.Editor
         public static object InspectUIToolkitAsset(Dictionary<string, object> args)
         {
             string uxmlPath = NormalizeAssetPath(GetString(args, "uxmlPath"), "");
-            if (string.IsNullOrEmpty(uxmlPath))
-                uxmlPath = NormalizeAssetPath(GetString(args, "assetPath"), "");
-            if (string.IsNullOrEmpty(uxmlPath))
-                uxmlPath = NormalizeAssetPath(GetString(args, "path"), "");
 
             var ussPaths = GetStringList(args, "ussPaths", "ussPath")
                 .Select(path => NormalizeAssetPath(path, uxmlPath))
@@ -980,9 +976,7 @@ namespace UnityMCP.Editor
         {
             string referencePath = GetString(args, "referencePath");
             if (string.IsNullOrEmpty(referencePath))
-                referencePath = GetString(args, "expectedPath");
-            if (string.IsNullOrEmpty(referencePath))
-                return new { error = "referencePath or expectedPath is required" };
+                return new { error = "referencePath is required" };
 
             string actualPath = GetString(args, "actualPath");
             if (string.IsNullOrEmpty(actualPath))
@@ -1254,12 +1248,8 @@ namespace UnityMCP.Editor
         {
             string uxmlPath = NormalizeAssetPath(GetString(args, "uxmlPath"), "");
             if (string.IsNullOrEmpty(uxmlPath))
-                uxmlPath = NormalizeAssetPath(GetString(args, "assetPath"), "");
-            if (string.IsNullOrEmpty(uxmlPath))
-                uxmlPath = NormalizeAssetPath(GetString(args, "path"), "");
-            if (string.IsNullOrEmpty(uxmlPath))
             {
-                resolve(new { error = "uxmlPath, assetPath, or path is required" });
+                resolve(new { error = "uxmlPath is required" });
                 return;
             }
 
@@ -1645,8 +1635,6 @@ namespace UnityMCP.Editor
             }
 
             string path = GetString(args, "path");
-            if (string.IsNullOrEmpty(path))
-                path = GetString(args, "treePath");
             if (string.IsNullOrEmpty(path) == false)
             {
                 var element = GetElementByFlexiblePath(root, path);
@@ -1962,11 +1950,7 @@ namespace UnityMCP.Editor
             error = "";
             bool includeInactive = GetBool(args, "includeInactive", true);
             object instanceId = null;
-            if (!TryGetObjectId(args, "documentInstanceId", out instanceId) &&
-                !TryGetObjectId(args, "uidocumentInstanceId", out instanceId))
-            {
-                TryGetObjectId(args, "instanceId", out instanceId);
-            }
+            TryGetObjectId(args, "documentInstanceId", out instanceId);
 
             string documentName = GetString(args, "documentName");
             string gameObjectPath = GetString(args, "gameObjectPath");
@@ -2051,8 +2035,6 @@ namespace UnityMCP.Editor
             }
 
             string path = GetString(args, "path");
-            if (string.IsNullOrEmpty(path))
-                path = GetString(args, "treePath");
             if (string.IsNullOrEmpty(path) == false)
             {
                 var element = GetElementByFlexiblePath(root, path);
@@ -2103,11 +2085,8 @@ namespace UnityMCP.Editor
         private static bool HasElementLocator(Dictionary<string, object> args)
         {
             return string.IsNullOrEmpty(GetString(args, "path")) == false ||
-                   string.IsNullOrEmpty(GetString(args, "treePath")) == false ||
                    string.IsNullOrEmpty(GetString(args, "visualElementPath")) == false ||
-                   string.IsNullOrEmpty(GetString(args, "namePath")) == false ||
-                   GetStringList(args, "visualElementNames", "").Count > 0 ||
-                   GetStringList(args, "names", "").Count > 0;
+                   GetStringList(args, "visualElementNames", "").Count > 0;
         }
 
         private static int MarkAllUIToolkitDirty()
@@ -2536,18 +2515,9 @@ namespace UnityMCP.Editor
             if (args.TryGetValue(visualElementPathKey, out object pathValue))
                 AddVisualElementPathNames(names, pathValue);
 
-            string namePathKey = string.IsNullOrEmpty(prefix) ? "namePath" : $"{prefix}NamePath";
-            AddVisualElementPathNames(names, GetString(args, namePathKey));
-
             string namesKey = string.IsNullOrEmpty(prefix) ? "visualElementNames" : $"{prefix}Names";
             foreach (string name in GetStringList(args, namesKey, ""))
                 AddVisualElementPathNames(names, name);
-
-            if (string.IsNullOrEmpty(prefix))
-            {
-                foreach (string name in GetStringList(args, "names", ""))
-                    AddVisualElementPathNames(names, name);
-            }
 
             return names.Where(name => string.IsNullOrEmpty(name) == false).ToList();
         }

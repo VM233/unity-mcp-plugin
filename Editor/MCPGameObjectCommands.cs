@@ -44,13 +44,14 @@ namespace UnityMCP.Editor
 
             Undo.RegisterCreatedObjectUndo(go, $"Create {name}");
 
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "success", true },
                 { "name", go.name },
                 { "instanceId", MCPObjectId.Get(go) },
-                { "position", Vector3ToDict(go.transform.position) },
             };
+            MCPTransformSerialization.AddWorld(result, go.transform);
+            return result;
         }
 
         public static object Delete(Dictionary<string, object> args)
@@ -84,7 +85,7 @@ namespace UnityMCP.Editor
             for (int i = 0; i < go.transform.childCount; i++)
                 children.Add(go.transform.GetChild(i).name);
 
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "name", go.name },
                 { "instanceId", MCPObjectId.Get(go) },
@@ -94,18 +95,15 @@ namespace UnityMCP.Editor
                 { "tag", go.tag },
                 { "layer", LayerMask.LayerToName(go.layer) },
                 { "layerIndex", go.layer },
-                { "position", Vector3ToDict(go.transform.position) },
-                { "localPosition", Vector3ToDict(go.transform.localPosition) },
-                { "rotation", Vector3ToDict(go.transform.eulerAngles) },
-                { "localRotation", Vector3ToDict(go.transform.localEulerAngles) },
-                { "scale", Vector3ToDict(go.transform.localScale) },
-                { "lossyScale", Vector3ToDict(go.transform.lossyScale) },
                 { "components", components },
                 { "children", children },
                 { "childCount", go.transform.childCount },
                 { "parent", go.transform.parent != null ? go.transform.parent.name : null },
                 { "hierarchyPath", GetHierarchyPath(go) },
             };
+            MCPTransformSerialization.AddWorld(result, go.transform, includeScale: true);
+            MCPTransformSerialization.AddLocal(result, go.transform, scaleKey: "scale");
+            return result;
         }
 
         public static object SetTransform(Dictionary<string, object> args)
@@ -135,14 +133,14 @@ namespace UnityMCP.Editor
                 go.transform.localScale = DictToVector3(args["scale"] as Dictionary<string, object>);
             }
 
-            return new Dictionary<string, object>
+            var result = new Dictionary<string, object>
             {
                 { "success", true },
                 { "name", go.name },
-                { "position", Vector3ToDict(go.transform.position) },
-                { "rotation", Vector3ToDict(go.transform.eulerAngles) },
-                { "scale", Vector3ToDict(go.transform.localScale) },
             };
+            MCPTransformSerialization.AddWorld(result, go.transform);
+            MCPTransformSerialization.AddVectorIfDifferent(result, "scale", go.transform.localScale, Vector3.one);
+            return result;
         }
 
         // ─── Helpers ───

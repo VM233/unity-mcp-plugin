@@ -76,16 +76,17 @@ namespace UnityMCP.Editor
                 };
             }
 
-            public Dictionary<string, object> ToAnnotations(string title)
+            public Dictionary<string, object> ToAnnotations()
             {
-                return new Dictionary<string, object>
+                var annotations = new Dictionary<string, object>();
+                if (ReadOnly)
                 {
-                    { "title", title },
-                    { "readOnlyHint", ReadOnly },
-                    { "destructiveHint", Dangerous },
-                    { "idempotentHint", ReadOnly },
-                    { "openWorldHint", false },
-                };
+                    annotations["readOnlyHint"] = true;
+                    annotations["idempotentHint"] = true;
+                }
+                if (Dangerous)
+                    annotations["destructiveHint"] = true;
+                return annotations;
             }
         }
 
@@ -489,7 +490,7 @@ namespace UnityMCP.Editor
                 { "longRunning", profile.LongRunning },
                 { "mayReloadDomain", profile.MayReloadDomain },
                 { "requiresPlayMode", profile.RequiresPlayMode },
-                { "annotations", profile.ToAnnotations(toolName) },
+                { "annotations", profile.ToAnnotations() },
                 { "fallbackRoute", isFirstClass ? "" : "advanced/execute" },
             };
         }
@@ -554,7 +555,7 @@ namespace UnityMCP.Editor
                 { "longRunning", longRunning },
                 { "mayReloadDomain", mayReloadDomain },
                 { "requiresPlayMode", requiresPlayMode },
-                { "annotations", profile.ToAnnotations(toolName) },
+                { "annotations", profile.ToAnnotations() },
                 { "source", projectTool.TryGetValue("source", out var source) ? source : "" },
                 { "fallbackRoute", isFirstClass ? "" : "project-tools/execute" },
             };
@@ -976,8 +977,6 @@ namespace UnityMCP.Editor
                         Prop("route", "string", "Unity route to execute, e.g. prefab-asset/transaction-edit or project-tools/execute."),
                         Prop("method", "string", "HTTP-like method used for the nested route. Defaults to POST."),
                         Prop("args", "object", "Arguments passed to the nested route."),
-                        Prop("arguments", "object", "Alias for args."),
-                        Prop("parameters", "object", "Alias for args."),
                         Prop("body", "string", "Optional raw JSON body. If provided, args are ignored."),
                         Prop("expectedProjectPath", "string", "Optional safety check. The request is rejected if it reaches a different Unity project.")
                     ), "route");
@@ -1066,8 +1065,6 @@ namespace UnityMCP.Editor
                         Prop("name", "string", "Package name, e.g. com.example.package"),
                         Prop("gitUrl", "string", "Optional Git URL. Defaults to the current manifest Git URL."),
                         Prop("ref", "string", "Optional branch, tag, or commit. Defaults to main."),
-                        Prop("commit", "string", "Optional commit hash alias for ref."),
-                        Prop("branch", "string", "Optional branch alias for ref."),
                         Prop("skipIfResolved", "boolean", "Skip Package Manager resolve when packages-lock already matches the requested Git commit. Defaults to true."),
                         Prop("force", "boolean", "Force Package Manager resolve even when packages-lock already matches. Defaults to false.")
                     ), "name");
@@ -1108,27 +1105,18 @@ namespace UnityMCP.Editor
                 case "instance/resolve":
                     return Schema(Props(
                         Prop("projectPath", "string", "Unity project root path to resolve. Exact normalized path match."),
-                        Prop("expectedProjectPath", "string", "Alias for projectPath."),
-                        Prop("targetProjectPath", "string", "Alias for projectPath."),
-                        Prop("unityProjectPath", "string", "Alias for projectPath."),
                         Prop("projectName", "string", "Unity project name to resolve. Ambiguous names return an error."),
                         Prop("port", "number", "MCP bridge port to resolve.")
                     ));
                 case "instance/assert-project":
                     return Schema(Props(
                         Prop("expectedProjectPath", "string", "Expected Unity project root path."),
-                        Prop("targetProjectPath", "string", "Alias for expectedProjectPath."),
-                        Prop("unityProjectPath", "string", "Alias for expectedProjectPath."),
-                        Prop("expectedProjectName", "string", "Expected Unity project name."),
-                        Prop("projectName", "string", "Alias for expectedProjectName.")
+                        Prop("expectedProjectName", "string", "Expected Unity project name.")
                     ));
                 case "asset/export-unitypackage":
                     return Schema(Props(
                         Prop("assetPaths", "array", "Unity asset paths to export, e.g. Assets/MyFolder or Assets/MyPrefab.prefab."),
-                        Prop("assetPath", "string", "Single Unity asset path alias."),
-                        Prop("path", "string", "Single Unity asset path alias."),
                         Prop("outputPath", "string", "Absolute path or project-root-relative path for the .unitypackage output."),
-                        Prop("filePath", "string", "Alias for outputPath."),
                         Prop("includeDependencies", "boolean", "Include asset dependencies. Defaults to true."),
                         Prop("recurse", "boolean", "Recursively export folder contents. Defaults to true."),
                         Prop("overwrite", "boolean", "Replace an existing output file. Defaults to false."),
@@ -1360,16 +1348,12 @@ namespace UnityMCP.Editor
                 case "asset/rename":
                     return Schema(Props(
                         Prop("path", "string", "Current asset path, e.g. Assets/Art/Old Name.png."),
-                        Prop("assetPath", "string", "Alias for path."),
                         Prop("newName", "string", "New file or folder name. Do not include a directory path."),
-                        Prop("name", "string", "Alias for newName."),
                         Prop("dryRun", "boolean", "Validate and return expected paths without renaming.")
                     ));
                 case "asset/refresh":
                     return Schema(Props(
                         Prop("assetPaths", "array", "Optional Unity asset paths to import individually."),
-                        Prop("assetPath", "string", "Single asset path alias."),
-                        Prop("path", "string", "Single asset path alias."),
                         Prop("forceUpdate", "boolean", "Use ImportAssetOptions.ForceUpdate. Defaults to true."),
                         Prop("saveAssets", "boolean", "Call AssetDatabase.SaveAssets after refresh/import. Defaults to false.")
                     ));
@@ -1442,7 +1426,6 @@ namespace UnityMCP.Editor
                         Prop("stateName", "string", "State name to modify."),
                         Prop("newStateName", "string", "Optional new state name."),
                         Prop("motionPath", "string", "AnimationClip or Motion asset path to assign."),
-                        Prop("clipPath", "string", "Alias for motionPath."),
                         Prop("clearMotion", "boolean", "Clear the state's motion."),
                         Prop("speed", "number", "State speed."),
                         Prop("tag", "string", "State tag."),
@@ -1491,14 +1474,12 @@ namespace UnityMCP.Editor
                 case "animation/validate-controller":
                     return Schema(Props(
                         Prop("controllerPath", "string", "AnimatorController asset path."),
-                        Prop("path", "string", "Alias for controllerPath."),
                         Prop("layerIndex", "number", "Layer index. Defaults to 0."),
                         Prop("requiredParameters", "array", "Strings or objects with name/parameterName and optional type/parameterType."),
                         Prop("requiredStates", "array", "State names that must exist."),
                         Prop("requireMotion", "boolean", "Require every state in the layer to have a motion."),
                         Prop("requiredTransitions", "array", "Objects with source/sourceState, destination/destinationState, and optional conditionParameter."),
                         Prop("requireFullMesh", "boolean", "Require all stateNames to have pairwise transitions."),
-                        Prop("requireMutualTransitions", "boolean", "Alias for requireFullMesh."),
                         Prop("stateNames", "array", "States used by full mesh validation. Defaults to all layer states.")
                     ), "controllerPath");
                 case "project-tools/list":
@@ -1540,8 +1521,6 @@ namespace UnityMCP.Editor
                 case "uitoolkit/asset-inspect":
                     return Schema(Props(
                         Prop("uxmlPath", "string", "UXML asset path, e.g. Assets/UI/HUD.uxml."),
-                        Prop("assetPath", "string", "Alias for uxmlPath."),
-                        Prop("path", "string", "Alias for uxmlPath."),
                         Prop("ussPath", "string", "Optional USS asset path. UXML Style src entries are also auto-resolved."),
                         Prop("ussPaths", "array", "Optional USS asset paths. UXML Style src entries are also auto-resolved."),
                         Prop("name", "string", "VisualElement.name exact match."),
@@ -1566,10 +1545,8 @@ namespace UnityMCP.Editor
                 case "uitoolkit/runtime-query":
                     return RuntimeUIDocumentSchema(Props(
                         Prop("path", "string", "Element tree path from runtime-tree, e.g. root/0/1."),
-                        Prop("treePath", "string", "Alias for path."),
                         Prop("visualElementPath", "string", "Slash-separated VisualElementPath names, e.g. MainMap/RightControls."),
                         Prop("visualElementNames", "array", "VisualElementPath names array."),
-                        Prop("names", "array", "Alias for visualElementNames."),
                         Prop("name", "string", "VisualElement.name exact match."),
                         Prop("className", "string", "USS class name exact match."),
                         Prop("typeName", "string", "VisualElement type name contains match."),
@@ -1580,10 +1557,8 @@ namespace UnityMCP.Editor
                 case "uitoolkit/runtime-style":
                     return RuntimeUIDocumentSchema(Props(
                         Prop("path", "string", "Element tree path from runtime-tree, e.g. root/0/1."),
-                        Prop("treePath", "string", "Alias for path."),
                         Prop("visualElementPath", "string", "Slash-separated VisualElementPath names."),
                         Prop("visualElementNames", "array", "VisualElementPath names array."),
-                        Prop("names", "array", "Alias for visualElementNames."),
                         Prop("name", "string", "VisualElement.name exact match if path is omitted."),
                         Prop("className", "string", "USS class name exact match if path is omitted."),
                         Prop("typeName", "string", "VisualElement type name contains match if path is omitted."),
@@ -1614,7 +1589,6 @@ namespace UnityMCP.Editor
                         Prop("runtime", "boolean", "Locate a runtime UIDocument element when true; otherwise locate an EditorWindow UI Toolkit element. Defaults to false."),
                         Prop("window", "string", "EditorWindow type/title. Runtime defaults to Game when capture uses it later."),
                         Prop("path", "string", "Element tree path, e.g. root/0/1."),
-                        Prop("treePath", "string", "Alias for path."),
                         Prop("visualElementPath", "string", "Slash-separated VisualElementPath names."),
                         Prop("visualElementNames", "array", "VisualElementPath names array."),
                         Prop("name", "string", "VisualElement.name exact match if path is omitted."),
@@ -1629,7 +1603,6 @@ namespace UnityMCP.Editor
                         Prop("runtime", "boolean", "Capture a runtime UIDocument element when true; otherwise capture an EditorWindow UI Toolkit element. Defaults to false."),
                         Prop("window", "string", "EditorWindow type/title to capture. Runtime defaults to Game, editor defaults to the focused/matched window."),
                         Prop("path", "string", "Element tree path, e.g. root/0/1."),
-                        Prop("treePath", "string", "Alias for path."),
                         Prop("visualElementPath", "string", "Slash-separated VisualElementPath names."),
                         Prop("visualElementNames", "array", "VisualElementPath names array."),
                         Prop("name", "string", "VisualElement.name exact match if path is omitted."),
@@ -1650,8 +1623,7 @@ namespace UnityMCP.Editor
                         Prop("name", "string", "VisualElement.name exact match if path is omitted."),
                         Prop("className", "string", "USS class name exact match if path is omitted."),
                         Prop("typeName", "string", "VisualElement type name contains match if path is omitted."),
-                        Prop("referencePath", "string", "Reference PNG path. Alias: expectedPath."),
-                        Prop("expectedPath", "string", "Alias for referencePath."),
+                        Prop("referencePath", "string", "Reference PNG path."),
                         Prop("actualPath", "string", "Output path for captured current element PNG."),
                         Prop("diffOutputPath", "string", "Optional output path for diff PNG."),
                         Prop("referenceRect", "object", "Optional comparison rect in reference image."),
@@ -1708,8 +1680,6 @@ namespace UnityMCP.Editor
                 case "uitoolkit/builder-preview":
                     return Schema(Props(
                         Prop("uxmlPath", "string", "UXML asset path to open in UI Builder."),
-                        Prop("assetPath", "string", "Alias for uxmlPath."),
-                        Prop("path", "string", "Alias for uxmlPath."),
                         Prop("waitFrames", "number", "Editor frames to wait before capturing. Defaults to 8."),
                         Prop("stableFrames", "number", "Consecutive ready UI Builder frames required. Defaults to 2."),
                         Prop("timeoutMs", "number", "Maximum time to wait for the requested document and canvas. Defaults to 10000."),
@@ -1732,9 +1702,7 @@ namespace UnityMCP.Editor
                     ));
                 case "screenshot/crop":
                     return Schema(Props(
-                        Prop("sourcePath", "string", "Image path to crop. Aliases: imagePath, path."),
-                        Prop("imagePath", "string", "Alias for sourcePath."),
-                        Prop("path", "string", "Alias for sourcePath."),
+                        Prop("sourcePath", "string", "Image path to crop."),
                         Prop("rect", "object", "Crop rect with x, y, width, height."),
                         Prop("outputPath", "string", "Output PNG path. Defaults next to source with _crop suffix."),
                         Prop("originTopLeft", "boolean", "Treat rect x/y as top-left image coordinates. Defaults to true.")
@@ -1745,13 +1713,11 @@ namespace UnityMCP.Editor
                     return Schema(Props(
                         Prop("width", "number", "Game View custom resolution width in pixels."),
                         Prop("height", "number", "Game View custom resolution height in pixels."),
-                        Prop("label", "string", "Optional custom size label shown in the Game View size menu."),
-                        Prop("name", "string", "Alias for label.")
+                        Prop("label", "string", "Optional custom size label shown in the Game View size menu.")
                     ), "width", "height");
                 case "gameview/set-scale":
                     return Schema(Props(
-                        Prop("scale", "number", "Game View zoom scale, e.g. 0.76 or 1."),
-                        Prop("value", "number", "Alias for scale.")
+                        Prop("scale", "number", "Game View zoom scale, e.g. 0.76 or 1.")
                     ), "scale");
                 case "gameview/set-min-scale":
                     return Schema(Props(
@@ -1761,7 +1727,6 @@ namespace UnityMCP.Editor
                     return Schema(Props(
                         Prop("assetPath", "string", "Texture2D asset path."),
                         Prop("filePath", "string", "Absolute or project-relative PNG path if assetPath is omitted."),
-                        Prop("path", "string", "Alias for assetPath."),
                         Prop("alphaThreshold", "number", "Alpha threshold. 0-1 or 0-255. Defaults to 0.01.")
                     ));
                 case "graphics/rect-gap":
@@ -1775,10 +1740,7 @@ namespace UnityMCP.Editor
                     ), "firstRect", "secondRect");
                 case "graphics/annotate-rects":
                     return Schema(Props(
-                        Prop("sourcePath", "string", "Image path to annotate. Aliases: imagePath, filePath, path."),
-                        Prop("imagePath", "string", "Alias for sourcePath."),
-                        Prop("filePath", "string", "Alias for sourcePath."),
-                        Prop("path", "string", "Alias for sourcePath."),
+                        Prop("sourcePath", "string", "Image path to annotate."),
                         Prop("outputPath", "string", "Output PNG path. Defaults next to source with _annotated suffix."),
                         Prop("rects", "array", "Rectangles to draw. Each has x, y, width, height, optional color and thickness."),
                         Prop("originTopLeft", "boolean", "Treat rect x/y as top-left image coordinates. Defaults to true."),
@@ -1787,21 +1749,17 @@ namespace UnityMCP.Editor
                     ), "rects");
                 case "graphics/compare-images":
                     return Schema(Props(
-                        Prop("expectedPath", "string", "Reference image path. Alias: referencePath."),
-                        Prop("referencePath", "string", "Alias for expectedPath."),
-                        Prop("actualPath", "string", "Current image path. Alias: currentPath."),
-                        Prop("currentPath", "string", "Alias for actualPath."),
+                        Prop("expectedPath", "string", "Reference image path."),
+                        Prop("actualPath", "string", "Current image path."),
                         Prop("expectedRect", "object", "Optional reference crop rect with x, y, width, height."),
-                        Prop("referenceRect", "object", "Alias for expectedRect."),
                         Prop("actualRect", "object", "Optional current crop rect with x, y, width, height."),
-                        Prop("currentRect", "object", "Alias for actualRect."),
                         Prop("tolerance", "number", "Per-channel pixel tolerance, 0-255. Defaults to 0."),
                         Prop("maxSamples", "number", "Maximum differing pixel samples returned. Defaults to 20."),
                         Prop("diffOutputPath", "string", "Optional PNG path to write a red-highlight diff image.")
                     ));
                 case "sprite/sheet-info":
                     return Schema(Props(
-                        Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path.")
+                        Prop("texturePath", "string", "Sprite sheet texture asset path.")
                     ));
                 case "sprite/pixel-check":
                     return Schema(Props(
@@ -1818,7 +1776,7 @@ namespace UnityMCP.Editor
                 case "sprite/replace-and-slice":
                 case "sprite/slice-sheet":
                     return Schema(Props(
-                        Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path."),
+                        Prop("texturePath", "string", "Sprite sheet texture asset path."),
                         Prop("sourcePath", "string", "External image file to copy over texturePath. Required for replace-and-slice."),
                         Prop("frameWidth", "number", "Frame width in pixels."),
                         Prop("frameHeight", "number", "Frame height in pixels."),
@@ -1834,7 +1792,7 @@ namespace UnityMCP.Editor
                 case "sprite/update-animation-clip":
                     return Schema(Props(
                         Prop("clipPath", "string", "AnimationClip asset path."),
-                        Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path."),
+                        Prop("texturePath", "string", "Sprite sheet texture asset path."),
                         Prop("bindingPath", "string", "Animation binding path to SpriteRenderer. Empty means the animated object itself."),
                         Prop("frameRate", "number", "Animation frame rate. Defaults to the clip frame rate or 12."),
                         Prop("spriteNames", "array", "Optional exact sprite names to use."),
@@ -1842,7 +1800,7 @@ namespace UnityMCP.Editor
                     ), "clipPath", "texturePath");
                 case "sprite/replace-slice-update-clip":
                     return Schema(Props(
-                        Prop("texturePath", "string", "Sprite sheet texture asset path. Aliases: assetPath, path."),
+                        Prop("texturePath", "string", "Sprite sheet texture asset path."),
                         Prop("sourcePath", "string", "External image file to copy over texturePath."),
                         Prop("clipPath", "string", "Optional AnimationClip asset path to update after slicing."),
                         Prop("frameWidth", "number", "Frame width in pixels."),
@@ -1854,12 +1812,10 @@ namespace UnityMCP.Editor
                     ), "texturePath", "sourcePath", "frameWidth", "frameHeight");
                 case "texture/apply-sprite-preset":
                     return Schema(Props(
-                        Prop("path", "string", "Texture asset path. Alias: assetPath."),
-                        Prop("assetPath", "string", "Alias for path."),
+                        Prop("path", "string", "Texture asset path."),
                         Prop("referencePath", "string", "Optional texture asset whose importer settings are copied first."),
                         Prop("preset", "string", "High-level preset. Supported: pixel-sprite."),
-                        Prop("pixelsPerUnit", "number", "Sprite pixels per unit. Alias: spritePixelsPerUnit."),
-                        Prop("spritePixelsPerUnit", "number", "Sprite pixels per unit."),
+                        Prop("pixelsPerUnit", "number", "Sprite pixels per unit."),
                         Prop("filterMode", "string", "Texture FilterMode, e.g. Point."),
                         Prop("textureCompression", "string", "TextureImporterCompression value."),
                         Prop("defaultPlatformFormat", "string", "Default platform TextureImporterFormat, e.g. RGBA32."),
@@ -1873,12 +1829,10 @@ namespace UnityMCP.Editor
                 case "texture/import-image":
                     return Schema(Props(
                         Prop("sourcePath", "string", "Local image file path."),
-                        Prop("sourceUrl", "string", "Remote image URL. Alias: url."),
-                        Prop("url", "string", "Alias for sourceUrl."),
+                        Prop("sourceUrl", "string", "Remote image URL."),
                         Prop("targetPath", "string", "Target asset path inside Assets."),
-                        Prop("targetFolder", "string", "Target folder used with assetName/name."),
-                        Prop("assetName", "string", "Target file name used with targetFolder. Alias: name."),
-                        Prop("name", "string", "Alias for assetName."),
+                        Prop("targetFolder", "string", "Target folder used with assetName."),
+                        Prop("assetName", "string", "Target file name used with targetFolder."),
                         Prop("overwrite", "boolean", "Overwrite targetPath if content differs. Defaults to false."),
                         Prop("dedupeByHash", "boolean", "Skip if the target folder already contains identical image bytes. Defaults to true."),
                         Prop("applySpritePreset", "boolean", "Apply sprite import settings after import. Defaults to true."),
@@ -1904,8 +1858,6 @@ namespace UnityMCP.Editor
                         Prop("expectedWidth", "number", "Optional exact texture width check."),
                         Prop("expectedHeight", "number", "Optional exact texture height check."),
                         Prop("expectedBorder", "object", "Optional sprite border check. Accepts object with left/bottom/right/top or x/y/z/w."),
-                        Prop("border", "object", "Alias for expectedBorder."),
-                        Prop("spriteBorder", "object", "Alias for expectedBorder."),
                         Prop("maxTextureSize", "number", "Optional exact TextureImporter maxTextureSize check."),
                         Prop("tolerance", "number", "Float tolerance for border/PPU checks. Defaults to 0.001.")
                     ));
@@ -2030,11 +1982,8 @@ namespace UnityMCP.Editor
         {
             var moveProperties = Props(
                 Prop("path", "string", "Current asset path."),
-                Prop("assetPath", "string", "Alias for path."),
                 Prop("destinationPath", "string", "Destination asset path, or an existing folder path to keep the same file name."),
-                Prop("targetPath", "string", "Alias for destinationPath."),
-                Prop("destinationFolder", "string", "Existing folder path to keep the same file name."),
-                Prop("targetFolder", "string", "Alias for destinationFolder.")
+                Prop("destinationFolder", "string", "Existing folder path to keep the same file name.")
             );
 
             var properties = Props(
@@ -2043,7 +1992,7 @@ namespace UnityMCP.Editor
             properties["moves"] = new Dictionary<string, object>
             {
                 { "type", "array" },
-                { "description", "Move requests. Every item needs path or assetPath and one destination path or folder field. Duplicate sources and targets are rejected before any move starts." },
+                { "description", "Move requests. Every item needs path and either destinationPath or destinationFolder. Duplicate sources and targets are rejected before execution." },
                 { "items", Schema(moveProperties) }
             };
 
@@ -2094,7 +2043,6 @@ namespace UnityMCP.Editor
         {
             var props = Props(
                 Prop("documentInstanceId", "number", "UIDocument instance id from uitoolkit/runtime-documents."),
-                Prop("uidocumentInstanceId", "number", "Alias for documentInstanceId."),
                 Prop("gameObjectPath", "string", "Scene GameObject path that owns the UIDocument."),
                 Prop("gameObjectName", "string", "Scene GameObject name that owns the UIDocument."),
                 Prop("documentName", "string", "UIDocument component name."),

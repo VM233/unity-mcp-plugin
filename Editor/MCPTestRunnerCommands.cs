@@ -526,10 +526,11 @@ namespace UnityMCP.Editor
                         { "fullName", t.FullName },
                         { "status", t.Status },
                         { "duration", Math.Round(t.Duration, 3) },
-                        { "message", t.Message ?? "" },
                     };
-                    if (includeStackTrace)
-                        test["stackTrace"] = t.StackTrace ?? "";
+                    if (string.IsNullOrEmpty(t.Message) == false)
+                        test["message"] = t.Message;
+                    if (includeStackTrace && string.IsNullOrEmpty(t.StackTrace) == false)
+                        test["stackTrace"] = t.StackTrace;
                     return test;
                 }).ToList();
                 int nextOffset = offset + page.Count;
