@@ -362,7 +362,7 @@ namespace UnityMCP.Editor
             if (string.IsNullOrEmpty(componentType))
                 return new { error = "componentType is required" };
 
-            int index = args.ContainsKey("index") ? Convert.ToInt32(args["index"]) : 0;
+            int index = GetInt(args, "componentIndex", 0);
 
             var root = PrefabUtility.LoadPrefabContents(assetPath);
             if (root == null)
@@ -421,7 +421,7 @@ namespace UnityMCP.Editor
             if (string.IsNullOrEmpty(componentType))
                 return new { error = "componentType is required" };
 
-            int componentIndex = GetInt(args, "componentIndex", GetInt(args, "index", 0));
+            int componentIndex = GetInt(args, "componentIndex", 0);
             if (componentIndex < 0)
                 return new { error = "componentIndex must be zero or greater" };
 
@@ -3206,7 +3206,7 @@ namespace UnityMCP.Editor
                 return false;
 
             string componentName = component.GetType().Name;
-            int index = GetInt(operation, "index", GetInt(operation, "componentIndex", 0));
+            int index = GetInt(operation, "componentIndex", 0);
             UnityEngine.Object.DestroyImmediate(component);
 
             summary = new Dictionary<string, object>
@@ -3346,7 +3346,7 @@ namespace UnityMCP.Editor
                 return false;
             }
 
-            int index = GetInt(operation, "componentIndex", GetInt(operation, "index", 0));
+            int index = GetInt(operation, "componentIndex", 0);
             var components = go.GetComponents(type);
             if (components == null || index < 0 || index >= components.Length)
             {

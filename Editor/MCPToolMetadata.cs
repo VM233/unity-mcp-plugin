@@ -1282,7 +1282,7 @@ namespace UnityMCP.Editor
                         Prop("assetPath", "string", "Prefab asset path to edit."),
                         Prop("prefabPath", "string", "Path of the GameObject inside the prefab. Empty means root."),
                         Prop("componentType", "string", "Component type name or full name."),
-                        Prop("index", "number", "Component index when multiple components of the same type exist. Defaults to 0."),
+                        Prop("componentIndex", "number", "Component index when multiple components of the same type exist. Defaults to 0."),
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                         Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary.")
                     ), "assetPath", "componentType");
