@@ -150,6 +150,8 @@ namespace UnityMCP.Editor
                 "prefab-asset/set-property",
                 "prefab-asset/set-reference",
                 "prefab-asset/transaction-edit",
+                "prefab-asset/cleanup-missing-overrides",
+                "asset/import",
                 "asset/rename",
                 "asset/move",
                 "asset/export-unitypackage",
@@ -802,6 +804,8 @@ namespace UnityMCP.Editor
                     return "Find GameObjects inside a prefab asset by name/path, component type, and serialized property value.";
                 case "prefab-asset/transaction-edit":
                     return "Apply ordered prefab edits in one transaction with configurable immediate or frame-batched execution.";
+                case "prefab-asset/cleanup-missing-overrides":
+                    return "Remove Prefab Variant property overrides whose serialized target field no longer exists.";
                 case "component/set-reference":
                     return "Assign one or more component ObjectReference properties with configurable immediate or frame-batched execution.";
                 case "serialized-object/get":
@@ -810,6 +814,8 @@ namespace UnityMCP.Editor
                     return "Set one serialized property on a scene object, component, or asset via SerializedObject. SerializeReference values use '$managedReferenceType' when their concrete type cannot be inferred.";
                 case "asset/refresh":
                     return "Import selected assets in order, then synchronously reconcile all external AssetDatabase changes by default.";
+                case "asset/import":
+                    return "Copy an external asset into the project and configure TextureImporter and Sprite settings in the same operation.";
                 case "asset/rename":
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
@@ -1320,6 +1326,13 @@ namespace UnityMCP.Editor
                     ), "assetPath");
                 case "prefab-asset/transaction-edit":
                     return PrefabAssetTransactionEditSchema();
+                case "prefab-asset/cleanup-missing-overrides":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "Prefab Variant asset path to clean."),
+                        Prop("dryRun", "boolean", "Report removable overrides without saving. Defaults to false."),
+                        Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                        Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary.")
+                    ), "assetPath");
                 case "component/set-reference":
                     return ComponentSetReferenceSchema();
                 case "serialized-object/get":
@@ -1354,6 +1367,20 @@ namespace UnityMCP.Editor
                         Prop("newName", "string", "New file or folder name. Do not include a directory path."),
                         Prop("dryRun", "boolean", "Validate and return expected paths without renaming.")
                     ));
+                case "asset/import":
+                    return Schema(Props(
+                        Prop("sourcePath", "string", "Absolute external source file path."),
+                        Prop("destinationPath", "string", "Destination Unity asset path under Assets/."),
+                        Prop("textureType", "string", "TextureImporterType such as Sprite or Default."),
+                        Prop("spriteMode", "string", "Sprite import mode: Single, Multiple, Polygon, or None."),
+                        Prop("pixelsPerUnit", "number", "Sprite pixels per unit."),
+                        Prop("filterMode", "string", "Texture filter mode: Point, Bilinear, or Trilinear."),
+                        Prop("isReadable", "boolean", "Enable CPU texture reads."),
+                        Prop("compression", "string", "Compression: uncompressed, low, normal, or high."),
+                        Prop("alphaIsTransparency", "boolean", "Treat alpha as transparency."),
+                        Prop("meshType", "string", "Sprite mesh type: FullRect or Tight."),
+                        Prop("mipmapEnabled", "boolean", "Generate mipmaps.")
+                    ), "sourcePath", "destinationPath");
                 case "asset/refresh":
                     return Schema(Props(
                         Prop("assetPaths", "array", "Optional Unity asset paths to import first in the provided order."),
@@ -1966,7 +1993,8 @@ namespace UnityMCP.Editor
                                         { "enum", new List<object>
                                             {
                                                 "addComponent", "setProperty", "setReference", "addGameObject",
-                                                "instantiatePrefab", "removeComponent", "removeGameObject", "moveGameObject"
+                                                "instantiatePrefab", "removeComponent", "removeGameObject", "moveGameObject",
+                                                "arrayInsert", "arrayRemove", "arraySet", "arrayClear"
                                             }
                                         }
                                     }

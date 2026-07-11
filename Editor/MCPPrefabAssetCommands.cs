@@ -1602,6 +1602,89 @@ namespace UnityMCP.Editor
             }
         }
 
+        public static object CleanupMissingVariantOverrides(Dictionary<string, object> args)
+        {
+            string assetPath = GetString(args, "assetPath");
+            if (string.IsNullOrEmpty(assetPath))
+                return new { error = "assetPath is required" };
+
+            var prefabAsset = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+            if (prefabAsset == null)
+                return new { error = $"Prefab not found at '{assetPath}'" };
+            if (PrefabUtility.GetPrefabAssetType(prefabAsset) != PrefabAssetType.Variant)
+                return new { error = $"Prefab at '{assetPath}' is not a Prefab Variant" };
+
+            var beforeSnapshot = CaptureAssetText(assetPath);
+            var modifications = PrefabUtility.GetPropertyModifications(prefabAsset) ??
+                                Array.Empty<PropertyModification>();
+            var kept = new List<PropertyModification>();
+            var removed = new List<Dictionary<string, object>>();
+
+            foreach (var modification in modifications)
+            {
+                string reason = null;
+                if (modification.target == null)
+                {
+                    reason = "missing-target";
+                }
+                else if (string.IsNullOrEmpty(modification.propertyPath))
+                {
+                    reason = "missing-property-path";
+                }
+                else
+                {
+                    try
+                    {
+                        var serializedTarget = new SerializedObject(modification.target);
+                        if (serializedTarget.FindProperty(modification.propertyPath) == null)
+                            reason = "missing-serialized-field";
+                    }
+                    catch (Exception ex)
+                    {
+                        reason = $"unreadable-target: {ex.Message}";
+                    }
+                }
+
+                if (reason == null)
+                {
+                    kept.Add(modification);
+                    continue;
+                }
+
+                removed.Add(new Dictionary<string, object>
+                {
+                    { "target", modification.target == null ? "" : modification.target.name },
+                    { "targetType", modification.target == null ? "" : modification.target.GetType().FullName },
+                    { "propertyPath", modification.propertyPath ?? "" },
+                    { "value", modification.value ?? "" },
+                    { "reason", reason }
+                });
+            }
+
+            bool dryRun = GetBool(args, "dryRun", false);
+            if (!dryRun && removed.Count > 0)
+            {
+                PrefabUtility.SetPropertyModifications(prefabAsset, kept.ToArray());
+                EditorUtility.SetDirty(prefabAsset);
+                AssetDatabase.SaveAssets();
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+            }
+
+            var result = new Dictionary<string, object>
+            {
+                { "success", true },
+                { "assetPath", assetPath },
+                { "dryRun", dryRun },
+                { "beforeCount", modifications.Length },
+                { "keptCount", kept.Count },
+                { "removedCount", removed.Count },
+                { "removed", removed }
+            };
+            if (!dryRun)
+                AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
+            return result;
+        }
+
         /// <summary>
         /// Apply multiple prefab asset edits in one load/save transaction.
         /// If any operation fails, no prefab asset save is performed.
@@ -2750,6 +2833,12 @@ namespace UnityMCP.Editor
                     return TryBatchSetProperty(root, operation, operationIndex, out summary, out error);
                 case "setreference":
                     return TryBatchSetReference(root, operation, operationIndex, out summary, out error);
+                case "arrayinsert":
+                case "arrayremove":
+                case "arrayset":
+                case "arrayclear":
+                    return TryBatchArrayOperation(root, operation, operationIndex, operationType,
+                        out summary, out error);
                 case "addgameobject":
                     return TryBatchAddGameObject(root, operation, operationIndex, out summary, out error);
                 case "instantiateprefab":
@@ -2933,6 +3022,84 @@ namespace UnityMCP.Editor
             summary["prefabPath"] = GetPrefabPath(root, go);
             summary["property"] = propertyName;
             summary["reference"] = refDescription;
+            return true;
+        }
+
+        private static bool TryBatchArrayOperation(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, string operationType, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            if (!TryGetBatchComponent(root, operation, operationIndex, out var go, out var component, out error))
+                return false;
+
+            string propertyName = GetString(operation, "propertyName");
+            if (string.IsNullOrEmpty(propertyName))
+            {
+                error = $"Operation {operationIndex}: propertyName is required";
+                return false;
+            }
+
+            var serialized = new SerializedObject(component);
+            var property = serialized.FindProperty(propertyName);
+            if (property == null)
+            {
+                error = $"Operation {operationIndex}: Property '{propertyName}' not found";
+                return false;
+            }
+            if (!property.isArray || property.propertyType == SerializedPropertyType.String)
+            {
+                error = $"Operation {operationIndex}: Property '{propertyName}' is not an array or list";
+                return false;
+            }
+
+            int beforeSize = property.arraySize;
+            int index = GetInt(operation, "index", -1);
+            try
+            {
+                switch (operationType)
+                {
+                    case "arrayinsert":
+                        if (index < 0 || index > property.arraySize)
+                            throw new IndexOutOfRangeException($"Index {index} is invalid for size {property.arraySize}");
+                        property.InsertArrayElementAtIndex(index);
+                        if (operation.TryGetValue("value", out var insertValue))
+                            MCPComponentCommands.SetSerializedValue(property.GetArrayElementAtIndex(index), insertValue);
+                        break;
+                    case "arrayremove":
+                        if (index < 0 || index >= property.arraySize)
+                            throw new IndexOutOfRangeException($"Index {index} is invalid for size {property.arraySize}");
+                        int sizeBeforeDelete = property.arraySize;
+                        property.DeleteArrayElementAtIndex(index);
+                        if (property.arraySize == sizeBeforeDelete)
+                            property.DeleteArrayElementAtIndex(index);
+                        break;
+                    case "arrayset":
+                        if (index < 0 || index >= property.arraySize)
+                            throw new IndexOutOfRangeException($"Index {index} is invalid for size {property.arraySize}");
+                        if (!operation.TryGetValue("value", out var setValue))
+                            throw new ArgumentException("value is required");
+                        MCPComponentCommands.SetSerializedValue(property.GetArrayElementAtIndex(index), setValue);
+                        break;
+                    case "arrayclear":
+                        property.ClearArray();
+                        break;
+                }
+
+                serialized.ApplyModifiedProperties();
+            }
+            catch (Exception ex)
+            {
+                error = $"Operation {operationIndex}: {ex.Message}";
+                return false;
+            }
+
+            summary = BuildBatchSummary(operationIndex, operationType, go, component);
+            summary["prefabPath"] = GetPrefabPath(root, go);
+            summary["property"] = propertyName;
+            summary["index"] = index;
+            summary["beforeSize"] = beforeSize;
+            summary["afterSize"] = property.arraySize;
+            error = "";
             return true;
         }
 

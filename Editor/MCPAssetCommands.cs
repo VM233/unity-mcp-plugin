@@ -2,6 +2,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using UnityEditor;
 using UnityEngine;
 
@@ -80,7 +81,130 @@ namespace UnityMCP.Editor
             File.Copy(source, fullDest, true);
             AssetDatabase.ImportAsset(dest);
 
-            return new { success = true, importedPath = dest };
+            var importerSettings = ConfigureTextureImporter(dest, args);
+
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "importedPath", dest },
+                { "importer", importerSettings },
+                { "subAssets", DescribeSubAssets(dest) }
+            };
+        }
+
+        private static object ConfigureTextureImporter(string assetPath, Dictionary<string, object> args)
+        {
+            if (AssetImporter.GetAtPath(assetPath) is not TextureImporter importer)
+                return null;
+
+            bool changed = false;
+            string textureType = GetString(args, "textureType");
+            if (!string.IsNullOrWhiteSpace(textureType))
+            {
+                if (!Enum.TryParse(textureType, true, out TextureImporterType parsedTextureType))
+                    throw new ArgumentException($"Unknown textureType '{textureType}'.");
+                importer.textureType = parsedTextureType;
+                changed = true;
+            }
+
+            string spriteMode = GetString(args, "spriteMode");
+            if (!string.IsNullOrWhiteSpace(spriteMode))
+            {
+                if (!Enum.TryParse(spriteMode, true, out SpriteImportMode parsedSpriteMode))
+                    throw new ArgumentException($"Unknown spriteMode '{spriteMode}'.");
+                importer.spriteImportMode = parsedSpriteMode;
+                changed = true;
+            }
+
+            if (args.ContainsKey("pixelsPerUnit"))
+            {
+                importer.spritePixelsPerUnit = Mathf.Max(0.0001f,
+                    Convert.ToSingle(args["pixelsPerUnit"], System.Globalization.CultureInfo.InvariantCulture));
+                changed = true;
+            }
+
+            string filterMode = GetString(args, "filterMode");
+            if (!string.IsNullOrWhiteSpace(filterMode))
+            {
+                if (!Enum.TryParse(filterMode, true, out FilterMode parsedFilterMode))
+                    throw new ArgumentException($"Unknown filterMode '{filterMode}'.");
+                importer.filterMode = parsedFilterMode;
+                changed = true;
+            }
+
+            if (args.ContainsKey("isReadable"))
+            {
+                importer.isReadable = Convert.ToBoolean(args["isReadable"]);
+                changed = true;
+            }
+
+            string compression = GetString(args, "compression");
+            if (!string.IsNullOrWhiteSpace(compression))
+            {
+                importer.textureCompression = compression.ToLowerInvariant() switch
+                {
+                    "none" or "uncompressed" => TextureImporterCompression.Uncompressed,
+                    "low" or "lq" => TextureImporterCompression.CompressedLQ,
+                    "normal" or "compressed" => TextureImporterCompression.Compressed,
+                    "high" or "hq" => TextureImporterCompression.CompressedHQ,
+                    _ => throw new ArgumentException($"Unknown compression '{compression}'.")
+                };
+                changed = true;
+            }
+
+            if (args.ContainsKey("alphaIsTransparency"))
+            {
+                importer.alphaIsTransparency = Convert.ToBoolean(args["alphaIsTransparency"]);
+                changed = true;
+            }
+
+            string meshType = GetString(args, "meshType");
+            if (!string.IsNullOrWhiteSpace(meshType))
+            {
+                if (!Enum.TryParse(meshType, true, out SpriteMeshType parsedMeshType))
+                    throw new ArgumentException($"Unknown meshType '{meshType}'.");
+                importer.spriteMeshType = parsedMeshType;
+                changed = true;
+            }
+
+            if (args.ContainsKey("mipmapEnabled"))
+            {
+                importer.mipmapEnabled = Convert.ToBoolean(args["mipmapEnabled"]);
+                changed = true;
+            }
+
+            if (changed)
+                importer.SaveAndReimport();
+
+            return new Dictionary<string, object>
+            {
+                { "type", importer.textureType.ToString() },
+                { "spriteMode", importer.spriteImportMode.ToString() },
+                { "pixelsPerUnit", importer.spritePixelsPerUnit },
+                { "filterMode", importer.filterMode.ToString() },
+                { "isReadable", importer.isReadable },
+                { "compression", importer.textureCompression.ToString() },
+                { "alphaIsTransparency", importer.alphaIsTransparency },
+                { "meshType", importer.spriteMeshType.ToString() },
+                { "mipmapEnabled", importer.mipmapEnabled }
+            };
+        }
+
+        private static List<Dictionary<string, object>> DescribeSubAssets(string assetPath)
+        {
+            var result = new List<Dictionary<string, object>>();
+            foreach (var asset in AssetDatabase.LoadAllAssetsAtPath(assetPath))
+            {
+                if (asset == null) continue;
+                AssetDatabase.TryGetGUIDAndLocalFileIdentifier(asset, out var guid, out long fileID);
+                result.Add(new Dictionary<string, object>
+                {
+                    { "name", asset.name }, { "type", asset.GetType().FullName },
+                    { "guid", guid }, { "fileID", fileID }
+                });
+            }
+
+            return result;
         }
 
         public static object Refresh(Dictionary<string, object> args)
@@ -278,6 +402,7 @@ namespace UnityMCP.Editor
             if (!string.IsNullOrEmpty(error))
                 return new { error };
 
+            bool synchronizedSingleSpriteName = SynchronizeSingleSpriteName(expectedPath, renameName);
             AssetDatabase.SaveAssets();
             AssetDatabase.Refresh();
 
@@ -303,7 +428,41 @@ namespace UnityMCP.Editor
                 { "newMetaPath", newMetaPath },
                 { "oldMetaExists", oldMetaExists },
                 { "newMetaExists", newMetaExists },
+                { "synchronizedSingleSpriteName", synchronizedSingleSpriteName },
+                { "subAssets", DescribeSubAssets(newPath) },
             };
+        }
+
+        private static bool SynchronizeSingleSpriteName(string assetPath, string spriteName)
+        {
+            if (AssetImporter.GetAtPath(assetPath) is not TextureImporter importer ||
+                importer.textureType != TextureImporterType.Sprite ||
+                importer.spriteImportMode != SpriteImportMode.Single)
+                return false;
+
+            var serializedImporter = new SerializedObject(importer);
+            var nameTable = serializedImporter.FindProperty("m_InternalIDToNameTable") ??
+                            serializedImporter.FindProperty("internalIDToNameTable");
+            if (nameTable != null && nameTable.isArray)
+            {
+                for (int i = 0; i < nameTable.arraySize; i++)
+                {
+                    var entry = nameTable.GetArrayElementAtIndex(i);
+                    var name = entry.FindPropertyRelative("second") ?? entry.FindPropertyRelative("name");
+                    if (name != null) name.stringValue = spriteName;
+                }
+                serializedImporter.ApplyModifiedPropertiesWithoutUndo();
+            }
+
+            foreach (var sprite in AssetDatabase.LoadAllAssetsAtPath(assetPath).OfType<Sprite>())
+            {
+                sprite.name = spriteName;
+                EditorUtility.SetDirty(sprite);
+            }
+
+            importer.SaveAndReimport();
+            return AssetDatabase.LoadAllAssetsAtPath(assetPath).OfType<Sprite>()
+                .All(sprite => sprite.name == spriteName);
         }
 
         public static object Move(Dictionary<string, object> args)

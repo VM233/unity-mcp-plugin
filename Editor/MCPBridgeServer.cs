@@ -992,6 +992,8 @@ namespace UnityMCP.Editor
                     return MCPPrefabAssetCommands.Find(ParseJson(body));
                 case "prefab-asset/transaction-edit":
                     return MCPPrefabAssetCommands.TransactionEdit(ParseJson(body));
+                case "prefab-asset/cleanup-missing-overrides":
+                    return MCPPrefabAssetCommands.CleanupMissingVariantOverrides(ParseJson(body));
 
                 // ─── Prefab Variant Management ───
                 case "prefab-asset/variant-info":

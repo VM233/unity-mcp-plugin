@@ -246,6 +246,52 @@ namespace UnityMCP.Editor.Tests
             }
         }
 
+        [Test]
+        public void TransactionEdit_ArrayOperations_EditListAtomically()
+        {
+            CreateTestPrefab(addRenderer: true);
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.TransactionEdit(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "operations", new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "type", "arrayInsert" }, { "prefabPath", "Source" },
+                            { "componentType", typeof(MeshRenderer).FullName },
+                            { "propertyName", "m_Materials" }, { "index", 1 },
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "type", "arraySet" }, { "prefabPath", "Source" },
+                            { "componentType", typeof(MeshRenderer).FullName },
+                            { "propertyName", "m_Materials" }, { "index", 1 }, { "value", null },
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "type", "arrayRemove" }, { "prefabPath", "Source" },
+                            { "componentType", typeof(MeshRenderer).FullName },
+                            { "propertyName", "m_Materials" }, { "index", 0 },
+                        },
+                    }
+                },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                Assert.That(root.transform.Find("Source").GetComponent<MeshRenderer>().sharedMaterials.Length,
+                    Is.EqualTo(1));
+                Assert.That(root.transform.Find("Source").GetComponent<MeshRenderer>().sharedMaterials[0], Is.Null);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
         [UnityTest]
         public IEnumerator TransactionEditDeferred_LoadedComponentTypes_DoNotRefreshAssets()
         {
@@ -832,6 +878,134 @@ namespace UnityMCP.Editor.Tests
             {
                 PrefabUtility.UnloadPrefabContents(loadedRoot);
             }
+        }
+
+        [Test]
+        public void AssetImport_ConfiguresTextureImporterInOneOperation()
+        {
+            string externalPath = Path.Combine(Path.GetTempPath(), $"unity-mcp-{Guid.NewGuid():N}.png");
+            const string spritePath = TEST_FOLDER + "/Imported Sprite.png";
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            try
+            {
+                texture.SetPixels(new[] { Color.white, Color.white, Color.white, Color.white });
+                texture.Apply();
+                File.WriteAllBytes(externalPath, texture.EncodeToPNG());
+            }
+            finally
+            {
+                Object.DestroyImmediate(texture);
+            }
+
+            try
+            {
+                var result = RequireDictionary(MCPAssetCommands.Import(new Dictionary<string, object>
+                {
+                    { "sourcePath", externalPath }, { "destinationPath", spritePath },
+                    { "textureType", "Sprite" }, { "spriteMode", "Single" },
+                    { "pixelsPerUnit", 8f }, { "filterMode", "Point" }, { "isReadable", true },
+                    { "compression", "uncompressed" }, { "alphaIsTransparency", true },
+                    { "meshType", "FullRect" }, { "mipmapEnabled", false },
+                }));
+
+                Assert.That(result["success"], Is.EqualTo(true));
+                var importer = (TextureImporter)AssetImporter.GetAtPath(spritePath);
+                Assert.That(importer.textureType, Is.EqualTo(TextureImporterType.Sprite));
+                Assert.That(importer.spriteImportMode, Is.EqualTo(SpriteImportMode.Single));
+                Assert.That(importer.spritePixelsPerUnit, Is.EqualTo(8f));
+                Assert.That(importer.filterMode, Is.EqualTo(FilterMode.Point));
+                Assert.That(importer.isReadable, Is.True);
+                Assert.That(importer.textureCompression, Is.EqualTo(TextureImporterCompression.Uncompressed));
+                Assert.That(importer.alphaIsTransparency, Is.True);
+                Assert.That(importer.spriteMeshType, Is.EqualTo(SpriteMeshType.FullRect));
+            }
+            finally
+            {
+                if (File.Exists(externalPath)) File.Delete(externalPath);
+            }
+        }
+
+        [Test]
+        public void AssetRename_SynchronizesSingleSpriteSubAssetName()
+        {
+            const string oldPath = TEST_FOLDER + "/Old Sprite.png";
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            try
+            {
+                texture.SetPixels(new[] { Color.white, Color.white, Color.white, Color.white });
+                texture.Apply();
+                File.WriteAllBytes(GetAbsolutePath(oldPath), texture.EncodeToPNG());
+            }
+            finally
+            {
+                Object.DestroyImmediate(texture);
+            }
+
+            AssetDatabase.ImportAsset(oldPath, ImportAssetOptions.ForceSynchronousImport);
+            var importer = (TextureImporter)AssetImporter.GetAtPath(oldPath);
+            importer.textureType = TextureImporterType.Sprite;
+            importer.spriteImportMode = SpriteImportMode.Single;
+            importer.SaveAndReimport();
+
+            var result = RequireDictionary(MCPAssetCommands.Rename(new Dictionary<string, object>
+            {
+                { "path", oldPath }, { "newName", "Dragon King Head.png" },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(result["synchronizedSingleSpriteName"], Is.EqualTo(true));
+            const string newPath = TEST_FOLDER + "/Dragon King Head.png";
+            Assert.That(AssetDatabase.LoadAllAssetsAtPath(newPath).OfType<Sprite>().Single().name,
+                Is.EqualTo("Dragon King Head"));
+        }
+
+        [Test]
+        public void CleanupMissingVariantOverrides_RemovesOnlyInvalidPaths()
+        {
+            const string basePath = TEST_FOLDER + "/Base.prefab";
+            const string variantPath = TEST_FOLDER + "/Variant.prefab";
+            var root = new GameObject("Base");
+            try
+            {
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(root, basePath), Is.Not.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+
+            var baseAsset = AssetDatabase.LoadAssetAtPath<GameObject>(basePath);
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(baseAsset);
+            try
+            {
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(instance, variantPath), Is.Not.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(instance);
+            }
+
+            var variant = AssetDatabase.LoadAssetAtPath<GameObject>(variantPath);
+            PrefabUtility.SetPropertyModifications(variant, new[]
+            {
+                new PropertyModification
+                {
+                    target = baseAsset.transform, propertyPath = "m_LocalPosition.x", value = "2"
+                },
+                new PropertyModification
+                {
+                    target = baseAsset.transform, propertyPath = "m_RemovedSerializedField", value = "legacy"
+                },
+            });
+            AssetDatabase.SaveAssets();
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.CleanupMissingVariantOverrides(
+                new Dictionary<string, object> { { "assetPath", variantPath } }));
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(Convert.ToInt32(result["removedCount"]), Is.EqualTo(1));
+            var remaining = PrefabUtility.GetPropertyModifications(variant);
+            Assert.That(remaining.Any(modification => modification.propertyPath == "m_LocalPosition.x"), Is.True);
+            Assert.That(remaining.Any(modification => modification.propertyPath == "m_RemovedSerializedField"), Is.False);
         }
 
         [Test]
