@@ -917,7 +917,9 @@ namespace UnityMCP.Editor.Tests
                 Assert.That(importer.isReadable, Is.True);
                 Assert.That(importer.textureCompression, Is.EqualTo(TextureImporterCompression.Uncompressed));
                 Assert.That(importer.alphaIsTransparency, Is.True);
-                Assert.That(importer.spriteMeshType, Is.EqualTo(SpriteMeshType.FullRect));
+                var serializedImporter = new SerializedObject(importer);
+                Assert.That(serializedImporter.FindProperty("m_SpriteMeshType").intValue,
+                    Is.EqualTo((int)SpriteMeshType.FullRect));
             }
             finally
             {

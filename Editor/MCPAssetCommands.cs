@@ -163,7 +163,12 @@ namespace UnityMCP.Editor
             {
                 if (!Enum.TryParse(meshType, true, out SpriteMeshType parsedMeshType))
                     throw new ArgumentException($"Unknown meshType '{meshType}'.");
-                importer.spriteMeshType = parsedMeshType;
+                var serializedImporter = new SerializedObject(importer);
+                var spriteMeshType = serializedImporter.FindProperty("m_SpriteMeshType");
+                if (spriteMeshType == null)
+                    throw new NotSupportedException("TextureImporter does not expose m_SpriteMeshType on this Unity version.");
+                spriteMeshType.intValue = (int)parsedMeshType;
+                serializedImporter.ApplyModifiedPropertiesWithoutUndo();
                 changed = true;
             }
 
@@ -176,6 +181,8 @@ namespace UnityMCP.Editor
             if (changed)
                 importer.SaveAndReimport();
 
+            var importerObject = new SerializedObject(importer);
+            var serializedMeshType = importerObject.FindProperty("m_SpriteMeshType");
             return new Dictionary<string, object>
             {
                 { "type", importer.textureType.ToString() },
@@ -185,7 +192,7 @@ namespace UnityMCP.Editor
                 { "isReadable", importer.isReadable },
                 { "compression", importer.textureCompression.ToString() },
                 { "alphaIsTransparency", importer.alphaIsTransparency },
-                { "meshType", importer.spriteMeshType.ToString() },
+                { "meshType", serializedMeshType == null ? "" : ((SpriteMeshType)serializedMeshType.intValue).ToString() },
                 { "mipmapEnabled", importer.mipmapEnabled }
             };
         }
