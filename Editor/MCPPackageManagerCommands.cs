@@ -125,6 +125,27 @@ namespace UnityMCP.Editor
 
                 var lockInfo = GetPackageLockInfo(name);
                 var pkg = addRequest.Result;
+                string resolvedIdentifier = pkg.packageId ?? "";
+                bool resolvedMatchesRequest = IsPackageInfoResolvedToIdentifier(pkg, identifier);
+                if (resolvedMatchesRequest == false)
+                {
+                    resolve(new Dictionary<string, object>
+                    {
+                        { "success", false },
+                        { "error", "Package Manager updated manifest/lock but kept a stale resolved Git package." },
+                        { "errorCode", "package_resolution_mismatch" },
+                        { "retryable", true },
+                        { "name", pkg.name },
+                        { "requestedIdentifier", identifier },
+                        { "resolvedIdentifier", resolvedIdentifier },
+                        { "resolvedPath", NormalizePath(pkg.resolvedPath ?? "") },
+                        { "lockVersion", lockInfo.version },
+                        { "lockSource", lockInfo.source },
+                        { "lockHash", lockInfo.hash },
+                    });
+                    return;
+                }
+
                 resolve(new Dictionary<string, object>
                 {
                     { "success", true },
@@ -132,6 +153,9 @@ namespace UnityMCP.Editor
                     { "name", pkg.name },
                     { "displayName", pkg.displayName },
                     { "requestedIdentifier", identifier },
+                    { "resolvedIdentifier", resolvedIdentifier },
+                    { "resolvedPath", NormalizePath(pkg.resolvedPath ?? "") },
+                    { "resolvedMatchesRequest", true },
                     { "resolvedVersion", pkg.version },
                     { "lockVersion", lockInfo.version },
                     { "lockSource", lockInfo.source },
@@ -591,6 +615,20 @@ namespace UnityMCP.Editor
                 return true;
 
             return string.Equals(lockInfo.version, identifier, StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsPackageInfoResolvedToIdentifier(PackageInfo packageInfo, string identifier)
+        {
+            if (packageInfo == null || string.IsNullOrEmpty(packageInfo.packageId))
+                return false;
+
+            string requestedRef = GetGitRef(identifier);
+            string resolvedRef = GetGitRef(packageInfo.packageId);
+            if (string.IsNullOrEmpty(requestedRef) || string.IsNullOrEmpty(resolvedRef))
+                return string.Equals(packageInfo.packageId, identifier, StringComparison.OrdinalIgnoreCase);
+
+            return resolvedRef.StartsWith(requestedRef, StringComparison.OrdinalIgnoreCase) ||
+                   requestedRef.StartsWith(resolvedRef, StringComparison.OrdinalIgnoreCase);
         }
 
         private static bool IsGitIdentifier(string identifier)
