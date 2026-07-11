@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.5] - 2026-07-11
+
+- Use Roslyn `Preview` for dynamic code because Unity 6.4 classifies `is not` patterns as preview syntax.
+- Complete external asset reconciliation synchronously before `asset/refresh` returns success.
+
 ## [3.1.4] - 2026-07-11
 
 - Compile `editor/execute-code` with the latest language version supported by Unity's bundled Roslyn, including `is not` patterns.

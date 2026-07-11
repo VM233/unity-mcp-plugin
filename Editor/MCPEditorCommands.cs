@@ -310,9 +310,10 @@ namespace UnityMCP.Editor
                 // Unity 6000+ uses CoreCLR where CodeDom/mcs can't handle netstandard facades.
                 // Roslyn resolves type forwarding correctly.
 
-                // Parse with the newest language version supported by Unity's bundled Roslyn.
+                // Parse with the preview language version supported by Unity's bundled Roslyn.
                 // CSharpSyntaxTree.ParseText defaults to an older language version in some
-                // Unity releases even though the loaded parser supports newer syntax.
+                // Unity releases, and Unity 6.4 still classifies C# 9 pattern syntax such as
+                // "is not" as Preview even though the loaded parser supports it.
                 var syntaxTreeType = _roslynCSharpAsm.GetType("Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree");
                 var parseOptionsType = _roslynCSharpAsm.GetType("Microsoft.CodeAnalysis.CSharp.CSharpParseOptions");
                 var languageVersionType = _roslynCSharpAsm.GetType("Microsoft.CodeAnalysis.CSharp.LanguageVersion");
@@ -326,8 +327,8 @@ namespace UnityMCP.Editor
                         null, new[] { languageVersionType }, null);
                     if (defaultOptions != null && withLanguageVersion != null)
                     {
-                        var latestLanguageVersion = Enum.Parse(languageVersionType, "Latest");
-                        parseOptions = withLanguageVersion.Invoke(defaultOptions, new[] { latestLanguageVersion });
+                        var previewLanguageVersion = Enum.Parse(languageVersionType, "Preview");
+                        parseOptions = withLanguageVersion.Invoke(defaultOptions, new[] { previewLanguageVersion });
                     }
                 }
 

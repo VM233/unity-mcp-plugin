@@ -109,7 +109,7 @@ namespace UnityMCP.Editor
                 // Reconcile once after the ordered imports so Unity rebuilds its script
                 // source list and removes stale compiler inputs such as deleted .cs files.
                 if (reconcileExternalChanges)
-                    AssetDatabase.Refresh(options);
+                    AssetDatabase.Refresh(options | ImportAssetOptions.ForceSynchronousImport);
             }
             else
             {

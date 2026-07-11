@@ -809,7 +809,7 @@ namespace UnityMCP.Editor
                 case "serialized-object/set":
                     return "Set one serialized property on a scene object, component, or asset via SerializedObject. SerializeReference values use '$managedReferenceType' when their concrete type cannot be inferred.";
                 case "asset/refresh":
-                    return "Import selected assets in order, then reconcile all external AssetDatabase changes by default.";
+                    return "Import selected assets in order, then synchronously reconcile all external AssetDatabase changes by default.";
                 case "asset/rename":
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
@@ -1359,7 +1359,7 @@ namespace UnityMCP.Editor
                         Prop("assetPaths", "array", "Optional Unity asset paths to import first in the provided order."),
                         Prop("forceUpdate", "boolean", "Use ImportAssetOptions.ForceUpdate. Defaults to true."),
                         Prop("saveAssets", "boolean", "Call AssetDatabase.SaveAssets after refresh/import. Defaults to false."),
-                        Prop("reconcileExternalChanges", "boolean", "Run a full AssetDatabase refresh after targeted imports so externally deleted or created files are reconciled. Defaults to true.")
+                        Prop("reconcileExternalChanges", "boolean", "Run a synchronous full AssetDatabase refresh after targeted imports so externally deleted or created files are reconciled before success is returned. Defaults to true.")
                     ));
                 case "asset/move":
                     return AssetMoveSchema();
