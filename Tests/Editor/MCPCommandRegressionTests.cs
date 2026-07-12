@@ -1262,8 +1262,14 @@ namespace UnityMCP.Editor.Tests
                 Assert.That(property, Is.Not.Null);
                 Assert.That(property.propertyType, Is.EqualTo(SerializedPropertyType.Enum));
 
-                MCPComponentCommands.SetSerializedValue(property,
-                    new Dictionary<string, object> { { "value", nameof(ScalarEnvelopeTestMode.Second) } });
+                var setSerializedValue = typeof(MCPComponentCommands).GetMethod("SetSerializedValue",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                Assert.That(setSerializedValue, Is.Not.Null);
+                setSerializedValue.Invoke(null, new object[]
+                {
+                    property,
+                    new Dictionary<string, object> { { "value", nameof(ScalarEnvelopeTestMode.Second) } }
+                });
                 serialized.ApplyModifiedProperties();
 
                 Assert.That(target.config.mode, Is.EqualTo(ScalarEnvelopeTestMode.Second));
