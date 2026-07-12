@@ -1136,7 +1136,7 @@ namespace UnityMCP.Editor.Tests
 
                 object result = MCPComponentCommands.SetProperty(new Dictionary<string, object>
                 {
-                    { "instanceId", MCPObjectId.Get(gameObject) },
+                    { "path", gameObject.name },
                     { "componentType", typeof(UIDocument).FullName },
                     { "propertyName", "enabled" },
                     { "value", false },
