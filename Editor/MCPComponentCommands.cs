@@ -731,6 +731,8 @@ namespace UnityMCP.Editor
                 return;
             }
 
+            value = UnwrapScalarValueEnvelope(prop, value);
+
             switch (prop.propertyType)
             {
                 case SerializedPropertyType.Integer:
@@ -781,8 +783,16 @@ namespace UnityMCP.Editor
                 case SerializedPropertyType.Enum:
                     if (value is string enumName)
                     {
-                        int index = Array.IndexOf(prop.enumNames, enumName);
-                        if (index >= 0) prop.enumValueIndex = index;
+                        int index = Array.FindIndex(prop.enumNames,
+                            name => string.Equals(name, enumName, StringComparison.OrdinalIgnoreCase));
+                        if (index < 0)
+                        {
+                            throw new ArgumentException(
+                                $"Enum property '{prop.propertyPath}' does not define '{enumName}'. " +
+                                $"Available values: {string.Join(", ", prop.enumNames)}.");
+                        }
+
+                        prop.enumValueIndex = index;
                     }
                     else
                     {
@@ -821,6 +831,37 @@ namespace UnityMCP.Editor
 #endif
                 default:
                     throw new NotSupportedException($"Cannot set property type: {prop.propertyType}");
+            }
+        }
+
+        private static object UnwrapScalarValueEnvelope(SerializedProperty prop, object value)
+        {
+            if (IsScalarSerializedProperty(prop.propertyType) == false)
+                return value;
+
+            if (value is Dictionary<string, object> envelope && envelope.Count == 1 &&
+                envelope.TryGetValue("value", out var unwrappedValue))
+            {
+                return unwrappedValue;
+            }
+
+            return value;
+        }
+
+        private static bool IsScalarSerializedProperty(SerializedPropertyType propertyType)
+        {
+            switch (propertyType)
+            {
+                case SerializedPropertyType.Integer:
+                case SerializedPropertyType.Boolean:
+                case SerializedPropertyType.Float:
+                case SerializedPropertyType.String:
+                case SerializedPropertyType.Enum:
+                case SerializedPropertyType.LayerMask:
+                case SerializedPropertyType.ArraySize:
+                    return true;
+                default:
+                    return false;
             }
         }
 

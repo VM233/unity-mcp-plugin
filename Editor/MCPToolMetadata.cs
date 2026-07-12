@@ -1221,7 +1221,7 @@ namespace UnityMCP.Editor
                         Prop("prefabPath", "string", "Path of the GameObject inside the prefab. Empty means root."),
                         Prop("componentType", "string", "Component type name or full name."),
                         Prop("propertyName", "string", "Serialized property name or property path to set."),
-                        AnyJsonValueProp("value", "Serialized value to assign. Accepts primitive values, arrays, and objects."),
+                        AnyJsonValueProp("value", "Serialized value to assign. Accepts primitive values, arrays, and objects. A primitive scalar may be wrapped as {value: ...} when the MCP client exposes this field as an object."),
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                         Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
                         Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
@@ -1344,7 +1344,7 @@ namespace UnityMCP.Editor
                         Prop("path", "string", "Target scene GameObject hierarchy path when instanceId is omitted."),
                         Prop("componentType", "string", "Component type name or full name."),
                         Prop("propertyName", "string", "Serialized property name, or inherited Behaviour property name such as enabled."),
-                        AnyJsonValueProp("value", "Property value. Accepts primitive values, arrays, and objects.")
+                        AnyJsonValueProp("value", "Property value. Accepts primitive values, arrays, and objects. A primitive scalar may be wrapped as {value: ...} when the MCP client exposes this field as an object.")
                     ), "componentType", "propertyName", "value");
                 case "serialized-object/get":
                     return Schema(Props(
@@ -1370,7 +1370,7 @@ namespace UnityMCP.Editor
                         Prop("componentType", "string", "Optional component type to select from a GameObject target."),
                         Prop("componentIndex", "number", "Component index when multiple components of the same type exist."),
                         Prop("propertyPath", "string", "Serialized property path to write."),
-                        AnyJsonValueProp("value", "Serialized value. ObjectReference supports assetPath, instanceId, or gameObject. SerializeReference objects may include '$managedReferenceType' as 'AssemblyName::Namespace.TypeName'.")
+                        AnyJsonValueProp("value", "Serialized value. A primitive scalar may be wrapped as {value: ...} when the MCP client exposes this field as an object. ObjectReference supports assetPath, instanceId, or gameObject. SerializeReference objects may include '$managedReferenceType' as 'AssemblyName::Namespace.TypeName'.")
                     ), "propertyPath", "value");
                 case "asset/rename":
                     return Schema(Props(

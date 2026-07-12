@@ -1207,6 +1207,98 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void PrefabSetProperty_UnwrapsScalarValueEnvelopeForString()
+        {
+            CreateTestPrefab();
+            AddComponentToTestPrefab<TextMesh>();
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.SetComponentProperty(
+                new Dictionary<string, object>
+                {
+                    { "assetPath", PREFAB_PATH },
+                    { "prefabPath", "Source" },
+                    { "componentType", typeof(TextMesh).FullName },
+                    { "propertyName", "m_Text" },
+                    { "value", new Dictionary<string, object> { { "value", "Wrapped Text" } } },
+                }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                Assert.That(root.transform.Find("Source").GetComponent<TextMesh>().text, Is.EqualTo("Wrapped Text"));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [Test]
+        public void PrefabSetProperty_UnwrapsScalarValueEnvelopeForNestedEnum()
+        {
+            CreateTestPrefab();
+            AddComponentToTestPrefab<ParticleSystem>();
+
+            string propertyPath;
+            string targetEnumName;
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                var particleSystem = root.transform.Find("Source").GetComponent<ParticleSystem>();
+                var serialized = new SerializedObject(particleSystem);
+                var iterator = serialized.GetIterator();
+                SerializedProperty nestedEnum = null;
+                if (iterator.NextVisible(true))
+                {
+                    do
+                    {
+                        if (iterator.propertyType == SerializedPropertyType.Enum &&
+                            iterator.propertyPath.Contains(".") && iterator.enumNames.Length > 1)
+                        {
+                            nestedEnum = iterator.Copy();
+                            break;
+                        }
+                    } while (iterator.NextVisible(true));
+                }
+
+                Assert.That(nestedEnum, Is.Not.Null);
+                propertyPath = nestedEnum.propertyPath;
+                int targetIndex = (nestedEnum.enumValueIndex + 1) % nestedEnum.enumNames.Length;
+                targetEnumName = nestedEnum.enumNames[targetIndex];
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.SetComponentProperty(
+                new Dictionary<string, object>
+                {
+                    { "assetPath", PREFAB_PATH },
+                    { "prefabPath", "Source" },
+                    { "componentType", typeof(ParticleSystem).FullName },
+                    { "propertyName", propertyPath },
+                    { "value", new Dictionary<string, object> { { "value", targetEnumName } } },
+                }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                var particleSystem = root.transform.Find("Source").GetComponent<ParticleSystem>();
+                var serialized = new SerializedObject(particleSystem);
+                var property = serialized.FindProperty(propertyPath);
+                Assert.That(property, Is.Not.Null);
+                Assert.That(property.enumNames[property.enumValueIndex], Is.EqualTo(targetEnumName));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [Test]
         public void ToolMetadata_DefaultIsCompactPaginatedAndSchemaFree()
         {
             var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools());
@@ -1336,6 +1428,20 @@ namespace UnityMCP.Editor.Tests
             finally
             {
                 Object.DestroyImmediate(root);
+            }
+        }
+
+        private static void AddComponentToTestPrefab<T>() where T : Component
+        {
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                root.transform.Find("Source").gameObject.AddComponent<T>();
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(root, PREFAB_PATH), Is.Not.Null);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
             }
         }
 
