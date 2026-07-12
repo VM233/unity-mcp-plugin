@@ -571,6 +571,7 @@ namespace UnityMCP.Editor
 
             string referenceAssetPath = GetString(args, "referenceAssetPath");
             string referencePrefabPath = GetString(args, "referencePrefabPath");
+            bool hasReferencePrefabPath = args.ContainsKey("referencePrefabPath");
             string referenceComponentType = GetString(args, "referenceComponentType");
             bool clearRef = args.ContainsKey("clear") && Convert.ToBoolean(args["clear"]);
 
@@ -631,7 +632,7 @@ namespace UnityMCP.Editor
 
                     refDescription = $"{targetRef.name} ({targetRef.GetType().Name})";
                 }
-                else if (!string.IsNullOrEmpty(referencePrefabPath))
+                else if (hasReferencePrefabPath)
                 {
                     var refGo = FindInPrefab(root, referencePrefabPath);
                     if (refGo == null)
@@ -3413,7 +3414,7 @@ namespace UnityMCP.Editor
             }
 
             string referencePrefabPath = GetString(operation, "referencePrefabPath");
-            if (string.IsNullOrEmpty(referencePrefabPath) == false)
+            if (operation.ContainsKey("referencePrefabPath"))
             {
                 var refGo = FindInPrefab(root, referencePrefabPath);
                 if (refGo == null)

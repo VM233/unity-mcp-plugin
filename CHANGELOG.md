@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.9] - 2026-07-12
+
+- Allowed primitive JSON values in prefab, serialized-object, and localization value schemas.
+- Added first-class component property editing and support for inherited `Behaviour.enabled`.
+- Allowed an explicit empty prefab path to reference a prefab root object or component.
+- Reconciled external AssetDatabase changes before ordered targeted imports to avoid stale timestamp warnings.
+
 ## [3.1.8] - 2026-07-11
 
 - Validate nested serialized component-reference migration with a built-in runtime component instead of an Editor-only test component that Unity cannot attach to prefabs.

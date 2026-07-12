@@ -581,6 +581,7 @@ namespace UnityMCP.Editor.Tests
             }));
 
             Assert.That(response["success"], Is.EqualTo(true));
+            Assert.That(response["preReconciledExternalChanges"], Is.EqualTo(true));
             Assert.That(response["reconciledExternalChanges"], Is.EqualTo(true));
             Assert.That(File.Exists(GetAbsolutePath(deletedPath)), Is.False);
             Assert.That(File.Exists(GetAbsolutePath(deletedPath) + ".meta"), Is.False);
@@ -881,6 +882,77 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void PrefabSetReference_EmptyPrefabPathResolvesRootComponent()
+        {
+            var prefabRoot = new GameObject("Root Reference Prefab");
+            try
+            {
+                prefabRoot.AddComponent<Rigidbody>();
+                var owner = new GameObject("Owner");
+                owner.transform.SetParent(prefabRoot.transform, false);
+                owner.AddComponent<HingeJoint>();
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(prefabRoot, PREFAB_PATH), Is.Not.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(prefabRoot);
+            }
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.SetReference(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "prefabPath", "Owner" },
+                { "componentType", typeof(HingeJoint).FullName },
+                { "propertyName", "m_ConnectedBody" },
+                { "referencePrefabPath", "" },
+                { "referenceComponentType", typeof(Rigidbody).FullName },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+
+            var clearResult = RequireDictionary(MCPPrefabAssetCommands.SetReference(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "prefabPath", "Owner" },
+                { "componentType", typeof(HingeJoint).FullName },
+                { "propertyName", "m_ConnectedBody" },
+                { "clear", true },
+            }));
+            Assert.That(clearResult["success"], Is.EqualTo(true));
+
+            var transactionResult = RequireDictionary(MCPPrefabAssetCommands.TransactionEdit(
+                new Dictionary<string, object>
+                {
+                    { "assetPath", PREFAB_PATH },
+                    { "operations", new List<object>
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "type", "setReference" },
+                                { "prefabPath", "Owner" },
+                                { "componentType", typeof(HingeJoint).FullName },
+                                { "propertyName", "m_ConnectedBody" },
+                                { "referencePrefabPath", "" },
+                                { "referenceComponentType", typeof(Rigidbody).FullName },
+                            },
+                        }
+                    },
+                }));
+            Assert.That(transactionResult["success"], Is.EqualTo(true));
+
+            var loadedRoot = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                Assert.That(loadedRoot.transform.Find("Owner").GetComponent<HingeJoint>().connectedBody,
+                    Is.SameAs(loadedRoot.GetComponent<Rigidbody>()));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(loadedRoot);
+            }
+        }
+
+        [Test]
         public void AssetImport_ConfiguresTextureImporterInOneOperation()
         {
             string externalPath = Path.Combine(Path.GetTempPath(), $"unity-mcp-{Guid.NewGuid():N}.png");
@@ -1054,6 +1126,34 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void ComponentSetProperty_SetsInheritedBehaviourEnabled()
+        {
+            var gameObject = new GameObject("__UnityMCP_Disabled_UIDocument");
+            try
+            {
+                var document = gameObject.AddComponent<UIDocument>();
+                Assert.That(document.enabled, Is.True);
+
+                object result = MCPComponentCommands.SetProperty(new Dictionary<string, object>
+                {
+                    { "instanceId", MCPObjectId.Get(gameObject) },
+                    { "componentType", typeof(UIDocument).FullName },
+                    { "propertyName", "enabled" },
+                    { "value", false },
+                });
+
+                PropertyInfo success = result.GetType().GetProperty("success");
+                Assert.That(success, Is.Not.Null);
+                Assert.That(success.GetValue(result), Is.EqualTo(true));
+                Assert.That(document.enabled, Is.False);
+            }
+            finally
+            {
+                Object.DestroyImmediate(gameObject);
+            }
+        }
+
+        [Test]
         public void ToolMetadata_DefaultIsCompactPaginatedAndSchemaFree()
         {
             var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools());
@@ -1098,6 +1198,34 @@ namespace UnityMCP.Editor.Tests
                 Assert.That(annotations.ContainsKey("title"), Is.False);
                 Assert.That(annotations.Values.OfType<bool>().All(value => value), Is.True);
             }
+        }
+
+        [Test]
+        public void ToolMetadata_ValueSchemasAcceptPrimitiveNumbers()
+        {
+            MethodInfo getSchema = typeof(MCPToolMetadata).GetMethod("GetToolInputSchema",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(getSchema, Is.Not.Null);
+
+            foreach (string route in new[]
+                     {
+                         "prefab-asset/set-property",
+                         "serialized-object/set",
+                         "component/set-property",
+                         "localization/upsert-variable",
+                     })
+            {
+                var schema = RequireDictionary(getSchema.Invoke(null, new object[] { route }));
+                var properties = RequireDictionary(schema["properties"]);
+                var valueSchema = RequireDictionary(properties["value"]);
+                Assert.That(valueSchema.ContainsKey("type"), Is.False,
+                    $"{route} must allow primitive JSON values such as 0.72.");
+            }
+
+            var toolsResult = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: false, includeSchema: true, limit: 500));
+            var tools = (List<Dictionary<string, object>>)toolsResult["tools"];
+            Assert.That(tools.Any(tool => tool["route"].ToString() == "component/set-property"), Is.True);
         }
 
         [Test]

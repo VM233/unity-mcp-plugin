@@ -226,6 +226,13 @@ namespace UnityMCP.Editor
 
             if (assetPaths.Count > 0)
             {
+                // Reconcile the AssetDatabase before targeted imports. Importing a
+                // file whose on-disk timestamp changed before SourceAssetDB has
+                // observed it can produce a timestamp mismatch warning. A single
+                // synchronous pass also removes externally deleted compiler inputs.
+                if (reconcileExternalChanges)
+                    AssetDatabase.Refresh(options | ImportAssetOptions.ForceSynchronousImport);
+
                 foreach (string rawPath in assetPaths)
                 {
                     string path = NormalizeAssetPath(rawPath);
@@ -236,11 +243,6 @@ namespace UnityMCP.Editor
                     importedPaths.Add(path);
                 }
 
-                // Targeted imports do not notice files deleted outside AssetDatabase.
-                // Reconcile once after the ordered imports so Unity rebuilds its script
-                // source list and removes stale compiler inputs such as deleted .cs files.
-                if (reconcileExternalChanges)
-                    AssetDatabase.Refresh(options | ImportAssetOptions.ForceSynchronousImport);
             }
             else
             {
@@ -256,6 +258,7 @@ namespace UnityMCP.Editor
                 { "forceUpdate", forceUpdate },
                 { "saveAssets", saveAssets },
                 { "importedPaths", importedPaths },
+                { "preReconciledExternalChanges", assetPaths.Count > 0 && reconcileExternalChanges },
                 { "reconciledExternalChanges", assetPaths.Count == 0 || reconcileExternalChanges },
                 { "refreshedAllAssets", importedPaths.Count == 0 || reconcileExternalChanges },
                 { "isUpdating", EditorApplication.isUpdating },

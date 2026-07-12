@@ -172,6 +172,7 @@ namespace UnityMCP.Editor
 
             AddProfile(profiles, ToolProfile.FirstClass(),
                 "localization/set-selected-locale",
+                "component/set-property",
                 "component/set-reference");
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true,
@@ -808,6 +809,8 @@ namespace UnityMCP.Editor
                     return "Remove Prefab Variant property overrides whose serialized target field no longer exists.";
                 case "component/set-reference":
                     return "Assign one or more component ObjectReference properties with configurable immediate or frame-batched execution.";
+                case "component/set-property":
+                    return "Set a serialized component property, including inherited Behaviour.enabled, on a scene GameObject.";
                 case "serialized-object/get":
                     return "Read serialized properties from a scene object, component, or asset via SerializedObject.";
                 case "serialized-object/set":
@@ -1061,7 +1064,7 @@ namespace UnityMCP.Editor
                         Prop("group", "string", "Persistent variable group name."),
                         Prop("name", "string", "Variable name inside the group."),
                         Prop("type", "string", "Variable type: bool, int, long, float, double, string, or object."),
-                        Prop("value", "object", "Variable value. Object variables accept an Assets path."),
+                        AnyJsonValueProp("value", "Variable value. Object variables accept an Assets path."),
                         Prop("groupAssetPath", "string", "Required asset path when creating a missing VariablesGroupAsset.")
                     ), "group", "name", "type", "value");
                 case "localization/remove-variable":
@@ -1218,7 +1221,7 @@ namespace UnityMCP.Editor
                         Prop("prefabPath", "string", "Path of the GameObject inside the prefab. Empty means root."),
                         Prop("componentType", "string", "Component type name or full name."),
                         Prop("propertyName", "string", "Serialized property name or property path to set."),
-                        Prop("value", "object", "Serialized value to assign."),
+                        AnyJsonValueProp("value", "Serialized value to assign. Accepts primitive values, arrays, and objects."),
                         Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
                         Prop("prefabFileDiffContextLines", "number", "Context lines around prefab YAML changes. Defaults to 2."),
                         Prop("prefabFileDiffMaxLines", "number", "Maximum diff lines returned. Defaults to 200."),
@@ -1335,6 +1338,14 @@ namespace UnityMCP.Editor
                     ), "assetPath");
                 case "component/set-reference":
                     return ComponentSetReferenceSchema();
+                case "component/set-property":
+                    return Schema(Props(
+                        Prop("instanceId", "string", "Target scene GameObject instance id."),
+                        Prop("path", "string", "Target scene GameObject hierarchy path when instanceId is omitted."),
+                        Prop("componentType", "string", "Component type name or full name."),
+                        Prop("propertyName", "string", "Serialized property name, or inherited Behaviour property name such as enabled."),
+                        AnyJsonValueProp("value", "Property value. Accepts primitive values, arrays, and objects.")
+                    ), "componentType", "propertyName", "value");
                 case "serialized-object/get":
                     return Schema(Props(
                         Prop("instanceId", "number", "Target Unity object instance id."),
@@ -1359,7 +1370,7 @@ namespace UnityMCP.Editor
                         Prop("componentType", "string", "Optional component type to select from a GameObject target."),
                         Prop("componentIndex", "number", "Component index when multiple components of the same type exist."),
                         Prop("propertyPath", "string", "Serialized property path to write."),
-                        Prop("value", "object", "Serialized value. ObjectReference supports assetPath, instanceId, or gameObject. SerializeReference objects may include '$managedReferenceType' as 'AssemblyName::Namespace.TypeName'.")
+                        AnyJsonValueProp("value", "Serialized value. ObjectReference supports assetPath, instanceId, or gameObject. SerializeReference objects may include '$managedReferenceType' as 'AssemblyName::Namespace.TypeName'.")
                     ), "propertyPath", "value");
                 case "asset/rename":
                     return Schema(Props(
@@ -2114,6 +2125,14 @@ namespace UnityMCP.Editor
             return new KeyValuePair<string, object>(name, new Dictionary<string, object>
             {
                 { "type", type },
+                { "description", description },
+            });
+        }
+
+        private static KeyValuePair<string, object> AnyJsonValueProp(string name, string description)
+        {
+            return new KeyValuePair<string, object>(name, new Dictionary<string, object>
+            {
                 { "description", description },
             });
         }

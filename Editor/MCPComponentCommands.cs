@@ -111,6 +111,32 @@ namespace UnityMCP.Editor
             var component = go.GetComponent(type);
             if (component == null) return new { error = $"Component '{typeName}' not found on {go.name}" };
 
+            // Behaviour.enabled is inherited and exposed by Unity as m_Enabled in
+            // SerializedObject. Keep the public API property name usable instead
+            // of requiring callers to know Unity's internal backing field.
+            if (component is Behaviour behaviour &&
+                string.Equals(propName, nameof(Behaviour.enabled), StringComparison.OrdinalIgnoreCase))
+            {
+                try
+                {
+                    Undo.RecordObject(behaviour, "Set Component Enabled");
+                    behaviour.enabled = Convert.ToBoolean(value);
+                    EditorUtility.SetDirty(behaviour);
+                    return new
+                    {
+                        success = true,
+                        gameObject = go.name,
+                        component = typeName,
+                        property = nameof(Behaviour.enabled),
+                        value = behaviour.enabled,
+                    };
+                }
+                catch (Exception ex)
+                {
+                    return new { error = $"Failed to set property: {ex.Message}" };
+                }
+            }
+
             var serialized = new SerializedObject(component);
             var prop = serialized.FindProperty(propName);
             if (prop == null) return new { error = $"Property '{propName}' not found on {typeName}" };
