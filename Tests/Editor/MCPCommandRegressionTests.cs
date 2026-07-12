@@ -1122,13 +1122,17 @@ namespace UnityMCP.Editor.Tests
                 },
             });
             AssetDatabase.SaveAssets();
+            int modificationCount = PrefabUtility.GetPropertyModifications(variant).Length;
 
             var result = RequireDictionary(MCPPrefabAssetCommands.CleanupMissingVariantOverrides(
                 new Dictionary<string, object> { { "assetPath", variantPath }, { "dryRun", true } }));
 
             Assert.That(result["success"], Is.EqualTo(true));
             Assert.That(Convert.ToInt32(result["removedCount"]), Is.EqualTo(0));
-            Assert.That(Convert.ToInt32(result["keptCount"]), Is.EqualTo(2));
+            Assert.That(Convert.ToInt32(result["keptCount"]), Is.EqualTo(modificationCount));
+            var remaining = PrefabUtility.GetPropertyModifications(variant);
+            Assert.That(remaining.Any(modification => modification.propertyPath == "m_Materials.Array.size"), Is.True);
+            Assert.That(remaining.Any(modification => modification.propertyPath == "m_Materials.Array.data[0]"), Is.True);
         }
 
         [Test]
