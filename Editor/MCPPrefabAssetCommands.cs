@@ -1620,46 +1620,55 @@ namespace UnityMCP.Editor
                                 Array.Empty<PropertyModification>();
             var kept = new List<PropertyModification>();
             var removed = new List<Dictionary<string, object>>();
+            var validationTargets = CreateOverrideValidationTargets(modifications);
 
-            foreach (var modification in modifications)
+            try
             {
-                string reason = null;
-                if (modification.target == null)
+                foreach (var modification in modifications)
                 {
-                    reason = "missing-target";
-                }
-                else if (string.IsNullOrEmpty(modification.propertyPath))
-                {
-                    reason = "missing-property-path";
-                }
-                else
-                {
-                    try
+                    string reason = null;
+                    if (modification.target == null)
                     {
-                        var serializedTarget = new SerializedObject(modification.target);
-                        if (serializedTarget.FindProperty(modification.propertyPath) == null)
-                            reason = "missing-serialized-field";
+                        reason = "missing-target";
                     }
-                    catch (Exception ex)
+                    else if (string.IsNullOrEmpty(modification.propertyPath))
                     {
-                        reason = $"unreadable-target: {ex.Message}";
+                        reason = "missing-property-path";
                     }
-                }
+                    else
+                    {
+                        try
+                        {
+                            var serializedTarget = validationTargets[modification.target];
+                            if (serializedTarget.FindProperty(modification.propertyPath) == null)
+                                reason = "missing-serialized-field";
+                        }
+                        catch (Exception ex)
+                        {
+                            reason = $"unreadable-target: {ex.Message}";
+                        }
+                    }
 
-                if (reason == null)
-                {
-                    kept.Add(modification);
-                    continue;
-                }
+                    if (reason == null)
+                    {
+                        kept.Add(modification);
+                        continue;
+                    }
 
-                removed.Add(new Dictionary<string, object>
-                {
-                    { "target", modification.target == null ? "" : modification.target.name },
-                    { "targetType", modification.target == null ? "" : modification.target.GetType().FullName },
-                    { "propertyPath", modification.propertyPath ?? "" },
-                    { "value", modification.value ?? "" },
-                    { "reason", reason }
-                });
+                    removed.Add(new Dictionary<string, object>
+                    {
+                        { "target", modification.target == null ? "" : modification.target.name },
+                        { "targetType", modification.target == null ? "" : modification.target.GetType().FullName },
+                        { "propertyPath", modification.propertyPath ?? "" },
+                        { "value", modification.value ?? "" },
+                        { "reason", reason }
+                    });
+                }
+            }
+            finally
+            {
+                foreach (var serializedTarget in validationTargets.Values)
+                    serializedTarget.Dispose();
             }
 
             bool dryRun = GetBool(args, "dryRun", false);
@@ -1684,6 +1693,37 @@ namespace UnityMCP.Editor
             if (!dryRun)
                 AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
             return result;
+        }
+
+        private static Dictionary<UnityEngine.Object, SerializedObject> CreateOverrideValidationTargets(
+            IReadOnlyCollection<PropertyModification> modifications)
+        {
+            var validationTargets = modifications
+                .Where(modification => modification.target != null)
+                .Select(modification => modification.target)
+                .Distinct()
+                .ToDictionary(target => target, target => new SerializedObject(target));
+
+            foreach (var serializedTarget in validationTargets.Values)
+                serializedTarget.UpdateIfRequiredOrScript();
+
+            var arraySizeOverrides = modifications
+                .Where(modification => modification.target != null &&
+                                       modification.propertyPath != null &&
+                                       modification.propertyPath.EndsWith(".Array.size", StringComparison.Ordinal))
+                .OrderBy(modification => modification.propertyPath.Count(character => character == '.'));
+
+            foreach (var modification in arraySizeOverrides)
+            {
+                if (!int.TryParse(modification.value, out int arraySize) || arraySize < 0)
+                    continue;
+
+                var sizeProperty = validationTargets[modification.target].FindProperty(modification.propertyPath);
+                if (sizeProperty != null)
+                    sizeProperty.intValue = arraySize;
+            }
+
+            return validationTargets;
         }
 
         /// <summary>

@@ -1083,6 +1083,55 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void CleanupMissingVariantOverrides_KeepsElementsAddedByArraySizeOverride()
+        {
+            const string basePath = TEST_FOLDER + "/Array Base.prefab";
+            const string variantPath = TEST_FOLDER + "/Array Variant.prefab";
+            var root = new GameObject("Array Base", typeof(MeshRenderer));
+            try
+            {
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(root, basePath), Is.Not.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(root);
+            }
+
+            var baseAsset = AssetDatabase.LoadAssetAtPath<GameObject>(basePath);
+            var instance = (GameObject)PrefabUtility.InstantiatePrefab(baseAsset);
+            try
+            {
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(instance, variantPath), Is.Not.Null);
+            }
+            finally
+            {
+                Object.DestroyImmediate(instance);
+            }
+
+            var baseRenderer = baseAsset.GetComponent<MeshRenderer>();
+            var variant = AssetDatabase.LoadAssetAtPath<GameObject>(variantPath);
+            PrefabUtility.SetPropertyModifications(variant, new[]
+            {
+                new PropertyModification
+                {
+                    target = baseRenderer, propertyPath = "m_Materials.Array.size", value = "1"
+                },
+                new PropertyModification
+                {
+                    target = baseRenderer, propertyPath = "m_Materials.Array.data[0]", value = ""
+                },
+            });
+            AssetDatabase.SaveAssets();
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.CleanupMissingVariantOverrides(
+                new Dictionary<string, object> { { "assetPath", variantPath }, { "dryRun", true } }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(Convert.ToInt32(result["removedCount"]), Is.EqualTo(0));
+            Assert.That(Convert.ToInt32(result["keptCount"]), Is.EqualTo(2));
+        }
+
+        [Test]
         public void RuntimeUIDocumentSelector_AcceptsNegativeInstanceId()
         {
             var firstObject = new GameObject("__UnityMCP_UIDocument_A");
