@@ -172,7 +172,13 @@ namespace UnityMCP.Editor
                         break;
                     case "waiting-for-assembly":
                         if (AreAssembliesLoaded(_workflow.Assemblies))
+                        {
                             StartTestRun();
+                        }
+                        else if (TryGetCompilationFailure(out string compilationError))
+                        {
+                            FailWorkflow(compilationError);
+                        }
                         break;
                     case "running":
                         UpdateRunningTestJob();
@@ -390,6 +396,52 @@ namespace UnityMCP.Editor
             foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
                 requested.Remove(assembly.GetName().Name);
             return requested.Count == 0;
+        }
+
+        private static bool TryGetCompilationFailure(out string error)
+        {
+            var result = MCPResponse.ToDictionary(MCPConsoleCommands.GetCompilationErrors(
+                new Dictionary<string, object>
+                {
+                    { "severity", "error" },
+                    { "count", 20 },
+                }));
+            return TryBuildCompilationFailure(result, out error);
+        }
+
+        private static bool TryBuildCompilationFailure(Dictionary<string, object> result, out string error)
+        {
+            error = null;
+            if (result == null || !result.TryGetValue("entries", out object rawEntries) ||
+                rawEntries is not IEnumerable entries)
+            {
+                return false;
+            }
+
+            var messages = new List<string>();
+            foreach (object rawEntry in entries)
+            {
+                var entry = MCPResponse.ToDictionary(rawEntry);
+                if (entry == null || !string.Equals(GetString(entry, "severity"), "error",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                string assembly = GetString(entry, "assembly", "unknown assembly");
+                string file = GetString(entry, "file");
+                string message = GetString(entry, "message", "Unknown compiler error");
+                string location = string.IsNullOrEmpty(file) ? assembly : $"{assembly}: {file}";
+                messages.Add($"{location}: {message}");
+            }
+
+            if (messages.Count == 0)
+            {
+                return false;
+            }
+
+            error = "Package test assemblies failed to compile: " + string.Join(" | ", messages);
+            return true;
         }
 
         private static string SerializePrettyJson(object value, int depth)
