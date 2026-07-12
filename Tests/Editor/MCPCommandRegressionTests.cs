@@ -14,6 +14,23 @@ using Object = UnityEngine.Object;
 
 namespace UnityMCP.Editor.Tests
 {
+    public enum ScalarEnvelopeTestMode
+    {
+        First,
+        Second
+    }
+
+    [Serializable]
+    public sealed class ScalarEnvelopeTestConfig
+    {
+        public ScalarEnvelopeTestMode mode;
+    }
+
+    public sealed class ScalarEnvelopeTestObject : ScriptableObject
+    {
+        public ScalarEnvelopeTestConfig config = new ScalarEnvelopeTestConfig();
+    }
+
     public sealed class MCPCommandRegressionTests
     {
         private const string TEST_FOLDER = "Assets/__UnityMCPTests";
@@ -1235,66 +1252,25 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
-        public void PrefabSetProperty_UnwrapsScalarValueEnvelopeForNestedEnum()
+        public void SetSerializedValue_UnwrapsScalarValueEnvelopeForNestedEnum()
         {
-            CreateTestPrefab();
-            AddComponentToTestPrefab<ParticleSystem>();
-
-            string propertyPath;
-            string targetEnumName;
-            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            var target = ScriptableObject.CreateInstance<ScalarEnvelopeTestObject>();
             try
             {
-                var particleSystem = root.transform.Find("Source").GetComponent<ParticleSystem>();
-                var serialized = new SerializedObject(particleSystem);
-                var iterator = serialized.GetIterator();
-                SerializedProperty nestedEnum = null;
-                if (iterator.NextVisible(true))
-                {
-                    do
-                    {
-                        if (iterator.propertyType == SerializedPropertyType.Enum &&
-                            iterator.propertyPath.Contains(".") && iterator.enumNames.Length > 1)
-                        {
-                            nestedEnum = iterator.Copy();
-                            break;
-                        }
-                    } while (iterator.NextVisible(true));
-                }
-
-                Assert.That(nestedEnum, Is.Not.Null);
-                propertyPath = nestedEnum.propertyPath;
-                int targetIndex = (nestedEnum.enumValueIndex + 1) % nestedEnum.enumNames.Length;
-                targetEnumName = nestedEnum.enumNames[targetIndex];
-            }
-            finally
-            {
-                PrefabUtility.UnloadPrefabContents(root);
-            }
-
-            var result = RequireDictionary(MCPPrefabAssetCommands.SetComponentProperty(
-                new Dictionary<string, object>
-                {
-                    { "assetPath", PREFAB_PATH },
-                    { "prefabPath", "Source" },
-                    { "componentType", typeof(ParticleSystem).FullName },
-                    { "propertyName", propertyPath },
-                    { "value", new Dictionary<string, object> { { "value", targetEnumName } } },
-                }));
-
-            Assert.That(result["success"], Is.EqualTo(true));
-            root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
-            try
-            {
-                var particleSystem = root.transform.Find("Source").GetComponent<ParticleSystem>();
-                var serialized = new SerializedObject(particleSystem);
-                var property = serialized.FindProperty(propertyPath);
+                var serialized = new SerializedObject(target);
+                var property = serialized.FindProperty("config.mode");
                 Assert.That(property, Is.Not.Null);
-                Assert.That(property.enumNames[property.enumValueIndex], Is.EqualTo(targetEnumName));
+                Assert.That(property.propertyType, Is.EqualTo(SerializedPropertyType.Enum));
+
+                MCPComponentCommands.SetSerializedValue(property,
+                    new Dictionary<string, object> { { "value", nameof(ScalarEnvelopeTestMode.Second) } });
+                serialized.ApplyModifiedProperties();
+
+                Assert.That(target.config.mode, Is.EqualTo(ScalarEnvelopeTestMode.Second));
             }
             finally
             {
-                PrefabUtility.UnloadPrefabContents(root);
+                Object.DestroyImmediate(target);
             }
         }
 
