@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.18] - 2026-07-14
+
+- Use Unity's indexed `TypeCache` for project-tool discovery instead of scanning every loaded assembly and type, preventing metadata requests and regression tests from timing out in large projects or after runtime code compilation.
+
 ## [3.1.17] - 2026-07-13
 
 - Return the same stable dictionary result shape for `asset/import` preflight failures as for completed batch results.

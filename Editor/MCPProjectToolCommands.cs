@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using UnityEditor;
 
 namespace UnityMCP.Editor
 {
@@ -215,46 +216,21 @@ namespace UnityMCP.Editor
         {
             var tools = new List<ProjectToolDescriptor>();
 
-            foreach (var type in GetLoadableTypes())
+            foreach (var method in TypeCache.GetMethodsWithAttribute<MCPProjectToolAttribute>())
             {
-                foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
-                {
-                    var attribute = method.GetCustomAttribute<MCPProjectToolAttribute>(false);
-                    if (attribute == null)
-                        continue;
-
+                var attribute = method.GetCustomAttribute<MCPProjectToolAttribute>(false);
+                if (attribute != null)
                     tools.Add(ProjectToolDescriptor.FromMethod(attribute, method));
-                }
+            }
 
-                var classAttribute = type.GetCustomAttribute<MCPProjectToolAttribute>(false);
-                if (classAttribute != null)
-                    tools.Add(ProjectToolDescriptor.FromType(classAttribute, type));
+            foreach (var type in TypeCache.GetTypesWithAttribute<MCPProjectToolAttribute>())
+            {
+                var attribute = type.GetCustomAttribute<MCPProjectToolAttribute>(false);
+                if (attribute != null)
+                    tools.Add(ProjectToolDescriptor.FromType(attribute, type));
             }
 
             return tools;
-        }
-
-        private static IEnumerable<Type> GetLoadableTypes()
-        {
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-            {
-                Type[] types;
-                try
-                {
-                    types = assembly.GetTypes();
-                }
-                catch (ReflectionTypeLoadException ex)
-                {
-                    types = ex.Types.Where(type => type != null).ToArray();
-                }
-                catch
-                {
-                    continue;
-                }
-
-                foreach (var type in types)
-                    yield return type;
-            }
         }
 
         private static string GetString(Dictionary<string, object> args, string key)
