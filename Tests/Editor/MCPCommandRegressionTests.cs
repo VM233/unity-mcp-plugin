@@ -1328,6 +1328,36 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void ToolMetadata_ExposesImageImportAndTextureImporterToolsAsFirstClass()
+        {
+            var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: true, includeSchema: true, limit: 200));
+            var tools = (List<Dictionary<string, object>>)result["tools"];
+            var toolsByRoute = tools.ToDictionary(tool => tool["route"].ToString());
+
+            foreach (var expected in new[]
+                     {
+                         (Route: "asset/import", ToolName: "unity_asset_import"),
+                         (Route: "texture/apply-sprite-preset", ToolName: "unity_texture_apply_sprite_preset"),
+                         (Route: "texture/info", ToolName: "unity_texture_info"),
+                     })
+            {
+                Assert.That(toolsByRoute.ContainsKey(expected.Route), Is.True,
+                    $"{expected.Route} must be exposed as a first-class MCP tool.");
+                var tool = toolsByRoute[expected.Route];
+                Assert.That(tool["toolName"], Is.EqualTo(expected.ToolName));
+                Assert.That(tool["firstClass"], Is.EqualTo(true));
+
+                var schema = RequireDictionary(tool["inputSchema"]);
+                var properties = RequireDictionary(schema["properties"]);
+                Assert.That(properties, Is.Not.Empty, $"{expected.Route} must publish a concrete input schema.");
+            }
+
+            var textureInfoAnnotations = RequireDictionary(toolsByRoute["texture/info"]["annotations"]);
+            Assert.That(textureInfoAnnotations["readOnlyHint"], Is.EqualTo(true));
+        }
+
+        [Test]
         public void ToolMetadata_ValueSchemasAcceptPrimitiveNumbers()
         {
             MethodInfo getSchema = typeof(MCPToolMetadata).GetMethod("GetToolInputSchema",

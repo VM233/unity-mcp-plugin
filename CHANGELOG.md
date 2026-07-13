@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.10] - 2026-07-13
+
+- Exposed texture inspection and sprite-import preset application as first-class MCP tools alongside external asset import.
+
 ## [3.1.9] - 2026-07-12
 
 - Allowed primitive JSON values in prefab, serialized-object, and localization value schemas.

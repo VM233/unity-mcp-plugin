@@ -121,6 +121,7 @@ namespace UnityMCP.Editor
                 "packages/info",
                 "packages/status",
                 "packages/lint-metas",
+                "texture/info",
                 "testing/get-job",
                 "testing/get-package-job",
                 "project-tools/list");
@@ -155,6 +156,7 @@ namespace UnityMCP.Editor
                 "asset/rename",
                 "asset/move",
                 "asset/export-unitypackage",
+                "texture/apply-sprite-preset",
                 "uitoolkit/runtime-repaint",
                 "uitoolkit/refresh",
                 "uitoolkit/assert-layout",
@@ -933,6 +935,8 @@ namespace UnityMCP.Editor
                     return "Replace a sprite sheet, slice it, then update an AnimationClip from the generated sprites.";
                 case "texture/apply-sprite-preset":
                     return "Apply high-level TextureImporter/Sprite settings such as pixel sprite preset, PPU, pivot, border, and reference settings.";
+                case "texture/info":
+                    return "Inspect a texture asset and its TextureImporter settings, including sprite PPU, pivot, and border when applicable.";
                 case "texture/import-image":
                     return "Import an external image from a URL or local path into Assets, optionally dedupe, then apply sprite import settings.";
                 case "texture/check-import-settings":
@@ -1867,6 +1871,10 @@ namespace UnityMCP.Editor
                         Prop("alphaIsTransparency", "boolean", "Alpha is transparency."),
                         Prop("pivot", "object", "Sprite pivot with x/y."),
                         Prop("border", "object", "Sprite border. Accepts number, [left,bottom,right,top], or object with left/bottom/right/top.")
+                    ), "path");
+                case "texture/info":
+                    return Schema(Props(
+                        Prop("path", "string", "Texture asset path under Assets/.")
                     ), "path");
                 case "texture/import-image":
                     return Schema(Props(

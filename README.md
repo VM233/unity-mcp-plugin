@@ -63,6 +63,7 @@ http://127.0.0.1:7890/api/ping
 | Prefab asset search | `unity_prefab_asset_get_properties` | `prefab-asset/get-properties` | Read serialized component properties inside a prefab asset. |
 | Scene editing | `unity_scene_instantiate_prefab` | `scene/instantiate-prefab` | Instantiate a prefab asset into the currently open scene. |
 | Safe assets | `unity_asset_refresh` | `asset/refresh` | Refresh AssetDatabase, optionally forcing update or importing specific asset paths before prefab/package operations. |
+| Safe assets | `unity_asset_import` | `asset/import` | Copy an external image or other asset into Assets and configure TextureImporter/Sprite settings in the same operation. |
 | Safe assets | `unity_asset_rename` | `asset/rename` | Rename an asset through `AssetDatabase.RenameAsset`, preserving `.meta`, GUID, and references. |
 | Safe assets | `unity_asset_move` | `asset/move` | Preflight and move one or more assets, preserving `.meta` GUIDs and rolling back completed moves when configured to stop on failure. |
 | Scene references | `unity_component_set_reference` | `component/set-reference` | Assign one or more ObjectReference properties with `execution.mode` and shared target defaults. |
@@ -100,6 +101,7 @@ http://127.0.0.1:7890/api/ping
 | Sprite pipeline | `unity_sprite_update_animation_clip` | `sprite/update-animation-clip` | Rebuild a SpriteRenderer sprite animation curve from a sheet's sprites. |
 | Sprite pipeline | `unity_sprite_replace_slice_update_clip` | `sprite/replace-slice-update-clip` | Replace a sheet, slice it, and update an AnimationClip in one call. |
 | Texture pipeline | `unity_texture_apply_sprite_preset` | `texture/apply-sprite-preset` | Apply high-level TextureImporter/Sprite settings, including pixel sprite preset, PPU, pivot, border, and reference settings. |
+| Texture pipeline | `unity_texture_info` | `texture/info` | Inspect texture dimensions and TextureImporter settings, including sprite PPU, pivot, and border. |
 | Texture pipeline | `unity_texture_import_image` | `texture/import-image` | Import an image from a URL or local file into Assets, dedupe by hash, and apply sprite import settings. |
 | Texture pipeline | `unity_texture_check_ui_import_settings` | `texture/check-ui-import-settings` | Check UI pixel-art image import settings, including pixel sprite defaults plus optional expected dimensions, border, and max texture size. |
 | Build testing | `unity_build_run_test` | `build/run-test` | Overwrite/build a player, launch it, sample Player.log, optionally capture its window, and terminate it. |
