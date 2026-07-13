@@ -602,10 +602,16 @@ namespace UnityMCP.Editor.Tests
             File.Delete(GetAbsolutePath(deletedPath));
             File.Delete(GetAbsolutePath(deletedPath) + ".meta");
 
-            var response = RequireDictionary(MCPAssetCommands.ExecuteRefreshImmediate(new Dictionary<string, object>
+            var method = typeof(MCPAssetCommands).GetMethod("ExecuteRefreshImmediate",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            var response = RequireDictionary(method.Invoke(null, new object[]
             {
-                { "assetPaths", new[] { importedPath } },
-                { "forceUpdate", true },
+                new Dictionary<string, object>
+                {
+                    { "assetPaths", new[] { importedPath } },
+                    { "forceUpdate", true },
+                },
             }));
 
             Assert.That(response["success"], Is.EqualTo(true));
