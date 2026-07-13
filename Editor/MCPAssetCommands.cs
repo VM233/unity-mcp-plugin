@@ -236,12 +236,35 @@ namespace UnityMCP.Editor
                 if (!ValidateImportSettings(settings, out string settingsError))
                     return FailImportPreparation(index, settingsError, out errorResult);
 
+                if (!MCPImageDuplicateCommands.TryNormalizeMode(GetString(settings, "dedupeMode"), sourcePath,
+                        true, out string dedupeMode, out string dedupeModeError))
+                    return FailImportPreparation(index, dedupeModeError, out errorResult);
+                string dedupeScope = NormalizeDedupeScope(GetString(settings, "dedupeScope"));
+                if (string.IsNullOrEmpty(dedupeScope))
+                    return FailImportPreparation(index,
+                        $"Unknown dedupeScope '{GetString(settings, "dedupeScope")}'. Supported: destinationFolder, searchPath, assets",
+                        out errorResult);
+                string dedupeSearchPath = NormalizeAssetPath(GetString(settings, "dedupeSearchPath"));
+                if (dedupeScope == "searchPath")
+                {
+                    if (string.IsNullOrEmpty(dedupeSearchPath))
+                        return FailImportPreparation(index,
+                            "dedupeSearchPath is required when dedupeScope is searchPath", out errorResult);
+                    if (!dedupeSearchPath.Equals("Assets", StringComparison.OrdinalIgnoreCase) &&
+                        !dedupeSearchPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                        return FailImportPreparation(index, "dedupeSearchPath must be under Assets/", out errorResult);
+                    if (!AssetDatabase.IsValidFolder(dedupeSearchPath))
+                        return FailImportPreparation(index,
+                            $"dedupeSearchPath does not exist: '{dedupeSearchPath}'", out errorResult);
+                }
+                string onDuplicate = NormalizeDuplicateAction(GetString(settings, "onDuplicate"));
+                if (string.IsNullOrEmpty(onDuplicate))
+                    return FailImportPreparation(index,
+                        $"Unknown onDuplicate '{GetString(settings, "onDuplicate")}'. Supported: skip, error, report",
+                        out errorResult);
+
                 bool overwrite = GetBool(settings, "overwrite", false);
                 bool existedBefore = File.Exists(absoluteDestinationPath);
-                if (existedBefore && !overwrite)
-                    return FailImportPreparation(index,
-                        $"Target asset already exists at '{destinationPath}'; pass overwrite=true to replace it",
-                        out errorResult);
 
                 entries.Add(new BatchImportEntry
                 {
@@ -252,6 +275,10 @@ namespace UnityMCP.Editor
                     Settings = settings,
                     Overwrite = overwrite,
                     ExistedBefore = existedBefore,
+                    DedupeMode = dedupeMode,
+                    DedupeScope = dedupeScope,
+                    DedupeSearchPath = dedupeSearchPath,
+                    OnDuplicate = onDuplicate,
                 });
             }
 
@@ -264,6 +291,17 @@ namespace UnityMCP.Editor
                         return FailImportPreparation(otherIndex,
                             $"Duplicate destinationPath '{entries[otherIndex].DestinationPath}'", out errorResult);
                 }
+            }
+
+            if (!ApplyDuplicateDetection(entries, out int duplicateErrorIndex, out string duplicateError))
+                return FailImportPreparation(duplicateErrorIndex, duplicateError, out errorResult);
+
+            foreach (var entry in entries)
+            {
+                if (entry.ExistedBefore && !entry.Overwrite && !entry.Skipped)
+                    return FailImportPreparation(entry.Index,
+                        $"Target asset already exists at '{entry.DestinationPath}'; pass overwrite=true to replace it",
+                        out errorResult);
             }
 
             return true;
@@ -320,6 +358,128 @@ namespace UnityMCP.Editor
             }
         }
 
+        private static bool ApplyDuplicateDetection(List<BatchImportEntry> entries, out int errorIndex,
+            out string error)
+        {
+            errorIndex = -1;
+            error = "";
+            var assetIndexes = new Dictionary<string,
+                Dictionary<string, List<MCPImageDuplicateCommands.ImageAssetRecord>>>(StringComparer.OrdinalIgnoreCase);
+            var priorSources = new Dictionary<string, List<BatchImportEntry>>(StringComparer.Ordinal);
+
+            foreach (var entry in entries)
+            {
+                if (entry.DedupeMode == MCPImageDuplicateCommands.NoneMode)
+                    continue;
+                try
+                {
+                    var fingerprint = MCPImageDuplicateCommands.CreateFingerprint(entry.SourcePath, entry.DedupeMode);
+                    entry.ContentHash = fingerprint.Hash;
+                    entry.ImageWidth = fingerprint.Width;
+                    entry.ImageHeight = fingerprint.Height;
+
+                    string searchFolder = ResolveDedupeSearchFolder(entry);
+                    string indexKey = entry.DedupeMode + "|" + searchFolder;
+                    if (!assetIndexes.TryGetValue(indexKey, out var assetIndex))
+                    {
+                        assetIndex = MCPImageDuplicateCommands.BuildAssetIndex(searchFolder, entry.DedupeMode,
+                            out var indexErrors);
+                        if (indexErrors.Count > 0)
+                            throw new InvalidDataException(
+                                $"Could not fingerprint every candidate asset under '{searchFolder}': {indexErrors[0]}");
+                        assetIndexes[indexKey] = assetIndex;
+                    }
+
+                    if (assetIndex.TryGetValue(entry.ContentHash, out var duplicateAssets) &&
+                        duplicateAssets.Count > 0)
+                    {
+                        var duplicateAsset = duplicateAssets[0];
+                        entry.Duplicate = true;
+                        entry.DuplicateAssetPath = duplicateAsset.AssetPath;
+                        entry.DuplicateAssetGuid = duplicateAsset.Guid;
+                    }
+                    else
+                    {
+                        string sourceKey = entry.DedupeMode + "|" + entry.ContentHash;
+                        if (priorSources.TryGetValue(sourceKey, out var duplicateSources) &&
+                            duplicateSources.Count > 0)
+                        {
+                            var duplicateSource = duplicateSources[0];
+                            entry.Duplicate = true;
+                            entry.DuplicateSourceIndex = duplicateSource.Index;
+                            entry.DuplicateSourcePath = duplicateSource.SourcePath;
+                        }
+                    }
+
+                    string priorKey = entry.DedupeMode + "|" + entry.ContentHash;
+                    if (!priorSources.TryGetValue(priorKey, out var priorEntries))
+                    {
+                        priorEntries = new List<BatchImportEntry>();
+                        priorSources[priorKey] = priorEntries;
+                    }
+                    priorEntries.Add(entry);
+
+                    if (!entry.Duplicate)
+                        continue;
+                    if (entry.OnDuplicate == "error")
+                    {
+                        errorIndex = entry.Index;
+                        error = BuildDuplicateMessage(entry);
+                        return false;
+                    }
+                    if (entry.OnDuplicate == "skip")
+                        entry.Skipped = true;
+                }
+                catch (Exception exception)
+                {
+                    errorIndex = entry.Index;
+                    error = $"Duplicate detection failed: {exception.Message}";
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static string ResolveDedupeSearchFolder(BatchImportEntry entry)
+        {
+            return entry.DedupeScope switch
+            {
+                "assets" => "Assets",
+                "searchPath" => entry.DedupeSearchPath,
+                _ => NormalizeAssetPath(Path.GetDirectoryName(entry.DestinationPath) ?? "Assets"),
+            };
+        }
+
+        private static string NormalizeDedupeScope(string value)
+        {
+            string compact = (value ?? "").Trim().Replace("-", "").Replace("_", "").ToLowerInvariant();
+            return compact switch
+            {
+                "" or "assets" => "assets",
+                "destinationfolder" => "destinationFolder",
+                "searchpath" => "searchPath",
+                _ => "",
+            };
+        }
+
+        private static string NormalizeDuplicateAction(string value)
+        {
+            return (value ?? "").Trim().ToLowerInvariant() switch
+            {
+                "" or "skip" => "skip",
+                "error" => "error",
+                "report" => "report",
+                _ => "",
+            };
+        }
+
+        private static string BuildDuplicateMessage(BatchImportEntry entry)
+        {
+            return !string.IsNullOrEmpty(entry.DuplicateAssetPath)
+                ? $"Source content duplicates existing asset '{entry.DuplicateAssetPath}'"
+                : $"Source content duplicates import {entry.DuplicateSourceIndex} ('{entry.DuplicateSourcePath}')";
+        }
+
         private static void ValidateEnum<TEnum>(Dictionary<string, object> settings, string key)
             where TEnum : struct
         {
@@ -366,6 +526,8 @@ namespace UnityMCP.Editor
 
         private static void ExecuteImport(BatchImportEntry entry, string backupRoot)
         {
+            if (entry.Skipped)
+                return;
             if (!File.Exists(entry.SourcePath))
                 throw new FileNotFoundException("Source file disappeared after preflight", entry.SourcePath);
             bool existsNow = File.Exists(entry.AbsoluteDestinationPath);
@@ -475,6 +637,8 @@ namespace UnityMCP.Editor
                 { "dryRun", dryRun },
                 { "importCount", entries.Count },
                 { "importedCount", entries.Count(entry => entry.Imported && !entry.RolledBack) },
+                { "skippedCount", entries.Count(entry => entry.Skipped) },
+                { "duplicateCount", entries.Count(entry => entry.Duplicate) },
                 { "failedCount", entries.Count(entry => !string.IsNullOrEmpty(entry.Error)) },
                 { "rolledBackCount", entries.Count(entry => entry.RolledBack) },
                 { "imports", entries.ConvertAll(CreateBatchImportResult) },
@@ -519,6 +683,19 @@ namespace UnityMCP.Editor
                 { "originalGuid", entry.OriginalGuid ?? "" },
                 { "currentGuid", AssetDatabase.AssetPathToGUID(entry.DestinationPath) },
                 { "imported", entry.Imported },
+                { "skipped", entry.Skipped },
+                { "duplicate", entry.Duplicate },
+                { "dedupeMode", entry.DedupeMode },
+                { "dedupeScope", entry.DedupeScope },
+                { "dedupeSearchPath", entry.DedupeSearchPath ?? "" },
+                { "onDuplicate", entry.OnDuplicate },
+                { "contentHash", entry.ContentHash ?? "" },
+                { "imageWidth", entry.ImageWidth },
+                { "imageHeight", entry.ImageHeight },
+                { "duplicateAssetPath", entry.DuplicateAssetPath ?? "" },
+                { "duplicateAssetGuid", entry.DuplicateAssetGuid ?? "" },
+                { "duplicateSourceIndex", entry.DuplicateSourceIndex },
+                { "duplicateSourcePath", entry.DuplicateSourcePath ?? "" },
                 { "rolledBack", entry.RolledBack },
                 { "error", entry.Error ?? "" },
                 { "rollbackError", entry.RollbackError ?? "" },
@@ -1629,6 +1806,19 @@ namespace UnityMCP.Editor
             public Dictionary<string, object> Settings;
             public bool Overwrite;
             public bool ExistedBefore;
+            public string DedupeMode;
+            public string DedupeScope;
+            public string DedupeSearchPath;
+            public string OnDuplicate;
+            public string ContentHash;
+            public int ImageWidth;
+            public int ImageHeight;
+            public bool Duplicate;
+            public bool Skipped;
+            public string DuplicateAssetPath;
+            public string DuplicateAssetGuid;
+            public int DuplicateSourceIndex = -1;
+            public string DuplicateSourcePath;
             public bool MetaExistedBefore;
             public bool Touched;
             public bool Imported;

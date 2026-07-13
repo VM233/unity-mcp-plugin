@@ -1040,6 +1040,7 @@ namespace UnityMCP.Editor.Tests
                 {
                     { "defaults", new Dictionary<string, object>
                         {
+                            { "dedupeMode", "none" },
                             { "textureType", "Sprite" }, { "spriteMode", "Single" },
                             { "pixelsPerUnit", 8f }, { "filterMode", "Point" }, { "isReadable", true },
                             { "compression", "uncompressed" }, { "alphaIsTransparency", true },
@@ -1092,6 +1093,7 @@ namespace UnityMCP.Editor.Tests
                 {
                     { "defaults", new Dictionary<string, object>
                         {
+                            { "dedupeMode", "none" },
                             { "textureType", "Sprite" }, { "spriteMode", "Single" },
                             { "pixelsPerUnit", 12f }, { "filterMode", "Point" },
                             { "compression", "uncompressed" },
@@ -1147,6 +1149,7 @@ namespace UnityMCP.Editor.Tests
             {
                 var result = RequireDictionary(MCPAssetCommands.Import(new Dictionary<string, object>
                 {
+                    { "defaults", new Dictionary<string, object> { { "dedupeMode", "none" } } },
                     { "imports", new object[]
                         {
                             new Dictionary<string, object>
@@ -1185,6 +1188,7 @@ namespace UnityMCP.Editor.Tests
             {
                 MCPAssetCommands.ImportDeferred(new Dictionary<string, object>
                 {
+                    { "defaults", new Dictionary<string, object> { { "dedupeMode", "none" } } },
                     { "imports", new object[]
                         {
                             new Dictionary<string, object>
@@ -1250,7 +1254,8 @@ namespace UnityMCP.Editor.Tests
                 {
                     { "defaults", new Dictionary<string, object>
                         {
-                            { "overwrite", true }, { "textureType", "Sprite" }, { "filterMode", "Point" },
+                            { "dedupeMode", "none" }, { "overwrite", true },
+                            { "textureType", "Sprite" }, { "filterMode", "Point" },
                         }
                     },
                     { "imports", new object[]
@@ -1294,6 +1299,167 @@ namespace UnityMCP.Editor.Tests
                 if (File.Exists(originalSource)) File.Delete(originalSource);
                 if (File.Exists(replacementSource)) File.Delete(replacementSource);
                 if (File.Exists(failingSource)) File.Delete(failingSource);
+            }
+        }
+
+        [Test]
+        public void AssetImport_DefaultPixelDedupeSkipsExistingImageWithDifferentFileBytes()
+        {
+            string sourcePath = CreateExternalPng(new Color(0.13f, 0.37f, 0.73f, 1f));
+            const string existingPath = TEST_FOLDER + "/Existing Pixel Match.png";
+            const string destinationPath = TEST_FOLDER + "/Skipped Pixel Match.png";
+            try
+            {
+                byte[] sourceBytes = File.ReadAllBytes(sourcePath);
+                File.WriteAllBytes(GetAbsolutePath(existingPath), sourceBytes.Concat(new byte[] { 1, 2, 3, 4 }).ToArray());
+                AssetDatabase.ImportAsset(existingPath, ImportAssetOptions.ForceSynchronousImport);
+
+                var result = RequireDictionary(MCPAssetCommands.Import(new Dictionary<string, object>
+                {
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", sourcePath }, { "destinationPath", destinationPath },
+                            },
+                        }
+                    },
+                }));
+
+                Assert.That(result["success"], Is.EqualTo(true));
+                Assert.That(result["importedCount"], Is.EqualTo(0));
+                Assert.That(result["skippedCount"], Is.EqualTo(1));
+                Assert.That(result["duplicateCount"], Is.EqualTo(1));
+                var import = ((List<Dictionary<string, object>>)result["imports"])[0];
+                Assert.That(import["dedupeMode"], Is.EqualTo("decodedPixels"));
+                Assert.That(import["skipped"], Is.EqualTo(true));
+                Assert.That(import["duplicateAssetPath"], Is.EqualTo(existingPath));
+                Assert.That(import["duplicateAssetGuid"].ToString(), Is.Not.Empty);
+                Assert.That(File.Exists(GetAbsolutePath(destinationPath)), Is.False);
+            }
+            finally
+            {
+                if (File.Exists(sourcePath)) File.Delete(sourcePath);
+            }
+        }
+
+        [Test]
+        public void AssetImport_DedupeSkipsLaterDuplicateInsideBatch()
+        {
+            string sourcePath = CreateExternalPng(new Color(0.81f, 0.42f, 0.17f, 1f));
+            const string firstPath = TEST_FOLDER + "/Unique Batch Image.png";
+            const string secondPath = TEST_FOLDER + "/Duplicate Batch Image.png";
+            try
+            {
+                var result = RequireDictionary(MCPAssetCommands.Import(new Dictionary<string, object>
+                {
+                    { "defaults", new Dictionary<string, object>
+                        {
+                            { "dedupeMode", "decodedPixels" }, { "dedupeScope", "destinationFolder" },
+                        }
+                    },
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", sourcePath }, { "destinationPath", firstPath },
+                            },
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", sourcePath }, { "destinationPath", secondPath },
+                            },
+                        }
+                    },
+                }));
+
+                Assert.That(result["success"], Is.EqualTo(true));
+                Assert.That(result["importedCount"], Is.EqualTo(1));
+                Assert.That(result["skippedCount"], Is.EqualTo(1));
+                var imports = (List<Dictionary<string, object>>)result["imports"];
+                Assert.That(imports[0]["imported"], Is.EqualTo(true));
+                Assert.That(imports[1]["skipped"], Is.EqualTo(true));
+                Assert.That(imports[1]["duplicateSourceIndex"], Is.EqualTo(0));
+                Assert.That(File.Exists(GetAbsolutePath(firstPath)), Is.True);
+                Assert.That(File.Exists(GetAbsolutePath(secondPath)), Is.False);
+            }
+            finally
+            {
+                if (File.Exists(sourcePath)) File.Delete(sourcePath);
+            }
+        }
+
+        [Test]
+        public void AssetImport_DuplicateErrorFailsWholeBatchDuringPreflight()
+        {
+            string sourcePath = CreateExternalPng(new Color(0.56f, 0.21f, 0.64f, 1f));
+            const string firstPath = TEST_FOLDER + "/Error First.png";
+            const string secondPath = TEST_FOLDER + "/Error Second.png";
+            try
+            {
+                var result = RequireDictionary(MCPAssetCommands.Import(new Dictionary<string, object>
+                {
+                    { "defaults", new Dictionary<string, object>
+                        {
+                            { "dedupeMode", "decodedPixels" }, { "dedupeScope", "destinationFolder" },
+                            { "onDuplicate", "error" },
+                        }
+                    },
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", sourcePath }, { "destinationPath", firstPath },
+                            },
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", sourcePath }, { "destinationPath", secondPath },
+                            },
+                        }
+                    },
+                }));
+
+                Assert.That(result["success"], Is.EqualTo(false));
+                Assert.That(result["error"].ToString(), Does.Contain("Import 1 is invalid"));
+                Assert.That(result["error"].ToString(), Does.Contain("duplicates import 0"));
+                Assert.That(File.Exists(GetAbsolutePath(firstPath)), Is.False);
+                Assert.That(File.Exists(GetAbsolutePath(secondPath)), Is.False);
+            }
+            finally
+            {
+                if (File.Exists(sourcePath)) File.Delete(sourcePath);
+            }
+        }
+
+        [Test]
+        public void TextureFindDuplicates_FindsDecodedPixelMatchesWithDifferentFileBytes()
+        {
+            string sourcePath = CreateExternalPng(new Color(0.24f, 0.68f, 0.33f, 1f));
+            const string firstPath = TEST_FOLDER + "/Audit First.png";
+            const string secondPath = TEST_FOLDER + "/Audit Second.png";
+            try
+            {
+                byte[] sourceBytes = File.ReadAllBytes(sourcePath);
+                File.WriteAllBytes(GetAbsolutePath(firstPath), sourceBytes);
+                File.WriteAllBytes(GetAbsolutePath(secondPath), sourceBytes.Concat(new byte[] { 9, 8, 7 }).ToArray());
+                AssetDatabase.ImportAsset(firstPath, ImportAssetOptions.ForceSynchronousImport);
+                AssetDatabase.ImportAsset(secondPath, ImportAssetOptions.ForceSynchronousImport);
+
+                var result = RequireDictionary(MCPImageDuplicateCommands.FindDuplicates(
+                    new Dictionary<string, object>
+                    {
+                        { "folder", TEST_FOLDER }, { "mode", "decodedPixels" },
+                    }));
+
+                Assert.That(result["success"], Is.EqualTo(true));
+                Assert.That(result["duplicateGroupCount"], Is.EqualTo(1));
+                var groups = (List<Dictionary<string, object>>)result["groups"];
+                var assets = (List<Dictionary<string, object>>)groups[0]["assets"];
+                Assert.That(assets.Select(asset => asset["path"].ToString()),
+                    Is.EquivalentTo(new[] { firstPath, secondPath }));
+            }
+            finally
+            {
+                if (File.Exists(sourcePath)) File.Delete(sourcePath);
             }
         }
 
@@ -1621,6 +1787,7 @@ namespace UnityMCP.Editor.Tests
                          (Route: "asset/import", ToolName: "unity_asset_import"),
                          (Route: "texture/apply-sprite-preset", ToolName: "unity_texture_apply_sprite_preset"),
                          (Route: "texture/info", ToolName: "unity_texture_info"),
+                         (Route: "texture/find-duplicates", ToolName: "unity_texture_find_duplicates"),
                      })
             {
                 Assert.That(toolsByRoute.ContainsKey(expected.Route), Is.True,
@@ -1636,6 +1803,9 @@ namespace UnityMCP.Editor.Tests
 
             var textureInfoAnnotations = RequireDictionary(toolsByRoute["texture/info"]["annotations"]);
             Assert.That(textureInfoAnnotations["readOnlyHint"], Is.EqualTo(true));
+            var duplicateFinderAnnotations = RequireDictionary(
+                toolsByRoute["texture/find-duplicates"]["annotations"]);
+            Assert.That(duplicateFinderAnnotations["readOnlyHint"], Is.EqualTo(true));
 
             var assetImportSchema = RequireDictionary(toolsByRoute["asset/import"]["inputSchema"]);
             var assetImportProperties = RequireDictionary(assetImportSchema["properties"]);
@@ -1643,6 +1813,12 @@ namespace UnityMCP.Editor.Tests
                 Is.EquivalentTo(new[] { "dryRun", "defaults", "execution", "imports" }));
             Assert.That(assetImportProperties.ContainsKey("sourcePath"), Is.False);
             Assert.That(assetImportProperties.ContainsKey("destinationPath"), Is.False);
+            var defaultsSchema = RequireDictionary(assetImportProperties["defaults"]);
+            var defaultProperties = RequireDictionary(defaultsSchema["properties"]);
+            Assert.That(defaultProperties.Keys, Does.Contain("dedupeMode"));
+            Assert.That(defaultProperties.Keys, Does.Contain("dedupeScope"));
+            Assert.That(defaultProperties.Keys, Does.Contain("dedupeSearchPath"));
+            Assert.That(defaultProperties.Keys, Does.Contain("onDuplicate"));
         }
 
         [Test]

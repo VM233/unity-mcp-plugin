@@ -1438,6 +1438,8 @@ namespace UnityMCP.Editor
                 // ─── Texture ───
                 case "texture/info":
                     return MCPTextureCommands.GetTextureInfo(ParseJson(body));
+                case "texture/find-duplicates":
+                    return MCPImageDuplicateCommands.FindDuplicates(ParseJson(body));
                 case "texture/set-import":
                     return MCPTextureCommands.SetTextureImportSettings(ParseJson(body));
                 case "texture/reimport":

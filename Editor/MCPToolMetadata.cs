@@ -127,6 +127,7 @@ namespace UnityMCP.Editor
                 "packages/status",
                 "packages/lint-metas",
                 "texture/info",
+                "texture/find-duplicates",
                 "animation/transition-info",
                 "asset/get-refresh-job",
                 "build/get-job",
@@ -838,7 +839,7 @@ namespace UnityMCP.Editor
                 case "asset/get-refresh-job":
                     return "Poll the current or latest reload-safe AssetDatabase refresh job.";
                 case "asset/import":
-                    return "Preflight and import one or more external assets with shared TextureImporter defaults, configurable execution, per-item results, and rollback.";
+                    return "Preflight and import one or more external assets with shared TextureImporter defaults, image-content deduplication, configurable execution, per-item results, and rollback.";
                 case "asset/rename":
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
@@ -955,6 +956,8 @@ namespace UnityMCP.Editor
                     return "Apply high-level TextureImporter/Sprite settings such as pixel sprite preset, PPU, pivot, border, and reference settings.";
                 case "texture/info":
                     return "Inspect a texture asset and its TextureImporter settings, including sprite PPU, pivot, and border when applicable.";
+                case "texture/find-duplicates":
+                    return "Audit project image assets for duplicate file bytes or identical decoded RGBA pixels, even when PNG/JPEG encoding differs.";
                 case "texture/import-image":
                     return "Import an external image from a URL or local path into Assets, optionally dedupe, then apply sprite import settings.";
                 case "texture/check-import-settings":
@@ -1890,6 +1893,15 @@ namespace UnityMCP.Editor
                     return Schema(Props(
                         Prop("path", "string", "Texture asset path under Assets/.")
                     ), "path");
+                case "texture/find-duplicates":
+                    return Schema(Props(
+                        Prop("folder", "string", "Single search folder under Assets/. Defaults to Assets."),
+                        Prop("folders", "array", "Additional search folders under Assets/. Results are de-duplicated across folders."),
+                        Prop("mode", "string", "Comparison mode: decodedPixels (default) or fileBytes."),
+                        Prop("extensions", "array", "Optional file extensions such as png, jpg, or jpeg. decodedPixels supports PNG/JPEG."),
+                        Prop("maxAssets", "number", "Maximum assets to fingerprint. Defaults to 10000; capped at 50000."),
+                        Prop("maxGroups", "number", "Maximum duplicate groups returned. Defaults to 100; capped at 2000.")
+                    ));
                 case "texture/import-image":
                     return Schema(Props(
                         Prop("sourcePath", "string", "Local image file path."),
@@ -2074,6 +2086,10 @@ namespace UnityMCP.Editor
         {
             var settingProperties = Props(
                 Prop("overwrite", "boolean", "Replace an existing destination asset while preserving and restoring it if the batch rolls back. Defaults to false."),
+                Prop("dedupeMode", "string", "Duplicate comparison: decodedPixels, fileBytes, or none. PNG/JPEG defaults to decodedPixels; other files default to none."),
+                Prop("dedupeScope", "string", "Existing-asset search scope: assets (default), destinationFolder, or searchPath."),
+                Prop("dedupeSearchPath", "string", "Folder under Assets/ used when dedupeScope is searchPath."),
+                Prop("onDuplicate", "string", "Duplicate handling: skip (default), error, or report. report imports while returning duplicate metadata."),
                 Prop("textureType", "string", "TextureImporterType such as Sprite or Default."),
                 Prop("spriteMode", "string", "Sprite import mode: Single, Multiple, Polygon, or None."),
                 Prop("pixelsPerUnit", "number", "Sprite pixels per unit."),
@@ -2093,7 +2109,7 @@ namespace UnityMCP.Editor
             properties["defaults"] = new Dictionary<string, object>
             {
                 { "type", "object" },
-                { "description", "Shared overwrite and TextureImporter settings inherited by every import item. Item fields override these defaults." },
+                { "description", "Shared overwrite, duplicate detection, and TextureImporter settings inherited by every import item. Item fields override these defaults." },
                 { "properties", settingProperties },
             };
             properties["execution"] = ExecutionSchema();

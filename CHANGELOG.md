@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.19] - 2026-07-14
+
+- Added decoded-pixel and file-byte duplicate detection to batch `asset/import`, including project/folder scopes, skip/error/report policies, existing-asset matches, and within-batch matches.
+- Added the first-class read-only `texture/find-duplicates` project image audit tool, with bounded folder, extension, asset, and group controls.
+
 ## [3.1.18] - 2026-07-14
 
 - Use Unity's indexed `TypeCache` for project-tool discovery instead of scanning every loaded assembly and type, preventing metadata requests and regression tests from timing out in large projects or after runtime code compilation.
