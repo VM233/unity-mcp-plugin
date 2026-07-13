@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.17] - 2026-07-13
+
+- Return the same stable dictionary result shape for `asset/import` preflight failures as for completed batch results.
+
 ## [3.1.16] - 2026-07-13
 
 - Upgraded `asset/import` to preflight and import up to 500 assets with shared TextureImporter defaults, immediate or frame-batched execution, per-item results, overwrite protection, and rollback.

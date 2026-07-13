@@ -68,7 +68,7 @@ namespace UnityMCP.Editor
         public static object Import(Dictionary<string, object> args)
         {
             if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
-                return new { success = false, error = executionError };
+                return ImportError(executionError);
             if (!TryPrepareImports(args, out var entries, out object preparationError))
                 return preparationError;
             if (GetBool(args, "dryRun", false))
@@ -81,7 +81,7 @@ namespace UnityMCP.Editor
         {
             if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
             {
-                resolve(new { success = false, error = executionError });
+                resolve(ImportError(executionError));
                 return;
             }
             if (!TryPrepareImports(args, out var entries, out object preparationError))
@@ -175,23 +175,23 @@ namespace UnityMCP.Editor
             errorResult = null;
             if (!TryGetDictionaryList(args, "imports", out var requests, out string requestsError))
             {
-                errorResult = new { success = false, error = requestsError };
+                errorResult = ImportError(requestsError);
                 return false;
             }
             if (requests.Count == 0)
             {
-                errorResult = new { success = false, error = "imports must contain at least one import request" };
+                errorResult = ImportError("imports must contain at least one import request");
                 return false;
             }
             if (requests.Count > 500)
             {
-                errorResult = new { success = false, error = "imports cannot contain more than 500 requests" };
+                errorResult = ImportError("imports cannot contain more than 500 requests");
                 return false;
             }
 
             if (!TryGetDictionary(args, "defaults", out var defaults, out string defaultsError))
             {
-                errorResult = new { success = false, error = defaultsError };
+                errorResult = ImportError(defaultsError);
                 return false;
             }
 
@@ -271,8 +271,17 @@ namespace UnityMCP.Editor
 
         private static bool FailImportPreparation(int index, string error, out object errorResult)
         {
-            errorResult = new { success = false, error = $"Import {index} is invalid: {error}" };
+            errorResult = ImportError($"Import {index} is invalid: {error}");
             return false;
+        }
+
+        private static Dictionary<string, object> ImportError(string error)
+        {
+            return new Dictionary<string, object>
+            {
+                { "success", false },
+                { "error", error },
+            };
         }
 
         private static bool ValidateImportSettings(Dictionary<string, object> settings, out string error)
