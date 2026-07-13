@@ -374,6 +374,7 @@ namespace UnityMCP.Editor.Tests
             Assert.That(routesProperty, Is.Not.Null);
             var routes = (IEnumerable<string>)routesProperty.GetValue(null);
             Assert.That(routes, Does.Contain("prefab-asset/transaction-edit"));
+            Assert.That(routes, Does.Contain("asset/import"));
             Assert.That(routes, Does.Contain("asset/move"));
             Assert.That(routes, Does.Contain("component/set-reference"));
             Assert.That(routes, Does.Contain("localization/upsert-entry"));
@@ -1030,32 +1031,35 @@ namespace UnityMCP.Editor.Tests
         [Test]
         public void AssetImport_ConfiguresTextureImporterInOneOperation()
         {
-            string externalPath = Path.Combine(Path.GetTempPath(), $"unity-mcp-{Guid.NewGuid():N}.png");
+            string externalPath = CreateExternalPng(Color.white);
             const string spritePath = TEST_FOLDER + "/Imported Sprite.png";
-            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
-            try
-            {
-                texture.SetPixels(new[] { Color.white, Color.white, Color.white, Color.white });
-                texture.Apply();
-                File.WriteAllBytes(externalPath, texture.EncodeToPNG());
-            }
-            finally
-            {
-                Object.DestroyImmediate(texture);
-            }
 
             try
             {
                 var result = RequireDictionary(MCPAssetCommands.Import(new Dictionary<string, object>
                 {
-                    { "sourcePath", externalPath }, { "destinationPath", spritePath },
-                    { "textureType", "Sprite" }, { "spriteMode", "Single" },
-                    { "pixelsPerUnit", 8f }, { "filterMode", "Point" }, { "isReadable", true },
-                    { "compression", "uncompressed" }, { "alphaIsTransparency", true },
-                    { "meshType", "FullRect" }, { "mipmapEnabled", false },
+                    { "defaults", new Dictionary<string, object>
+                        {
+                            { "textureType", "Sprite" }, { "spriteMode", "Single" },
+                            { "pixelsPerUnit", 8f }, { "filterMode", "Point" }, { "isReadable", true },
+                            { "compression", "uncompressed" }, { "alphaIsTransparency", true },
+                            { "meshType", "FullRect" }, { "mipmapEnabled", false },
+                        }
+                    },
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", externalPath }, { "destinationPath", spritePath },
+                            },
+                        }
+                    },
+                    { "execution", new Dictionary<string, object> { { "mode", "immediate" } } },
                 }));
 
                 Assert.That(result["success"], Is.EqualTo(true));
+                Assert.That(result["importCount"], Is.EqualTo(1));
+                Assert.That(result["importedCount"], Is.EqualTo(1));
                 var importer = (TextureImporter)AssetImporter.GetAtPath(spritePath);
                 Assert.That(importer.textureType, Is.EqualTo(TextureImporterType.Sprite));
                 Assert.That(importer.spriteImportMode, Is.EqualTo(SpriteImportMode.Single));
@@ -1071,6 +1075,225 @@ namespace UnityMCP.Editor.Tests
             finally
             {
                 if (File.Exists(externalPath)) File.Delete(externalPath);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AssetImportDeferred_BatchedModeImportsAllAndAllowsItemOverrides()
+        {
+            string firstSource = CreateExternalPng(Color.red);
+            string secondSource = CreateExternalPng(Color.blue);
+            const string firstPath = TEST_FOLDER + "/Batch First.png";
+            const string secondPath = TEST_FOLDER + "/Batch Second.png";
+            object completed = null;
+            try
+            {
+                MCPAssetCommands.ImportDeferred(new Dictionary<string, object>
+                {
+                    { "defaults", new Dictionary<string, object>
+                        {
+                            { "textureType", "Sprite" }, { "spriteMode", "Single" },
+                            { "pixelsPerUnit", 12f }, { "filterMode", "Point" },
+                            { "compression", "uncompressed" },
+                        }
+                    },
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", firstSource }, { "destinationPath", firstPath },
+                            },
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", secondSource }, { "destinationPath", secondPath },
+                                { "pixelsPerUnit", 24f },
+                            },
+                        }
+                    },
+                    { "execution", new Dictionary<string, object>
+                        {
+                            { "mode", "batched" }, { "operationsPerFrame", 1 }, { "frameBudgetMs", 1 },
+                        }
+                    },
+                }, result => completed = result, _ => { });
+
+                double timeoutAt = EditorApplication.timeSinceStartup + 10d;
+                while (completed == null && EditorApplication.timeSinceStartup < timeoutAt)
+                    yield return null;
+
+                Assert.That(completed, Is.Not.Null);
+                var result = RequireDictionary(completed);
+                Assert.That(result["success"], Is.EqualTo(true));
+                Assert.That(result["importedCount"], Is.EqualTo(2));
+                Assert.That(((TextureImporter)AssetImporter.GetAtPath(firstPath)).spritePixelsPerUnit,
+                    Is.EqualTo(12f));
+                Assert.That(((TextureImporter)AssetImporter.GetAtPath(secondPath)).spritePixelsPerUnit,
+                    Is.EqualTo(24f));
+            }
+            finally
+            {
+                if (File.Exists(firstSource)) File.Delete(firstSource);
+                if (File.Exists(secondSource)) File.Delete(secondSource);
+            }
+        }
+
+        [Test]
+        public void AssetImport_InvalidBatchFailsPreflightBeforeCreatingAnyAsset()
+        {
+            string validSource = CreateExternalPng(Color.green);
+            const string firstPath = TEST_FOLDER + "/Preflight First.png";
+            const string secondPath = TEST_FOLDER + "/Preflight Second.png";
+            try
+            {
+                var result = RequireDictionary(MCPAssetCommands.Import(new Dictionary<string, object>
+                {
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", validSource }, { "destinationPath", firstPath },
+                            },
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", Path.Combine(Path.GetTempPath(), $"missing-unity-mcp-{Guid.NewGuid():N}.png") },
+                                { "destinationPath", secondPath },
+                            },
+                        }
+                    },
+                }));
+
+                Assert.That(result["success"], Is.EqualTo(false));
+                Assert.That(result["error"].ToString(), Does.Contain("Import 1 is invalid"));
+                Assert.That(File.Exists(GetAbsolutePath(firstPath)), Is.False);
+                Assert.That(File.Exists(GetAbsolutePath(secondPath)), Is.False);
+            }
+            finally
+            {
+                if (File.Exists(validSource)) File.Delete(validSource);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AssetImportDeferred_FailureRollsBackEarlierImports()
+        {
+            string firstSource = CreateExternalPng(Color.yellow);
+            string secondSource = CreateExternalPng(Color.magenta);
+            const string firstPath = TEST_FOLDER + "/Rollback First.png";
+            const string secondPath = TEST_FOLDER + "/Rollback Second.png";
+            object completed = null;
+            try
+            {
+                MCPAssetCommands.ImportDeferred(new Dictionary<string, object>
+                {
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", firstSource }, { "destinationPath", firstPath },
+                            },
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", secondSource }, { "destinationPath", secondPath },
+                            },
+                        }
+                    },
+                    { "execution", new Dictionary<string, object>
+                        {
+                            { "mode", "batched" }, { "operationsPerFrame", 1 }, { "frameBudgetMs", 1 },
+                        }
+                    },
+                }, result => completed = result, _ => { });
+
+                Assert.That(File.Exists(GetAbsolutePath(firstPath)), Is.True,
+                    "The first frame should complete one import before the injected failure.");
+                File.Delete(secondSource);
+                double timeoutAt = EditorApplication.timeSinceStartup + 10d;
+                while (completed == null && EditorApplication.timeSinceStartup < timeoutAt)
+                    yield return null;
+
+                Assert.That(completed, Is.Not.Null);
+                var result = RequireDictionary(completed);
+                Assert.That(result["success"], Is.EqualTo(false));
+                Assert.That(result["allTouchedRolledBack"], Is.EqualTo(true));
+                Assert.That(result["rolledBackCount"], Is.EqualTo(1));
+                Assert.That(File.Exists(GetAbsolutePath(firstPath)), Is.False);
+                Assert.That(File.Exists(GetAbsolutePath(secondPath)), Is.False);
+            }
+            finally
+            {
+                if (File.Exists(firstSource)) File.Delete(firstSource);
+                if (File.Exists(secondSource)) File.Delete(secondSource);
+            }
+        }
+
+        [UnityTest]
+        public IEnumerator AssetImportDeferred_RollbackRestoresOverwrittenAssetAndImporter()
+        {
+            string originalSource = CreateExternalPng(Color.black);
+            string replacementSource = CreateExternalPng(Color.white);
+            string failingSource = CreateExternalPng(Color.cyan);
+            const string existingPath = TEST_FOLDER + "/Existing Sprite.png";
+            const string failingPath = TEST_FOLDER + "/Failure Trigger.png";
+            object completed = null;
+            try
+            {
+                File.Copy(originalSource, GetAbsolutePath(existingPath), true);
+                AssetDatabase.ImportAsset(existingPath, ImportAssetOptions.ForceUpdate);
+                var originalImporter = (TextureImporter)AssetImporter.GetAtPath(existingPath);
+                originalImporter.textureType = TextureImporterType.Sprite;
+                originalImporter.filterMode = FilterMode.Bilinear;
+                originalImporter.SaveAndReimport();
+                byte[] originalBytes = File.ReadAllBytes(GetAbsolutePath(existingPath));
+                string originalGuid = AssetDatabase.AssetPathToGUID(existingPath);
+
+                MCPAssetCommands.ImportDeferred(new Dictionary<string, object>
+                {
+                    { "defaults", new Dictionary<string, object>
+                        {
+                            { "overwrite", true }, { "textureType", "Sprite" }, { "filterMode", "Point" },
+                        }
+                    },
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", replacementSource }, { "destinationPath", existingPath },
+                            },
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", failingSource }, { "destinationPath", failingPath },
+                            },
+                        }
+                    },
+                    { "execution", new Dictionary<string, object>
+                        {
+                            { "mode", "batched" }, { "operationsPerFrame", 1 }, { "frameBudgetMs", 1 },
+                        }
+                    },
+                }, result => completed = result, _ => { });
+
+                Assert.That(((TextureImporter)AssetImporter.GetAtPath(existingPath)).filterMode,
+                    Is.EqualTo(FilterMode.Point));
+                File.Delete(failingSource);
+                double timeoutAt = EditorApplication.timeSinceStartup + 10d;
+                while (completed == null && EditorApplication.timeSinceStartup < timeoutAt)
+                    yield return null;
+
+                Assert.That(completed, Is.Not.Null);
+                var result = RequireDictionary(completed);
+                Assert.That(result["success"], Is.EqualTo(false));
+                Assert.That(result["allTouchedRolledBack"], Is.EqualTo(true));
+                CollectionAssert.AreEqual(originalBytes, File.ReadAllBytes(GetAbsolutePath(existingPath)));
+                Assert.That(AssetDatabase.AssetPathToGUID(existingPath), Is.EqualTo(originalGuid));
+                Assert.That(((TextureImporter)AssetImporter.GetAtPath(existingPath)).filterMode,
+                    Is.EqualTo(FilterMode.Bilinear));
+                Assert.That(File.Exists(GetAbsolutePath(failingPath)), Is.False);
+            }
+            finally
+            {
+                if (File.Exists(originalSource)) File.Delete(originalSource);
+                if (File.Exists(replacementSource)) File.Delete(replacementSource);
+                if (File.Exists(failingSource)) File.Delete(failingSource);
             }
         }
 
@@ -1413,6 +1636,13 @@ namespace UnityMCP.Editor.Tests
 
             var textureInfoAnnotations = RequireDictionary(toolsByRoute["texture/info"]["annotations"]);
             Assert.That(textureInfoAnnotations["readOnlyHint"], Is.EqualTo(true));
+
+            var assetImportSchema = RequireDictionary(toolsByRoute["asset/import"]["inputSchema"]);
+            var assetImportProperties = RequireDictionary(assetImportSchema["properties"]);
+            Assert.That(assetImportProperties.Keys,
+                Is.EquivalentTo(new[] { "dryRun", "defaults", "execution", "imports" }));
+            Assert.That(assetImportProperties.ContainsKey("sourcePath"), Is.False);
+            Assert.That(assetImportProperties.ContainsKey("destinationPath"), Is.False);
         }
 
         [Test]
@@ -1624,6 +1854,23 @@ namespace UnityMCP.Editor.Tests
         {
             string projectRoot = Directory.GetParent(Application.dataPath).FullName;
             return Path.GetFullPath(Path.Combine(projectRoot, assetPath));
+        }
+
+        private static string CreateExternalPng(Color color)
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"unity-mcp-{Guid.NewGuid():N}.png");
+            var texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+            try
+            {
+                texture.SetPixels(new[] { color, color, color, color });
+                texture.Apply();
+                File.WriteAllBytes(path, texture.EncodeToPNG());
+                return path;
+            }
+            finally
+            {
+                Object.DestroyImmediate(texture);
+            }
         }
     }
 }

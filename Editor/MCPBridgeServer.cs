@@ -53,6 +53,7 @@ namespace UnityMCP.Editor
             { "packages/update-git", (args, resolve, _) => MCPPackageManagerCommands.UpdateGitPackageDeferred(args, resolve) },
             { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },
             { "prefab-asset/transaction-edit", MCPPrefabAssetCommands.TransactionEditDeferred },
+            { "asset/import", MCPAssetCommands.ImportDeferred },
             { "asset/move", MCPAssetCommands.MoveDeferred },
             { "component/set-reference", MCPComponentCommands.SetReferencesDeferred },
             { "localization/upsert-entry", (args, resolve, progress) =>

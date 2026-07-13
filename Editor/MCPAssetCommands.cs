@@ -67,28 +67,454 @@ namespace UnityMCP.Editor
 
         public static object Import(Dictionary<string, object> args)
         {
-            string source = args.ContainsKey("sourcePath") ? args["sourcePath"].ToString() : "";
-            string dest = args.ContainsKey("destinationPath") ? args["destinationPath"].ToString() : "";
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+                return new { success = false, error = executionError };
+            if (!TryPrepareImports(args, out var entries, out object preparationError))
+                return preparationError;
+            if (GetBool(args, "dryRun", false))
+                return BuildImportResult(entries, execution, true, new List<string>());
+            return ExecutePreparedImports(entries, execution);
+        }
 
-            if (string.IsNullOrEmpty(source) || string.IsNullOrEmpty(dest))
-                return new { error = "sourcePath and destinationPath are required" };
+        public static void ImportDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
+        {
+            if (!MCPExecutionOptions.TryParse(args, out var execution, out string executionError))
+            {
+                resolve(new { success = false, error = executionError });
+                return;
+            }
+            if (!TryPrepareImports(args, out var entries, out object preparationError))
+            {
+                resolve(preparationError);
+                return;
+            }
+            if (GetBool(args, "dryRun", false))
+            {
+                resolve(BuildImportResult(entries, execution, true, new List<string>()));
+                return;
+            }
+            if (execution.ResolveMode(entries.Count) == MCPExecutionMode.Immediate)
+            {
+                resolve(ExecutePreparedImports(entries, execution));
+                return;
+            }
 
-            string fullDest = Path.Combine(Application.dataPath.Replace("/Assets", ""), dest);
-            string destDir = Path.GetDirectoryName(fullDest);
-            if (!Directory.Exists(destDir))
-                Directory.CreateDirectory(destDir);
+            int nextIndex = 0;
+            double startedAt = EditorApplication.timeSinceStartup;
+            string backupRoot = CreateImportBackupRoot();
+            var errors = new List<string>();
+            EditorApplication.CallbackFunction tick = null;
+            Action<object> complete = result =>
+            {
+                if (tick != null)
+                    EditorApplication.update -= tick;
+                FinishAssetImports(backupRoot);
+                resolve(result);
+            };
+            tick = () =>
+            {
+                int elapsedMs = (int)((EditorApplication.timeSinceStartup - startedAt) * 1000d);
+                if (elapsedMs >= execution.TimeoutMs)
+                {
+                    string timeoutError = $"Asset imports timed out after {execution.TimeoutMs} ms";
+                    errors.Add(timeoutError);
+                    errors.AddRange(RollbackImports(entries));
+                    complete(BuildImportFailure(entries, execution, timeoutError, errors));
+                    return;
+                }
 
-            File.Copy(source, fullDest, true);
-            AssetDatabase.ImportAsset(dest);
+                double frameStartedAt = EditorApplication.timeSinceStartup;
+                int processedThisFrame = 0;
+                while (nextIndex < entries.Count)
+                {
+                    var entry = entries[nextIndex++];
+                    try
+                    {
+                        ExecuteImport(entry, backupRoot);
+                    }
+                    catch (Exception exception)
+                    {
+                        entry.Error = exception.Message;
+                        errors.Add($"Import {entry.Index} failed: {exception.Message}");
+                        if (execution.ContinueOnError)
+                            errors.AddRange(RollbackImports(new[] { entry }));
+                    }
 
-            var importerSettings = ConfigureTextureImporter(dest, args);
+                    processedThisFrame++;
+                    progress?.Invoke(BuildImportProgress(entries, execution, nextIndex, elapsedMs));
+                    if (!string.IsNullOrEmpty(entry.Error) && !execution.ContinueOnError)
+                        break;
+                    double frameElapsedMs = (EditorApplication.timeSinceStartup - frameStartedAt) * 1000d;
+                    if (processedThisFrame >= execution.OperationsPerFrame ||
+                        frameElapsedMs >= execution.FrameBudgetMs)
+                        break;
+                }
 
+                if (errors.Count > 0 && !execution.ContinueOnError)
+                {
+                    errors.AddRange(RollbackImports(entries));
+                    complete(BuildImportFailure(entries, execution, errors[0], errors));
+                    return;
+                }
+                if (nextIndex < entries.Count)
+                    return;
+
+                complete(errors.Count == 0
+                    ? BuildImportResult(entries, execution, false, errors)
+                    : BuildImportFailure(entries, execution, "One or more asset imports failed", errors));
+            };
+            EditorApplication.update += tick;
+            tick();
+        }
+
+        private static bool TryPrepareImports(Dictionary<string, object> args, out List<BatchImportEntry> entries,
+            out object errorResult)
+        {
+            entries = new List<BatchImportEntry>();
+            errorResult = null;
+            if (!TryGetDictionaryList(args, "imports", out var requests, out string requestsError))
+            {
+                errorResult = new { success = false, error = requestsError };
+                return false;
+            }
+            if (requests.Count == 0)
+            {
+                errorResult = new { success = false, error = "imports must contain at least one import request" };
+                return false;
+            }
+            if (requests.Count > 500)
+            {
+                errorResult = new { success = false, error = "imports cannot contain more than 500 requests" };
+                return false;
+            }
+
+            if (!TryGetDictionary(args, "defaults", out var defaults, out string defaultsError))
+            {
+                errorResult = new { success = false, error = defaultsError };
+                return false;
+            }
+
+            string assetsRoot = Path.GetFullPath(Application.dataPath)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            for (int index = 0; index < requests.Count; index++)
+            {
+                var request = requests[index];
+                string sourcePath = GetString(request, "sourcePath");
+                string destinationPath = NormalizeAssetPath(GetString(request, "destinationPath"));
+                if (string.IsNullOrWhiteSpace(sourcePath))
+                    return FailImportPreparation(index, "sourcePath is required", out errorResult);
+                if (!Path.IsPathRooted(sourcePath))
+                    return FailImportPreparation(index, "sourcePath must be an absolute path", out errorResult);
+                sourcePath = Path.GetFullPath(sourcePath);
+                if (!File.Exists(sourcePath))
+                    return FailImportPreparation(index, $"Source file not found at '{sourcePath}'", out errorResult);
+                if (string.IsNullOrEmpty(destinationPath))
+                    return FailImportPreparation(index, "destinationPath is required", out errorResult);
+                if (!destinationPath.StartsWith("Assets/", StringComparison.OrdinalIgnoreCase))
+                    return FailImportPreparation(index, "destinationPath must be under Assets/", out errorResult);
+                if (string.IsNullOrEmpty(Path.GetExtension(destinationPath)))
+                    return FailImportPreparation(index, "destinationPath must include a file extension", out errorResult);
+                if (!string.Equals(Path.GetExtension(sourcePath), Path.GetExtension(destinationPath),
+                        StringComparison.OrdinalIgnoreCase))
+                    return FailImportPreparation(index, "sourcePath and destinationPath must use the same file extension",
+                        out errorResult);
+
+                string absoluteDestinationPath = GetAbsolutePath(destinationPath);
+                string destinationRoot = Path.GetDirectoryName(absoluteDestinationPath) ?? "";
+                if (!destinationRoot.StartsWith(assetsRoot + Path.DirectorySeparatorChar,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    !string.Equals(destinationRoot, assetsRoot, StringComparison.OrdinalIgnoreCase))
+                    return FailImportPreparation(index, "destinationPath resolves outside Assets/", out errorResult);
+                if (string.Equals(sourcePath, absoluteDestinationPath, StringComparison.OrdinalIgnoreCase))
+                    return FailImportPreparation(index, "sourcePath and destinationPath resolve to the same file",
+                        out errorResult);
+
+                var settings = new Dictionary<string, object>(defaults);
+                foreach (var pair in request)
+                    settings[pair.Key] = pair.Value;
+                if (!ValidateImportSettings(settings, out string settingsError))
+                    return FailImportPreparation(index, settingsError, out errorResult);
+
+                bool overwrite = GetBool(settings, "overwrite", false);
+                bool existedBefore = File.Exists(absoluteDestinationPath);
+                if (existedBefore && !overwrite)
+                    return FailImportPreparation(index,
+                        $"Target asset already exists at '{destinationPath}'; pass overwrite=true to replace it",
+                        out errorResult);
+
+                entries.Add(new BatchImportEntry
+                {
+                    Index = index,
+                    SourcePath = sourcePath,
+                    DestinationPath = destinationPath,
+                    AbsoluteDestinationPath = absoluteDestinationPath,
+                    Settings = settings,
+                    Overwrite = overwrite,
+                    ExistedBefore = existedBefore,
+                });
+            }
+
+            for (int index = 0; index < entries.Count; index++)
+            {
+                for (int otherIndex = index + 1; otherIndex < entries.Count; otherIndex++)
+                {
+                    if (string.Equals(entries[index].DestinationPath, entries[otherIndex].DestinationPath,
+                            StringComparison.OrdinalIgnoreCase))
+                        return FailImportPreparation(otherIndex,
+                            $"Duplicate destinationPath '{entries[otherIndex].DestinationPath}'", out errorResult);
+                }
+            }
+
+            return true;
+        }
+
+        private static bool FailImportPreparation(int index, string error, out object errorResult)
+        {
+            errorResult = new { success = false, error = $"Import {index} is invalid: {error}" };
+            return false;
+        }
+
+        private static bool ValidateImportSettings(Dictionary<string, object> settings, out string error)
+        {
+            error = "";
+            try
+            {
+                ValidateEnum<TextureImporterType>(settings, "textureType");
+                ValidateEnum<SpriteImportMode>(settings, "spriteMode");
+                ValidateEnum<FilterMode>(settings, "filterMode");
+                ValidateEnum<SpriteMeshType>(settings, "meshType");
+                foreach (string key in new[] { "overwrite", "isReadable", "alphaIsTransparency", "mipmapEnabled" })
+                {
+                    if (settings.TryGetValue(key, out object value) && value != null)
+                        Convert.ToBoolean(value);
+                }
+                if (settings.TryGetValue("pixelsPerUnit", out object pixelsPerUnit) && pixelsPerUnit != null)
+                {
+                    float parsed = Convert.ToSingle(pixelsPerUnit,
+                        System.Globalization.CultureInfo.InvariantCulture);
+                    if (float.IsNaN(parsed) || float.IsInfinity(parsed))
+                        throw new ArgumentException("pixelsPerUnit must be a finite number");
+                }
+
+                string compression = GetString(settings, "compression");
+                if (!string.IsNullOrWhiteSpace(compression) &&
+                    !new[] { "none", "uncompressed", "low", "lq", "normal", "compressed", "high", "hq" }
+                        .Contains(compression.ToLowerInvariant()))
+                    throw new ArgumentException($"Unknown compression '{compression}'");
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = exception.Message;
+                return false;
+            }
+        }
+
+        private static void ValidateEnum<TEnum>(Dictionary<string, object> settings, string key)
+            where TEnum : struct
+        {
+            string value = GetString(settings, key);
+            if (!string.IsNullOrWhiteSpace(value) && !Enum.TryParse(value, true, out TEnum _))
+                throw new ArgumentException($"Unknown {key} '{value}'");
+        }
+
+        private static object ExecutePreparedImports(List<BatchImportEntry> entries, MCPExecutionOptions execution)
+        {
+            string backupRoot = CreateImportBackupRoot();
+            var errors = new List<string>();
+            try
+            {
+                foreach (var entry in entries)
+                {
+                    try
+                    {
+                        ExecuteImport(entry, backupRoot);
+                    }
+                    catch (Exception exception)
+                    {
+                        entry.Error = exception.Message;
+                        errors.Add($"Import {entry.Index} failed: {exception.Message}");
+                        if (execution.ContinueOnError)
+                            errors.AddRange(RollbackImports(new[] { entry }));
+                        else
+                            break;
+                    }
+                }
+
+                if (errors.Count > 0 && !execution.ContinueOnError)
+                    errors.AddRange(RollbackImports(entries));
+                return errors.Count == 0
+                    ? BuildImportResult(entries, execution, false, errors)
+                    : BuildImportFailure(entries, execution,
+                        execution.ContinueOnError ? "One or more asset imports failed" : errors[0], errors);
+            }
+            finally
+            {
+                FinishAssetImports(backupRoot);
+            }
+        }
+
+        private static void ExecuteImport(BatchImportEntry entry, string backupRoot)
+        {
+            if (!File.Exists(entry.SourcePath))
+                throw new FileNotFoundException("Source file disappeared after preflight", entry.SourcePath);
+            bool existsNow = File.Exists(entry.AbsoluteDestinationPath);
+            if (existsNow != entry.ExistedBefore)
+                throw new IOException("Destination changed after preflight");
+
+            string destinationDirectory = Path.GetDirectoryName(entry.AbsoluteDestinationPath);
+            if (!string.IsNullOrEmpty(destinationDirectory))
+                Directory.CreateDirectory(destinationDirectory);
+            if (entry.ExistedBefore)
+            {
+                string entryBackupDirectory = Path.Combine(backupRoot, entry.Index.ToString());
+                Directory.CreateDirectory(entryBackupDirectory);
+                entry.BackupAssetPath = Path.Combine(entryBackupDirectory, "asset");
+                File.Copy(entry.AbsoluteDestinationPath, entry.BackupAssetPath, true);
+                string metaPath = entry.AbsoluteDestinationPath + ".meta";
+                entry.MetaExistedBefore = File.Exists(metaPath);
+                if (entry.MetaExistedBefore)
+                {
+                    entry.BackupMetaPath = Path.Combine(entryBackupDirectory, "asset.meta");
+                    File.Copy(metaPath, entry.BackupMetaPath, true);
+                }
+                entry.OriginalGuid = AssetDatabase.AssetPathToGUID(entry.DestinationPath);
+            }
+
+            entry.Touched = true;
+            File.Copy(entry.SourcePath, entry.AbsoluteDestinationPath, true);
+            AssetDatabase.ImportAsset(entry.DestinationPath, ImportAssetOptions.ForceUpdate);
+            entry.ImporterSettings = ConfigureTextureImporter(entry.DestinationPath, entry.Settings);
+            entry.SubAssets = DescribeSubAssets(entry.DestinationPath);
+            entry.Imported = true;
+        }
+
+        private static List<string> RollbackImports(IEnumerable<BatchImportEntry> entries)
+        {
+            var rollbackErrors = new List<string>();
+            foreach (var entry in entries.Reverse())
+            {
+                if (!entry.Touched || entry.RolledBack)
+                    continue;
+                try
+                {
+                    if (entry.ExistedBefore)
+                    {
+                        File.Copy(entry.BackupAssetPath, entry.AbsoluteDestinationPath, true);
+                        string metaPath = entry.AbsoluteDestinationPath + ".meta";
+                        if (entry.MetaExistedBefore)
+                            File.Copy(entry.BackupMetaPath, metaPath, true);
+                        else if (File.Exists(metaPath))
+                            File.Delete(metaPath);
+                        AssetDatabase.ImportAsset(entry.DestinationPath,
+                            ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+                    }
+                    else
+                    {
+                        AssetDatabase.DeleteAsset(entry.DestinationPath);
+                        if (File.Exists(entry.AbsoluteDestinationPath))
+                            File.Delete(entry.AbsoluteDestinationPath);
+                        string metaPath = entry.AbsoluteDestinationPath + ".meta";
+                        if (File.Exists(metaPath))
+                            File.Delete(metaPath);
+                    }
+                    entry.RolledBack = true;
+                }
+                catch (Exception exception)
+                {
+                    entry.RollbackError = exception.Message;
+                    rollbackErrors.Add($"Rollback {entry.Index} failed: {exception.Message}");
+                }
+            }
+            return rollbackErrors;
+        }
+
+        private static string CreateImportBackupRoot()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"unity-mcp-asset-import-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(path);
+            return path;
+        }
+
+        private static void FinishAssetImports(string backupRoot)
+        {
+            try
+            {
+                AssetDatabase.SaveAssets();
+            }
+            finally
+            {
+                try
+                {
+                    if (!string.IsNullOrEmpty(backupRoot) && Directory.Exists(backupRoot))
+                        Directory.Delete(backupRoot, true);
+                }
+                catch
+                {
+                    // A locked temporary backup is safe to leave for OS cleanup and must not hide the import result.
+                }
+            }
+        }
+
+        private static Dictionary<string, object> BuildImportResult(List<BatchImportEntry> entries,
+            MCPExecutionOptions execution, bool dryRun, List<string> errors)
+        {
             return new Dictionary<string, object>
             {
-                { "success", true },
-                { "importedPath", dest },
-                { "importer", importerSettings },
-                { "subAssets", DescribeSubAssets(dest) }
+                { "success", errors.Count == 0 },
+                { "dryRun", dryRun },
+                { "importCount", entries.Count },
+                { "importedCount", entries.Count(entry => entry.Imported && !entry.RolledBack) },
+                { "failedCount", entries.Count(entry => !string.IsNullOrEmpty(entry.Error)) },
+                { "rolledBackCount", entries.Count(entry => entry.RolledBack) },
+                { "imports", entries.ConvertAll(CreateBatchImportResult) },
+                { "execution", execution.ToResult(entries.Count) },
+            };
+        }
+
+        private static Dictionary<string, object> BuildImportFailure(List<BatchImportEntry> entries,
+            MCPExecutionOptions execution, string error, List<string> errors)
+        {
+            var result = BuildImportResult(entries, execution, false, errors);
+            result["success"] = false;
+            result["error"] = error;
+            result["errors"] = errors;
+            result["allTouchedRolledBack"] = entries.TrueForAll(entry => !entry.Touched || entry.RolledBack);
+            return result;
+        }
+
+        private static Dictionary<string, object> BuildImportProgress(List<BatchImportEntry> entries,
+            MCPExecutionOptions execution, int nextIndex, int elapsedMs)
+        {
+            return new Dictionary<string, object>
+            {
+                { "phase", "importing" },
+                { "importCount", entries.Count },
+                { "processedCount", nextIndex },
+                { "elapsedMs", elapsedMs },
+                { "execution", execution.ToResult(entries.Count) },
+            };
+        }
+
+        private static Dictionary<string, object> CreateBatchImportResult(BatchImportEntry entry)
+        {
+            return new Dictionary<string, object>
+            {
+                { "index", entry.Index },
+                { "sourcePath", entry.SourcePath },
+                { "destinationPath", entry.DestinationPath },
+                { "overwrite", entry.Overwrite },
+                { "existedBefore", entry.ExistedBefore },
+                { "existsNow", File.Exists(entry.AbsoluteDestinationPath) },
+                { "originalGuid", entry.OriginalGuid ?? "" },
+                { "currentGuid", AssetDatabase.AssetPathToGUID(entry.DestinationPath) },
+                { "imported", entry.Imported },
+                { "rolledBack", entry.RolledBack },
+                { "error", entry.Error ?? "" },
+                { "rollbackError", entry.RollbackError ?? "" },
+                { "importer", entry.ImporterSettings },
+                { "subAssets", entry.SubAssets ?? new List<Dictionary<string, object>>() },
             };
         }
 
@@ -1019,6 +1445,72 @@ namespace UnityMCP.Editor
             return result;
         }
 
+        private static bool TryGetDictionaryList(Dictionary<string, object> args, string key,
+            out List<Dictionary<string, object>> result, out string error)
+        {
+            result = new List<Dictionary<string, object>>();
+            error = "";
+            if (args == null || !args.TryGetValue(key, out object value) || value == null)
+                return true;
+            if (value is string || value is IDictionary || !(value is IEnumerable enumerable))
+            {
+                error = $"{key} must be an array";
+                return false;
+            }
+
+            int index = 0;
+            foreach (object item in enumerable)
+            {
+                if (item is Dictionary<string, object> dictionary)
+                {
+                    result.Add(dictionary);
+                }
+                else if (item is IDictionary dictionaryValue)
+                {
+                    var converted = new Dictionary<string, object>();
+                    foreach (DictionaryEntry pair in dictionaryValue)
+                    {
+                        if (pair.Key != null)
+                            converted[pair.Key.ToString()] = pair.Value;
+                    }
+                    result.Add(converted);
+                }
+                else
+                {
+                    error = $"{key}[{index}] must be an object";
+                    return false;
+                }
+                index++;
+            }
+            return true;
+        }
+
+        private static bool TryGetDictionary(Dictionary<string, object> args, string key,
+            out Dictionary<string, object> result, out string error)
+        {
+            result = new Dictionary<string, object>();
+            error = "";
+            if (args == null || !args.TryGetValue(key, out object value) || value == null)
+                return true;
+            if (value is Dictionary<string, object> dictionary)
+            {
+                result = dictionary;
+                return true;
+            }
+            if (!(value is IDictionary dictionaryValue))
+            {
+                error = $"{key} must be an object";
+                return false;
+            }
+
+            foreach (DictionaryEntry pair in dictionaryValue)
+            {
+                if (pair.Key != null)
+                    result[pair.Key.ToString()] = pair.Value;
+            }
+            return true;
+        }
+
         private static bool AssetExists(string path)
         {
             return AssetDatabase.IsValidFolder(path) || AssetDatabase.LoadMainAssetAtPath(path) != null;
@@ -1117,6 +1609,28 @@ namespace UnityMCP.Editor
             public bool Moved;
             public bool RolledBack;
             public string Error;
+        }
+
+        private sealed class BatchImportEntry
+        {
+            public int Index;
+            public string SourcePath;
+            public string DestinationPath;
+            public string AbsoluteDestinationPath;
+            public Dictionary<string, object> Settings;
+            public bool Overwrite;
+            public bool ExistedBefore;
+            public bool MetaExistedBefore;
+            public bool Touched;
+            public bool Imported;
+            public bool RolledBack;
+            public string OriginalGuid;
+            public string BackupAssetPath;
+            public string BackupMetaPath;
+            public string Error;
+            public string RollbackError;
+            public object ImporterSettings;
+            public List<Dictionary<string, object>> SubAssets;
         }
     }
 }

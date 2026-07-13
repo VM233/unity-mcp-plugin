@@ -838,7 +838,7 @@ namespace UnityMCP.Editor
                 case "asset/get-refresh-job":
                     return "Poll the current or latest reload-safe AssetDatabase refresh job.";
                 case "asset/import":
-                    return "Copy an external asset into the project and configure TextureImporter and Sprite settings in the same operation.";
+                    return "Preflight and import one or more external assets with shared TextureImporter defaults, configurable execution, per-item results, and rollback.";
                 case "asset/rename":
                     return "Safely rename a Unity asset using AssetDatabase while preserving its .meta GUID.";
                 case "asset/move":
@@ -1403,19 +1403,7 @@ namespace UnityMCP.Editor
                         Prop("dryRun", "boolean", "Validate and return expected paths without renaming.")
                     ));
                 case "asset/import":
-                    return Schema(Props(
-                        Prop("sourcePath", "string", "Absolute external source file path."),
-                        Prop("destinationPath", "string", "Destination Unity asset path under Assets/."),
-                        Prop("textureType", "string", "TextureImporterType such as Sprite or Default."),
-                        Prop("spriteMode", "string", "Sprite import mode: Single, Multiple, Polygon, or None."),
-                        Prop("pixelsPerUnit", "number", "Sprite pixels per unit."),
-                        Prop("filterMode", "string", "Texture filter mode: Point, Bilinear, or Trilinear."),
-                        Prop("isReadable", "boolean", "Enable CPU texture reads."),
-                        Prop("compression", "string", "Compression: uncompressed, low, normal, or high."),
-                        Prop("alphaIsTransparency", "boolean", "Treat alpha as transparency."),
-                        Prop("meshType", "string", "Sprite mesh type: FullRect or Tight."),
-                        Prop("mipmapEnabled", "boolean", "Generate mipmaps.")
-                    ), "sourcePath", "destinationPath");
+                    return AssetImportSchema();
                 case "asset/refresh":
                     return Schema(Props(
                         Prop("assetPaths", "array", "Optional Unity asset paths to reconcile or import."),
@@ -2080,6 +2068,43 @@ namespace UnityMCP.Editor
             };
 
             return Schema(properties, "moves");
+        }
+
+        private static Dictionary<string, object> AssetImportSchema()
+        {
+            var settingProperties = Props(
+                Prop("overwrite", "boolean", "Replace an existing destination asset while preserving and restoring it if the batch rolls back. Defaults to false."),
+                Prop("textureType", "string", "TextureImporterType such as Sprite or Default."),
+                Prop("spriteMode", "string", "Sprite import mode: Single, Multiple, Polygon, or None."),
+                Prop("pixelsPerUnit", "number", "Sprite pixels per unit."),
+                Prop("filterMode", "string", "Texture filter mode: Point, Bilinear, or Trilinear."),
+                Prop("isReadable", "boolean", "Enable CPU texture reads."),
+                Prop("compression", "string", "Compression: uncompressed, low, normal, or high."),
+                Prop("alphaIsTransparency", "boolean", "Treat alpha as transparency."),
+                Prop("meshType", "string", "Sprite mesh type: FullRect or Tight."),
+                Prop("mipmapEnabled", "boolean", "Generate mipmaps."));
+            var importProperties = new Dictionary<string, object>(settingProperties)
+            {
+                ["sourcePath"] = Prop("sourcePath", "string", "Absolute external source file path.").Value,
+                ["destinationPath"] = Prop("destinationPath", "string", "Destination Unity asset path under Assets/.").Value,
+            };
+            var properties = Props(
+                Prop("dryRun", "boolean", "Validate every source, destination, collision, and importer setting without importing."));
+            properties["defaults"] = new Dictionary<string, object>
+            {
+                { "type", "object" },
+                { "description", "Shared overwrite and TextureImporter settings inherited by every import item. Item fields override these defaults." },
+                { "properties", settingProperties },
+            };
+            properties["execution"] = ExecutionSchema();
+            properties["imports"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "Up to 500 import requests. Every item requires sourcePath and destinationPath. The full batch is preflighted before files are changed." },
+                { "items", Schema(importProperties, "sourcePath", "destinationPath") },
+                { "maxItems", 500 },
+            };
+            return Schema(properties, "imports");
         }
 
         private static Dictionary<string, object> LocalizationUpsertEntriesSchema()

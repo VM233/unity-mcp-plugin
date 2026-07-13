@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.16] - 2026-07-13
+
+- Upgraded `asset/import` to preflight and import up to 500 assets with shared TextureImporter defaults, immediate or frame-batched execution, per-item results, overwrite protection, and rollback.
+- Removed the single-file `sourcePath`/`destinationPath` request shape in favor of the canonical `imports` collection and shared `execution` model.
+
 ## [3.1.15] - 2026-07-13
 
 - Keep AssetDatabase refresh jobs non-terminal until compilation, asset updating, and a stable idle window have completed, so `succeeded` no longer races a delayed domain reload.
