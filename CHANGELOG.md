@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.15] - 2026-07-13
+
+- Keep AssetDatabase refresh jobs non-terminal until compilation, asset updating, and a stable idle window have completed, so `succeeded` no longer races a delayed domain reload.
+
 ## [3.1.14] - 2026-07-13
 
 - Exposed `build/run-test` as a first-class persistent Player Build job with `build/get-job` polling, so normal builds no longer fall through the queue's 30-second synchronous timeout.

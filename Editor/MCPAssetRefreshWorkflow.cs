@@ -10,6 +10,7 @@ namespace UnityMCP.Editor
     [InitializeOnLoad]
     internal static class MCPAssetRefreshWorkflow
     {
+        private static readonly TimeSpan StableIdleDuration = TimeSpan.FromMilliseconds(500);
         private static AssetRefreshJob _job;
         private static bool _updateRegistered;
 
@@ -85,14 +86,38 @@ namespace UnityMCP.Editor
                 UnregisterUpdate();
                 return;
             }
-            if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+            if (_job.Status != "waiting-for-editor" &&
+                (EditorApplication.isCompiling || EditorApplication.isUpdating))
                 return;
 
             if (_job.Status == "waiting-for-editor")
             {
+                if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+                {
+                    if (_job.IdleSince != default)
+                    {
+                        _job.IdleSince = default;
+                        TouchAndSave();
+                    }
+                    return;
+                }
+
+                if (_job.IdleSince == default)
+                {
+                    _job.IdleSince = DateTime.UtcNow;
+                    TouchAndSave();
+                    return;
+                }
+
+                if (DateTime.UtcNow - _job.IdleSince < StableIdleDuration)
+                    return;
+
                 if (GetBool(_job.Arguments, "saveAssets", false))
                     AssetDatabase.SaveAssets();
-                _job.Result = BuildRecoveredResult(_job.Arguments);
+                _job.Result ??= BuildRecoveredResult(_job.Arguments);
+                _job.Result["isUpdating"] = false;
+                _job.Result["isCompiling"] = false;
+                _job.Result["settledAfterRefresh"] = true;
                 _job.Status = "succeeded";
                 TouchAndSave();
                 UnregisterUpdate();
@@ -110,7 +135,7 @@ namespace UnityMCP.Editor
                     MCPAssetCommands.ExecuteRefreshImmediate(_job.Arguments));
                 bool success = _job.Result != null && _job.Result.TryGetValue("success", out object value) &&
                                value is bool succeeded && succeeded;
-                _job.Status = success ? "succeeded" : "failed";
+                _job.Status = success ? "waiting-for-editor" : "failed";
                 if (!success && _job.Result != null && _job.Result.TryGetValue("error", out object error))
                     _job.Error = error?.ToString();
             }
@@ -122,7 +147,8 @@ namespace UnityMCP.Editor
             finally
             {
                 TouchAndSave();
-                UnregisterUpdate();
+                if (_job.Status != "waiting-for-editor")
+                    UnregisterUpdate();
             }
         }
 
@@ -261,6 +287,7 @@ namespace UnityMCP.Editor
             public Dictionary<string, object> Result;
             public string Error;
             public bool RecoveredAfterReload;
+            public DateTime IdleSince;
             public DateTime StartedAt;
             public DateTime UpdatedAt;
 
@@ -276,6 +303,7 @@ namespace UnityMCP.Editor
                     { "result", Result },
                     { "error", Error ?? "" },
                     { "recoveredAfterReload", RecoveredAfterReload },
+                    { "idleSince", IdleSince == default ? "" : IdleSince.ToString("O") },
                     { "startedAt", StartedAt.ToString("O") },
                     { "updatedAt", UpdatedAt.ToString("O") },
                 };
@@ -297,17 +325,19 @@ namespace UnityMCP.Editor
                         : null,
                     Error = GetString(values, "error"),
                     RecoveredAfterReload = GetBool(values, "recoveredAfterReload", false),
+                    IdleSince = ParseDate(values, "idleSince", useUtcNowFallback: false),
                     StartedAt = ParseDate(values, "startedAt"),
                     UpdatedAt = ParseDate(values, "updatedAt"),
                 };
             }
 
-            private static DateTime ParseDate(Dictionary<string, object> values, string key)
+            private static DateTime ParseDate(Dictionary<string, object> values, string key,
+                bool useUtcNowFallback = true)
             {
                 return DateTime.TryParse(GetString(values, key), null,
                     System.Globalization.DateTimeStyles.RoundtripKind, out DateTime parsed)
                     ? parsed
-                    : DateTime.UtcNow;
+                    : useUtcNowFallback ? DateTime.UtcNow : default;
             }
         }
     }
