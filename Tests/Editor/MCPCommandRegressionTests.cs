@@ -602,7 +602,7 @@ namespace UnityMCP.Editor.Tests
             File.Delete(GetAbsolutePath(deletedPath));
             File.Delete(GetAbsolutePath(deletedPath) + ".meta");
 
-            var response = RequireDictionary(MCPAssetCommands.Refresh(new Dictionary<string, object>
+            var response = RequireDictionary(MCPAssetCommands.ExecuteRefreshImmediate(new Dictionary<string, object>
             {
                 { "assetPaths", new[] { importedPath } },
                 { "forceUpdate", true },
@@ -615,6 +615,27 @@ namespace UnityMCP.Editor.Tests
             Assert.That(File.Exists(GetAbsolutePath(deletedPath) + ".meta"), Is.False);
             Assert.That(AssetDatabase.LoadMainAssetAtPath(deletedPath), Is.Null);
             Assert.That(AssetDatabase.GetMainAssetTypeAtPath(deletedPath), Is.Null);
+        }
+
+        [Test]
+        public void ToolMetadata_ExposesPersistentPlayerBuildAndAssetRefreshJobs()
+        {
+            var toolsResult = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: false, includeSchema: true, limit: 500));
+            var tools = (List<Dictionary<string, object>>)toolsResult["tools"];
+
+            foreach (string route in new[]
+                     {
+                         "build/run-test",
+                         "build/get-job",
+                         "asset/refresh",
+                         "asset/get-refresh-job",
+                     })
+            {
+                var tool = tools.Single(item => item["route"].ToString() == route);
+                Assert.That(tool["firstClass"], Is.EqualTo(true), route);
+                Assert.That(tool["inputSchema"], Is.InstanceOf<Dictionary<string, object>>(), route);
+            }
         }
 
         [Test]

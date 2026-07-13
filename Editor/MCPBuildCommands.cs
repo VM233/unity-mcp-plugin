@@ -11,8 +11,30 @@ using UnityEngine;
 
 namespace UnityMCP.Editor
 {
+    [InitializeOnLoad]
     public static class MCPBuildCommands
     {
+        private static PlayerBuildJob _job;
+        private static bool _updateRegistered;
+
+        static MCPBuildCommands()
+        {
+            _job = LoadBuildJob();
+            if (_job == null || _job.IsTerminal)
+                return;
+
+            if (_job.Status == "running")
+            {
+                _job.Status = "failed";
+                _job.Error = "Player build was interrupted by an Editor domain reload or shutdown.";
+                _job.UpdatedAt = DateTime.UtcNow;
+                SaveBuildJob();
+                return;
+            }
+
+            EnsureBuildUpdateRegistered();
+        }
+
         public static object StartBuild(Dictionary<string, object> args)
         {
             string targetStr = args.ContainsKey("target") ? args["target"].ToString() : "StandaloneWindows64";
@@ -62,12 +84,56 @@ namespace UnityMCP.Editor
             }
         }
 
-        public static void BuildAndRunTestDeferred(Dictionary<string, object> args, Action<object> resolve)
+        public static object BuildAndRunTest(Dictionary<string, object> args)
         {
-            resolve(BuildAndRunTest(args));
+            bool clearStuck = GetBool(args, "clearStuck", false);
+            if (_job != null && !_job.IsTerminal && !clearStuck)
+            {
+                var active = BuildJobResponse(_job);
+                active["success"] = false;
+                active["error"] = "A Player build job is already running.";
+                return active;
+            }
+
+            _job = new PlayerBuildJob
+            {
+                JobId = Guid.NewGuid().ToString("N").Substring(0, 12),
+                Status = "queued",
+                Arguments = args != null
+                    ? MiniJson.Deserialize(MiniJson.Serialize(args)) as Dictionary<string, object>
+                    : new Dictionary<string, object>(),
+                StartedAt = DateTime.UtcNow,
+                UpdatedAt = DateTime.UtcNow,
+            };
+            _job.Arguments ??= new Dictionary<string, object>();
+            _job.Arguments.Remove("clearStuck");
+            SaveBuildJob();
+            EnsureBuildUpdateRegistered();
+            return BuildJobResponse(_job);
         }
 
-        public static object BuildAndRunTest(Dictionary<string, object> args)
+        public static object GetBuildJob(Dictionary<string, object> args)
+        {
+            if (_job == null)
+                _job = LoadBuildJob();
+            if (_job == null)
+                return new { error = "No Player build job was found." };
+
+            string jobId = GetString(args, "jobId");
+            if (!string.IsNullOrEmpty(jobId) && jobId != _job.JobId)
+                return new { error = $"Player build job '{jobId}' was not found." };
+
+            var response = BuildJobResponse(_job);
+            if (_job.IsTerminal && GetBool(args, "clear", false))
+            {
+                DeleteBuildJobFile();
+                _job = null;
+                response["cleared"] = true;
+            }
+            return response;
+        }
+
+        private static object ExecuteBuildAndRunTest(Dictionary<string, object> args)
         {
             string outputPath = GetString(args, "outputPath");
             if (string.IsNullOrEmpty(outputPath))
@@ -77,7 +143,7 @@ namespace UnityMCP.Editor
             if (overwrite)
                 DeleteExistingBuildOutput(outputPath);
 
-            var buildResult = StartBuild(args) as Dictionary<string, object>;
+            var buildResult = MCPResponse.ToDictionary(StartBuild(args));
             if (buildResult == null)
                 return new { error = "Build did not return a structured result." };
 
@@ -86,12 +152,15 @@ namespace UnityMCP.Editor
             bool runExecutable = GetBool(args, "run", true);
             if (!buildSucceeded || !runExecutable)
             {
-                return new Dictionary<string, object>
+                var result = new Dictionary<string, object>
                 {
                     { "success", buildSucceeded },
                     { "build", buildResult },
                     { "run", null },
                 };
+                if (!buildSucceeded && buildResult.TryGetValue("error", out object error))
+                    result["error"] = error;
+                return result;
             }
 
             string executablePath = GetString(buildResult, "outputPath");
@@ -105,6 +174,114 @@ namespace UnityMCP.Editor
                 { "build", buildResult },
                 { "run", runResult },
             };
+        }
+
+        private static void ContinueBuildJob()
+        {
+            if (_job == null || _job.IsTerminal)
+            {
+                UnregisterBuildUpdate();
+                return;
+            }
+
+            if (_job.Status != "queued" || EditorApplication.isCompiling || EditorApplication.isUpdating)
+                return;
+
+            _job.Status = "running";
+            _job.UpdatedAt = DateTime.UtcNow;
+            SaveBuildJob();
+            try
+            {
+                _job.Result = MCPResponse.ToDictionary(ExecuteBuildAndRunTest(_job.Arguments));
+                bool success = _job.Result != null && _job.Result.TryGetValue("success", out object value) &&
+                               value is bool succeeded && succeeded;
+                _job.Status = success ? "succeeded" : "failed";
+                if (!success && _job.Result != null && _job.Result.TryGetValue("error", out object error))
+                    _job.Error = error?.ToString();
+            }
+            catch (Exception ex)
+            {
+                _job.Status = "failed";
+                _job.Error = ex.GetBaseException().Message;
+            }
+            finally
+            {
+                _job.UpdatedAt = DateTime.UtcNow;
+                SaveBuildJob();
+                UnregisterBuildUpdate();
+            }
+        }
+
+        private static Dictionary<string, object> BuildJobResponse(PlayerBuildJob job)
+        {
+            var response = new Dictionary<string, object>
+            {
+                { "success", job.IsTerminal ? job.Status == "succeeded" : true },
+                { "jobId", job.JobId },
+                { "status", job.Status },
+                { "pollRoute", "build/get-job" },
+                { "startedAt", job.StartedAt.ToString("O") },
+                { "updatedAt", job.UpdatedAt.ToString("O") },
+            };
+            if (!string.IsNullOrEmpty(job.Error))
+                response["error"] = job.Error;
+            if (job.Result != null)
+                response["result"] = job.Result;
+            return response;
+        }
+
+        private static void EnsureBuildUpdateRegistered()
+        {
+            if (_updateRegistered)
+                return;
+            EditorApplication.update += ContinueBuildJob;
+            _updateRegistered = true;
+        }
+
+        private static void UnregisterBuildUpdate()
+        {
+            if (!_updateRegistered)
+                return;
+            EditorApplication.update -= ContinueBuildJob;
+            _updateRegistered = false;
+        }
+
+        private static string GetBuildJobPath()
+        {
+            return Path.Combine(GetProjectRoot(), "Library", "UnityMCP", "player-build-job.json");
+        }
+
+        private static void SaveBuildJob()
+        {
+            if (_job == null)
+                return;
+            string path = GetBuildJobPath();
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllText(path, MiniJson.Serialize(_job.ToDictionary()));
+        }
+
+        private static PlayerBuildJob LoadBuildJob()
+        {
+            try
+            {
+                string path = GetBuildJobPath();
+                if (!File.Exists(path))
+                    return null;
+                return PlayerBuildJob.FromDictionary(
+                    MiniJson.Deserialize(File.ReadAllText(path)) as Dictionary<string, object>);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[Unity MCP Build] Failed to restore Player build job: {ex.Message}");
+                return null;
+            }
+        }
+
+        private static void DeleteBuildJobFile()
+        {
+            string path = GetBuildJobPath();
+            if (File.Exists(path))
+                File.Delete(path);
         }
 
         private static Dictionary<string, object> RunBuildExecutable(string executablePath, Dictionary<string, object> args)
@@ -256,6 +433,61 @@ namespace UnityMCP.Editor
         private static string GetProjectRoot()
         {
             return Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
+        }
+
+        private sealed class PlayerBuildJob
+        {
+            public string JobId;
+            public string Status;
+            public Dictionary<string, object> Arguments;
+            public Dictionary<string, object> Result;
+            public string Error;
+            public DateTime StartedAt;
+            public DateTime UpdatedAt;
+
+            public bool IsTerminal => Status == "succeeded" || Status == "failed";
+
+            public Dictionary<string, object> ToDictionary()
+            {
+                return new Dictionary<string, object>
+                {
+                    { "jobId", JobId },
+                    { "status", Status },
+                    { "arguments", Arguments },
+                    { "result", Result },
+                    { "error", Error ?? "" },
+                    { "startedAt", StartedAt.ToString("O") },
+                    { "updatedAt", UpdatedAt.ToString("O") },
+                };
+            }
+
+            public static PlayerBuildJob FromDictionary(Dictionary<string, object> values)
+            {
+                if (values == null)
+                    return null;
+                return new PlayerBuildJob
+                {
+                    JobId = GetString(values, "jobId"),
+                    Status = GetString(values, "status"),
+                    Arguments = values.TryGetValue("arguments", out object arguments)
+                        ? arguments as Dictionary<string, object>
+                        : new Dictionary<string, object>(),
+                    Result = values.TryGetValue("result", out object result)
+                        ? result as Dictionary<string, object>
+                        : null,
+                    Error = GetString(values, "error"),
+                    StartedAt = ParseDate(values, "startedAt"),
+                    UpdatedAt = ParseDate(values, "updatedAt"),
+                };
+            }
+
+            private static DateTime ParseDate(Dictionary<string, object> values, string key)
+            {
+                return DateTime.TryParse(GetString(values, key), null,
+                    System.Globalization.DateTimeStyles.RoundtripKind, out DateTime parsed)
+                    ? parsed
+                    : DateTime.UtcNow;
+            }
         }
 
         private static Dictionary<string, object> CaptureProcessWindow(System.Diagnostics.Process process,

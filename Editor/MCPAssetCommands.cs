@@ -216,6 +216,16 @@ namespace UnityMCP.Editor
 
         public static object Refresh(Dictionary<string, object> args)
         {
+            return MCPAssetRefreshWorkflow.Start(args);
+        }
+
+        public static object GetRefreshJob(Dictionary<string, object> args)
+        {
+            return MCPAssetRefreshWorkflow.Get(args);
+        }
+
+        internal static object ExecuteRefreshImmediate(Dictionary<string, object> args)
+        {
             bool forceUpdate = GetBool(args, "forceUpdate", true);
             bool saveAssets = GetBool(args, "saveAssets", false);
             bool reconcileExternalChanges = GetBool(args, "reconcileExternalChanges", true);
@@ -231,18 +241,23 @@ namespace UnityMCP.Editor
                 // observed it can produce a timestamp mismatch warning. A single
                 // synchronous pass also removes externally deleted compiler inputs.
                 if (reconcileExternalChanges)
-                    AssetDatabase.Refresh(options | ImportAssetOptions.ForceSynchronousImport);
-
-                foreach (string rawPath in assetPaths)
                 {
-                    string path = NormalizeAssetPath(rawPath);
-                    if (string.IsNullOrEmpty(path))
-                        continue;
-
-                    AssetDatabase.ImportAsset(path, options);
-                    importedPaths.Add(path);
+                    AssetDatabase.Refresh(options | ImportAssetOptions.ForceSynchronousImport);
+                    importedPaths.AddRange(assetPaths.Select(NormalizeAssetPath)
+                        .Where(path => !string.IsNullOrEmpty(path)).Distinct());
                 }
+                else
+                {
+                    foreach (string rawPath in assetPaths)
+                    {
+                        string path = NormalizeAssetPath(rawPath);
+                        if (string.IsNullOrEmpty(path))
+                            continue;
 
+                        AssetDatabase.ImportAsset(path, options);
+                        importedPaths.Add(path);
+                    }
+                }
             }
             else
             {

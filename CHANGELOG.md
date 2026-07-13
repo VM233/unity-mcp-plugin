@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.14] - 2026-07-13
+
+- Exposed `build/run-test` as a first-class persistent Player Build job with `build/get-job` polling, so normal builds no longer fall through the queue's 30-second synchronous timeout.
+- Changed `asset/refresh` into a reload-safe persistent job with `asset/get-refresh-job` polling and removed the duplicate targeted-import pass after a full external-change reconciliation.
+- Documented that a successful Player Build report is authoritative and does not require a follow-up forced AssetDatabase refresh.
+
 ## [3.1.13] - 2026-07-13
 
 - Made package-test polling actively restore the workflow update pump after domain reloads so waiting, timeout, test execution, and manifest restoration cannot stall behind a lost editor callback.

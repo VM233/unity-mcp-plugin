@@ -62,7 +62,8 @@ http://127.0.0.1:7890/api/ping
 | Prefab asset search | `unity_prefab_asset_hierarchy` | `prefab-asset/hierarchy` | Read a prefab asset hierarchy directly from disk. |
 | Prefab asset search | `unity_prefab_asset_get_properties` | `prefab-asset/get-properties` | Read serialized component properties inside a prefab asset. |
 | Scene editing | `unity_scene_instantiate_prefab` | `scene/instantiate-prefab` | Instantiate a prefab asset into the currently open scene. |
-| Safe assets | `unity_asset_refresh` | `asset/refresh` | Refresh AssetDatabase, optionally forcing update or importing specific asset paths before prefab/package operations. |
+| Safe assets | `unity_asset_refresh` | `asset/refresh` | Start a reload-safe AssetDatabase refresh and return a refresh job ID. |
+| Safe assets | `unity_asset_get_refresh_job` | `asset/get-refresh-job` | Poll a reload-safe AssetDatabase refresh through compilation or domain reload. |
 | Safe assets | `unity_asset_import` | `asset/import` | Copy an external image or other asset into Assets and configure TextureImporter/Sprite settings in the same operation. |
 | Safe assets | `unity_asset_rename` | `asset/rename` | Rename an asset through `AssetDatabase.RenameAsset`, preserving `.meta`, GUID, and references. |
 | Safe assets | `unity_asset_move` | `asset/move` | Preflight and move one or more assets, preserving `.meta` GUIDs and rolling back completed moves when configured to stop on failure. |
@@ -104,7 +105,8 @@ http://127.0.0.1:7890/api/ping
 | Texture pipeline | `unity_texture_info` | `texture/info` | Inspect texture dimensions and TextureImporter settings, including sprite PPU, pivot, and border. |
 | Texture pipeline | `unity_texture_import_image` | `texture/import-image` | Import an image from a URL or local file into Assets, dedupe by hash, and apply sprite import settings. |
 | Texture pipeline | `unity_texture_check_ui_import_settings` | `texture/check-ui-import-settings` | Check UI pixel-art image import settings, including pixel sprite defaults plus optional expected dimensions, border, and max texture size. |
-| Build testing | `unity_build_run_test` | `build/run-test` | Overwrite/build a player, launch it, sample Player.log, optionally capture its window, and terminate it. |
+| Player Build | `unity_build_run_test` | `build/run-test` | Start a persistent Player Build job and optionally run the built player. |
+| Player Build | `unity_build_get_job` | `build/get-job` | Poll the Player Build job for its final BuildReport and optional run result. |
 | Package management | `unity_packages_update_git` | `packages/update-git` | Update a Git package through a deferred route; same-commit updates skip Unity Package Manager resolve by default. |
 | Project extensions | `unity_project_tools_list` | `project-tools/list` | List project-defined extension tools from loaded Unity editor assemblies. |
 | Project extensions | `unity_project_tools_execute` | `project-tools/execute` | Execute a project-defined extension tool by `toolName`. |
@@ -177,7 +179,8 @@ If an MCP client has stale tool metadata, use the concrete direct route `project
 - For UI visual QA, use `uitoolkit/locate-element` first to confirm the measured semantic target, then `uitoolkit/capture-element` or `uitoolkit/compare-element` for local crops. Use `uitoolkit/generated-children` when controls such as `TabView`, `DropdownField`, `Scroller`, or `ToggleButtonGroup` may be drawing default child indicators.
 - Prefab asset mutation tools return a summary-only `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it or request `prefabFileDiffMode=minimal/full` when line details are required. Use `unity_prefab_asset_transaction_edit` for multi-step edits; the legacy batch alias remains available through the advanced catalog.
 - `uitoolkit/builder-preview` opens and screenshots UI Builder. Unity does not expose a stable public UI Builder zoom API, so the route records requested zoom values but does not use reflection to force the viewport zoom.
-- `build/run-test` is a high-level test loop for local player builds. Keep `overwrite=true` for repeat tests so output folders do not accumulate.
+- `build/run-test` returns a job ID before `BuildPipeline.BuildPlayer` begins. Poll `build/get-job`; the terminal result contains the authoritative BuildReport, so do not force an AssetDatabase refresh after a successful build. Keep `overwrite=true` for repeat tests so output folders do not accumulate.
+- `asset/refresh` likewise returns a job ID. Poll `asset/get-refresh-job`; if scripts trigger a domain reload, the persisted workflow resumes after the Editor becomes idle instead of losing the active MCP response.
 - `unity_packages_update_git` defaults to `skipIfResolved=true`. When the requested ref is a commit hash already recorded in `packages-lock.json`, the tool returns `skipped=true` without asking Unity Package Manager to resolve again. Pass `force=true` to force a resolve.
 - This fork intentionally keeps the package smaller by removing local documentation images.
 - The package is still the Unity Editor side only. You need an MCP server/client setup to call the tools from an assistant.

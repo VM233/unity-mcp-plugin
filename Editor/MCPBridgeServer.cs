@@ -50,7 +50,6 @@ namespace UnityMCP.Editor
             { "uitoolkit/wait-refresh", (args, resolve, _) => MCPUICommands.WaitForUIToolkitRefresh(args, resolve) },
             { "uitoolkit/builder-preview", (args, resolve, _) => MCPUICommands.OpenUIBuilderPreview(args, resolve) },
             { "screenshot/game", (args, resolve, _) => MCPScreenshotCommands.CaptureGameView(args, resolve) },
-            { "build/run-test", (args, resolve, _) => MCPBuildCommands.BuildAndRunTestDeferred(args, resolve) },
             { "packages/update-git", (args, resolve, _) => MCPPackageManagerCommands.UpdateGitPackageDeferred(args, resolve) },
             { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },
             { "prefab-asset/transaction-edit", MCPPrefabAssetCommands.TransactionEditDeferred },
@@ -809,6 +808,8 @@ namespace UnityMCP.Editor
                     return MCPAssetCommands.Import(ParseJson(body));
                 case "asset/refresh":
                     return MCPAssetCommands.Refresh(ParseJson(body));
+                case "asset/get-refresh-job":
+                    return MCPAssetCommands.GetRefreshJob(ParseJson(body));
                 case "asset/export-unitypackage":
                     return MCPAssetCommands.ExportUnityPackage(ParseJson(body));
                 case "asset/delete":
@@ -841,6 +842,8 @@ namespace UnityMCP.Editor
                     return MCPBuildCommands.StartBuild(ParseJson(body));
                 case "build/run-test":
                     return MCPBuildCommands.BuildAndRunTest(ParseJson(body));
+                case "build/get-job":
+                    return MCPBuildCommands.GetBuildJob(ParseJson(body));
 
                 // ─── Console ───
                 case "console/log":

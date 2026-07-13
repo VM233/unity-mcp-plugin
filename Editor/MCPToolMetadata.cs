@@ -128,6 +128,8 @@ namespace UnityMCP.Editor
                 "packages/lint-metas",
                 "texture/info",
                 "animation/transition-info",
+                "asset/get-refresh-job",
+                "build/get-job",
                 "testing/get-job",
                 "testing/get-package-job",
                 "project-tools/list");
@@ -143,7 +145,8 @@ namespace UnityMCP.Editor
                 "screenshot/game");
 
             AddProfile(profiles, ToolProfile.FirstClass(longRunning: true),
-                "testing/run-tests");
+                "testing/run-tests",
+                "build/run-test");
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true),
                 "serialized-object/set",
@@ -831,7 +834,9 @@ namespace UnityMCP.Editor
                 case "serialized-object/set":
                     return "Set one serialized property on a scene object, component, or asset via SerializedObject. SerializeReference values use '$managedReferenceType' when their concrete type cannot be inferred.";
                 case "asset/refresh":
-                    return "Import selected assets in order, then synchronously reconcile all external AssetDatabase changes by default.";
+                    return "Start a reload-safe AssetDatabase refresh job. Poll asset/get-refresh-job until it reaches a terminal state.";
+                case "asset/get-refresh-job":
+                    return "Poll the current or latest reload-safe AssetDatabase refresh job.";
                 case "asset/import":
                     return "Copy an external asset into the project and configure TextureImporter and Sprite settings in the same operation.";
                 case "asset/rename":
@@ -957,7 +962,9 @@ namespace UnityMCP.Editor
                 case "texture/check-ui-import-settings":
                     return "Check UI pixel-art image import settings, including pixel sprite defaults plus optional expected dimensions, border, and max texture size.";
                 case "build/run-test":
-                    return "Build the player, launch the built executable, sample Player.log, optionally capture its window, and terminate it.";
+                    return "Start a persistent Player build job, optionally run the executable, and return immediately with a job ID. Poll build/get-job for the final BuildReport; no post-build asset refresh is required.";
+                case "build/get-job":
+                    return "Poll the current or latest persistent Player build job and return its final BuildReport and optional run result.";
                 case "animation/set-object-reference-curve":
                     return "Set AnimationClip ObjectReference keyframes, such as SpriteRenderer.m_Sprite.";
                 case "localization/status":
@@ -1411,10 +1418,16 @@ namespace UnityMCP.Editor
                     ), "sourcePath", "destinationPath");
                 case "asset/refresh":
                     return Schema(Props(
-                        Prop("assetPaths", "array", "Optional Unity asset paths to import first in the provided order."),
+                        Prop("assetPaths", "array", "Optional Unity asset paths to reconcile or import."),
                         Prop("forceUpdate", "boolean", "Use ImportAssetOptions.ForceUpdate. Defaults to true."),
                         Prop("saveAssets", "boolean", "Call AssetDatabase.SaveAssets after refresh/import. Defaults to false."),
-                        Prop("reconcileExternalChanges", "boolean", "Run a synchronous full AssetDatabase refresh after targeted imports so externally deleted or created files are reconciled before success is returned. Defaults to true.")
+                        Prop("reconcileExternalChanges", "boolean", "Run one full synchronous AssetDatabase refresh instead of repeating targeted imports. Defaults to true."),
+                        Prop("clearStuck", "boolean", "Replace a non-terminal refresh job left behind by an interrupted editor session. Defaults to false.")
+                    ));
+                case "asset/get-refresh-job":
+                    return Schema(Props(
+                        Prop("jobId", "string", "Optional refresh job ID. Defaults to the current or latest job."),
+                        Prop("clear", "boolean", "Clear the persisted job after a terminal result is read. Defaults to false.")
                     ));
                 case "asset/move":
                     return AssetMoveSchema();
@@ -1937,8 +1950,14 @@ namespace UnityMCP.Editor
                         Prop("captureWindow", "boolean", "Capture the built player's main window on Windows. Defaults to false."),
                         Prop("screenshotPath", "string", "PNG path for captureWindow output."),
                         Prop("windowWaitMs", "number", "Milliseconds to wait for the main window. Defaults to 5000."),
-                        Prop("logTailLines", "number", "Player.log tail lines to return. Defaults to 120.")
+                        Prop("logTailLines", "number", "Player.log tail lines to return. Defaults to 120."),
+                        Prop("clearStuck", "boolean", "Replace a non-terminal build job left behind by an interrupted editor session. Defaults to false.")
                     ), "outputPath");
+                case "build/get-job":
+                    return Schema(Props(
+                        Prop("jobId", "string", "Optional build job ID. Defaults to the current or latest job."),
+                        Prop("clear", "boolean", "Clear the persisted job after a terminal result is read. Defaults to false.")
+                    ));
                 default:
                     return new Dictionary<string, object>
                     {
