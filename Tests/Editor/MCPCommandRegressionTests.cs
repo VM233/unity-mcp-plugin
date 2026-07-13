@@ -35,6 +35,17 @@ namespace UnityMCP.Editor.Tests
     {
         private const string TEST_FOLDER = "Assets/__UnityMCPTests";
         private const string PREFAB_PATH = TEST_FOLDER + "/MCP Test Prefab.prefab";
+        private const string RUNTIME_MUTATION_TOOL_NAME = "unity-mcp-tests/set-runtime-state";
+
+        [MCPProjectTool(RUNTIME_MUTATION_TOOL_NAME,
+            Description = "Regression fixture for explicit runtime mutation metadata.",
+            InputSchemaJson = "{\"type\":\"object\",\"properties\":{}}",
+            MutatesRuntime = true,
+            RequiresPlayMode = true)]
+        private static object SetRuntimeStateFixture(Dictionary<string, object> args)
+        {
+            return new Dictionary<string, object> { { "success", true } };
+        }
 
         [SetUp]
         public void SetUp()
@@ -766,6 +777,26 @@ namespace UnityMCP.Editor.Tests
             Assert.That(validationName, Is.EqualTo("unity_pt_vmf_validate_ui_el_paths"));
             Assert.That(runtimeName.Length, Is.LessThanOrEqualTo(48));
             Assert.That(validationName.Length, Is.LessThanOrEqualTo(48));
+        }
+
+        [Test]
+        public void RuntimeMutatingProjectTool_IsExplicitlyFirstClass()
+        {
+            var descriptor = MCPProjectToolCommands.GetToolDictionaries(validOnly: true)
+                .Single(tool => tool["toolName"].ToString() == RUNTIME_MUTATION_TOOL_NAME);
+            Assert.That(descriptor["readOnly"], Is.EqualTo(false));
+            Assert.That(descriptor["mutatesAssets"], Is.EqualTo(false));
+            Assert.That(descriptor["mutatesRuntime"], Is.EqualTo(true));
+            Assert.That(descriptor["requiresPlayMode"], Is.EqualTo(true));
+
+            var toolsResult = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: false, includeSchema: true, limit: 500));
+            var tools = (List<Dictionary<string, object>>)toolsResult["tools"];
+            var tool = tools.Single(item =>
+                item["route"].ToString() == "project-tools/call/" + RUNTIME_MUTATION_TOOL_NAME);
+            Assert.That(tool["firstClass"], Is.EqualTo(true));
+            Assert.That(tool["mutatesRuntime"], Is.EqualTo(true));
+            Assert.That(tool["exposure"], Is.EqualTo("first-class"));
         }
 
         [Test]

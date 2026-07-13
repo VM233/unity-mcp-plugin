@@ -21,6 +21,8 @@ namespace UnityMCP.Editor
 
         public bool MutatesAssets { get; set; }
 
+        public bool MutatesRuntime { get; set; }
+
         public bool Dangerous { get; set; }
 
         public bool LongRunning { get; set; }
@@ -281,6 +283,7 @@ namespace UnityMCP.Editor
             public Dictionary<string, object> InputSchema;
             public bool ReadOnly;
             public bool MutatesAssets;
+            public bool MutatesRuntime;
             public bool Dangerous;
             public bool LongRunning;
             public bool MayReloadDomain;
@@ -299,6 +302,7 @@ namespace UnityMCP.Editor
                     Source = method.DeclaringType.FullName + "." + method.Name,
                     ReadOnly = attribute.ReadOnly,
                     MutatesAssets = attribute.MutatesAssets,
+                    MutatesRuntime = attribute.MutatesRuntime,
                     Dangerous = attribute.Dangerous,
                     LongRunning = attribute.LongRunning,
                     MayReloadDomain = attribute.MayReloadDomain,
@@ -322,6 +326,7 @@ namespace UnityMCP.Editor
                     Source = type.FullName,
                     ReadOnly = attribute.ReadOnly,
                     MutatesAssets = attribute.MutatesAssets,
+                    MutatesRuntime = attribute.MutatesRuntime,
                     Dangerous = attribute.Dangerous,
                     LongRunning = attribute.LongRunning,
                     MayReloadDomain = attribute.MayReloadDomain,
@@ -364,6 +369,7 @@ namespace UnityMCP.Editor
                     { "inputSchema", InputSchema ?? CreateDefaultInputSchema() },
                     { "readOnly", ReadOnly },
                     { "mutatesAssets", MutatesAssets },
+                    { "mutatesRuntime", MutatesRuntime },
                     { "dangerous", Dangerous },
                     { "longRunning", LongRunning },
                     { "mayReloadDomain", MayReloadDomain },

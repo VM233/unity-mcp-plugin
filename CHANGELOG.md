@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.12] - 2026-07-13
+
+- Added explicit `MutatesRuntime` metadata for project tools so runtime state changes can be exposed as first-class tools without misclassifying them as asset edits.
+
 ## [3.1.11] - 2026-07-13
 
 - Exposed Animator transition inspection, state updates, transition updates, and state connection workflows as first-class MCP tools.

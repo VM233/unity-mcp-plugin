@@ -24,12 +24,14 @@ namespace UnityMCP.Editor
             public bool Preferred;
             public bool ReadOnly;
             public bool MutatesAssets;
+            public bool MutatesRuntime;
             public bool Dangerous;
             public bool LongRunning;
             public bool MayReloadDomain;
             public bool RequiresPlayMode;
 
             public static ToolProfile FirstClass(bool readOnly = false, bool mutatesAssets = false,
+                bool mutatesRuntime = false,
                 bool dangerous = false, bool longRunning = false, bool mayReloadDomain = false,
                 bool requiresPlayMode = false)
             {
@@ -39,6 +41,7 @@ namespace UnityMCP.Editor
                     Preferred = true,
                     ReadOnly = readOnly,
                     MutatesAssets = mutatesAssets,
+                    MutatesRuntime = mutatesRuntime,
                     Dangerous = dangerous,
                     LongRunning = longRunning,
                     MayReloadDomain = mayReloadDomain,
@@ -54,6 +57,7 @@ namespace UnityMCP.Editor
                     Preferred = false,
                     ReadOnly = false,
                     MutatesAssets = true,
+                    MutatesRuntime = false,
                     Dangerous = true,
                     LongRunning = false,
                     MayReloadDomain = false,
@@ -69,6 +73,7 @@ namespace UnityMCP.Editor
                     Preferred = false,
                     ReadOnly = false,
                     MutatesAssets = false,
+                    MutatesRuntime = false,
                     Dangerous = false,
                     LongRunning = false,
                     MayReloadDomain = false,
@@ -498,6 +503,7 @@ namespace UnityMCP.Editor
                 { "preferred", profile.Preferred },
                 { "readOnly", profile.ReadOnly },
                 { "mutatesAssets", profile.MutatesAssets },
+                { "mutatesRuntime", profile.MutatesRuntime },
                 { "dangerous", profile.Dangerous },
                 { "longRunning", profile.LongRunning },
                 { "mayReloadDomain", profile.MayReloadDomain },
@@ -527,6 +533,7 @@ namespace UnityMCP.Editor
             string toolName = ProjectToolNameToToolName(projectToolName, shortName);
             string legacyToolName = "unity_project_tool_" + NormalizeProjectToolName(projectToolName);
             bool explicitMutatesAssets = GetBool(projectTool, "mutatesAssets", false);
+            bool mutatesRuntime = GetBool(projectTool, "mutatesRuntime", false);
             bool readOnly = GetBool(projectTool, "readOnly", false) ||
                             (!explicitMutatesAssets && InferProjectToolReadOnly(projectToolName));
             bool mutatesAssets = explicitMutatesAssets ||
@@ -535,13 +542,14 @@ namespace UnityMCP.Editor
             bool longRunning = GetBool(projectTool, "longRunning", false);
             bool mayReloadDomain = GetBool(projectTool, "mayReloadDomain", false);
             bool requiresPlayMode = GetBool(projectTool, "requiresPlayMode", false);
-            bool isFirstClass = readOnly || mutatesAssets;
+            bool isFirstClass = readOnly || mutatesAssets || mutatesRuntime;
             var profile = new ToolProfile
             {
                 Exposure = isFirstClass ? ExposureFirstClass : ExposureLazy,
                 Preferred = isFirstClass,
                 ReadOnly = readOnly,
                 MutatesAssets = mutatesAssets,
+                MutatesRuntime = mutatesRuntime,
                 Dangerous = dangerous,
                 LongRunning = longRunning,
                 MayReloadDomain = mayReloadDomain,
@@ -563,6 +571,7 @@ namespace UnityMCP.Editor
                 { "preferred", profile.Preferred },
                 { "readOnly", readOnly },
                 { "mutatesAssets", mutatesAssets },
+                { "mutatesRuntime", mutatesRuntime },
                 { "dangerous", dangerous },
                 { "longRunning", longRunning },
                 { "mayReloadDomain", mayReloadDomain },

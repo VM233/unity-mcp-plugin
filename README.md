@@ -121,7 +121,8 @@ public static class ProjectMcpTools
 {
     [MCPProjectTool("battleidle/add-property",
         Description = "Create and register a BattleIdle property.",
-        InputSchemaJson = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}")]
+        InputSchemaJson = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
+        MutatesAssets = true)]
     public static object AddProperty(Dictionary<string, object> args)
     {
         // Project-specific AssetDatabase / prefab / settings edits go here.
@@ -147,6 +148,8 @@ Project tools are exposed in metadata as first-class concrete routes and tool na
   }
 }
 ```
+
+Declare the behavior explicitly: use `ReadOnly = true` for inspection, `MutatesAssets = true` for serialized project content, and `MutatesRuntime = true` for Play Mode state changes. Runtime mutations are first-class without being mislabeled as asset edits.
 
 Older clients can still call `project-tools/list` to discover tools and `project-tools/execute` with:
 
