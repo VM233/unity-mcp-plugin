@@ -398,6 +398,12 @@ namespace UnityMCP.Editor
                 }
 
                 // ═══ Deferred paths (Unity APIs with async callbacks) ═══
+                if (apiPath == "wait/editor-idle")
+                {
+                    var result = MCPRequestQueue.ExecuteResumableEditorIdleWait(agentId, ParseJson(body));
+                    SendJson(response, 200, result);
+                    return;
+                }
                 if (_deferredRoutes.TryGetValue(apiPath, out var deferredHandler))
                 {
                     var result = MCPRequestQueue.ExecuteDeferredWithTracking(agentId, apiPath,
@@ -447,7 +453,12 @@ namespace UnityMCP.Editor
                     agentId = args["agentId"].ToString();
 
                 MCPRequestQueue.RequestTicket ticket;
-                if (_deferredRoutes.TryGetValue(apiPath, out var deferredHandler))
+                bool reused = false;
+                if (apiPath == "wait/editor-idle")
+                {
+                    ticket = MCPRequestQueue.SubmitResumableEditorIdleWait(agentId, innerArgs, out reused);
+                }
+                else if (_deferredRoutes.TryGetValue(apiPath, out var deferredHandler))
                 {
                     ticket = MCPRequestQueue.SubmitDeferredRequest(agentId, apiPath, (resolve, progress) =>
                         deferredHandler(ParseJson(innerBody), resolve, progress));
@@ -465,6 +476,7 @@ namespace UnityMCP.Editor
                     { "status",        ticket.Status.ToString() },
                     { "queuePosition", ticket.QueuePosition },
                     { "agentId",       agentId },
+                    { "reused",        reused },
                 });
             }
             catch (Exception ex)

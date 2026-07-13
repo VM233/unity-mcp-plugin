@@ -411,6 +411,203 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void EditorIdleWait_IsClassifiedAsReadOperation()
+        {
+            var method = typeof(MCPRequestQueue).GetMethod("IsReadOperation",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            Assert.That(method.Invoke(null, new object[] { "wait/editor-idle" }), Is.EqualTo(true));
+        }
+
+        [UnityTest]
+        public IEnumerator EditorIdleWait_DuplicateRequestsReuseTheGlobalActiveTicket()
+        {
+            var arguments = new Dictionary<string, object>
+            {
+                { "timeoutMs", 5000 },
+                { "stableFrames", 1 },
+                { "stableMs", 0 },
+            };
+            var first = MCPRequestQueue.SubmitResumableEditorIdleWait(
+                "idle-wait-first-" + Guid.NewGuid(), arguments, out bool firstReused);
+            var second = MCPRequestQueue.SubmitResumableEditorIdleWait(
+                "idle-wait-replay-" + Guid.NewGuid(), arguments, out bool secondReused);
+
+            Assert.That(firstReused, Is.False);
+            Assert.That(secondReused, Is.True);
+            Assert.That(second.TicketId, Is.EqualTo(first.TicketId));
+
+            double timeoutAt = EditorApplication.timeSinceStartup + 5d;
+            while (first.Status != MCPRequestQueue.RequestStatus.Completed &&
+                   first.Status != MCPRequestQueue.RequestStatus.Failed &&
+                   EditorApplication.timeSinceStartup < timeoutAt)
+            {
+                MCPRequestQueue.ProcessNextRequests(5);
+                yield return null;
+            }
+
+            Assert.That(first.Status, Is.EqualTo(MCPRequestQueue.RequestStatus.Completed));
+            var result = RequireDictionary(first.Result);
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(result["resumedAfterReload"], Is.EqualTo(false));
+        }
+
+        [Test]
+        public void EditorIdleWait_ExecutingSnapshotRestoresSameTicketWithRemainingDeadline()
+        {
+            long ticketId = DateTime.UtcNow.Ticks;
+            var persistentArguments = new Dictionary<string, object>
+            {
+                { "timeoutMs", 5000 },
+                { "stableFrames", 3 },
+                { "stableMs", 500 },
+                { "_resumeCount", 0 },
+            };
+            var snapshot = new Dictionary<string, object>
+            {
+                { "ticketId", ticketId },
+                { "agentId", "reload-regression" },
+                { "actionName", "wait/editor-idle" },
+                { "status", MCPRequestQueue.RequestStatus.Executing.ToString() },
+                { "queuePosition", 0 },
+                { "submittedAt", DateTime.UtcNow.AddMilliseconds(-100).ToString("O") },
+                { "requestKey", "wait/editor-idle|5000|3|500" },
+                { "persistentArguments", persistentArguments },
+                { "resumeCount", 0 },
+            };
+
+            var method = typeof(MCPRequestQueue).GetMethod("TryRestoreEditorIdleWait",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            var invokeArguments = new object[] { snapshot, null };
+            Assert.That(method.Invoke(null, invokeArguments), Is.EqualTo(true));
+
+            var restored = (MCPRequestQueue.RequestTicket)invokeArguments[1];
+            Assert.That(restored.TicketId, Is.EqualTo(ticketId));
+            Assert.That(restored.Status, Is.EqualTo(MCPRequestQueue.RequestStatus.Queued));
+            Assert.That(restored.ResumeCount, Is.EqualTo(1));
+            Assert.That(Convert.ToInt32(restored.PersistentArguments["timeoutMs"]),
+                Is.InRange(1, 5000));
+            Assert.That(Convert.ToInt32(restored.PersistentArguments["_resumeCount"]), Is.EqualTo(1));
+            Assert.That(restored.PersistentArguments.ContainsKey("_deadlineUtc"), Is.True);
+
+            var deferredProperty = typeof(MCPRequestQueue.RequestTicket).GetProperty(
+                "ProgressiveDeferredAction", BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(deferredProperty, Is.Not.Null);
+            Assert.That(deferredProperty.GetValue(restored), Is.Not.Null);
+        }
+
+        [Test]
+        public void EditorIdleWait_CompletedSnapshotRestoresTerminalResult()
+        {
+            var completedResult = new Dictionary<string, object>
+            {
+                { "success", true },
+                { "timedOut", false },
+                { "resumeCount", 1 },
+            };
+            var snapshot = new Dictionary<string, object>
+            {
+                { "ticketId", DateTime.UtcNow.Ticks },
+                { "agentId", "reload-regression" },
+                { "actionName", "wait/editor-idle" },
+                { "status", MCPRequestQueue.RequestStatus.Completed.ToString() },
+                { "submittedAt", DateTime.UtcNow.AddSeconds(-1).ToString("O") },
+                { "completedAt", DateTime.UtcNow.ToString("O") },
+                { "result", completedResult },
+            };
+
+            var method = typeof(MCPRequestQueue).GetMethod("TryRestoreEditorIdleWait",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            var invokeArguments = new object[] { snapshot, null };
+            Assert.That(method.Invoke(null, invokeArguments), Is.EqualTo(true));
+
+            var restored = (MCPRequestQueue.RequestTicket)invokeArguments[1];
+            Assert.That(restored.Status, Is.EqualTo(MCPRequestQueue.RequestStatus.Completed));
+            Assert.That(RequireDictionary(restored.Result)["success"], Is.EqualTo(true));
+        }
+
+        [Test]
+        public void RequestQueue_CompletionBeforeWaiterRegistrationReturnsImmediately()
+        {
+            long ticketId = DateTime.UtcNow.Ticks;
+            var expected = new Dictionary<string, object> { { "success", true } };
+            var ticket = new MCPRequestQueue.RequestTicket
+            {
+                TicketId = ticketId,
+                AgentId = "waiter-race-regression",
+                ActionName = "wait/editor-idle",
+                Status = MCPRequestQueue.RequestStatus.Completed,
+                SubmittedAt = DateTime.UtcNow,
+                CompletedAt = DateTime.UtcNow,
+                Result = expected,
+            };
+            var completedField = typeof(MCPRequestQueue).GetField("_completedTickets",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var queueLockField = typeof(MCPRequestQueue).GetField("_queueLock",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var waitMethod = typeof(MCPRequestQueue).GetMethod("WaitForTicket",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(completedField, Is.Not.Null);
+            Assert.That(queueLockField, Is.Not.Null);
+            Assert.That(waitMethod, Is.Not.Null);
+            var completed = (Dictionary<long, MCPRequestQueue.RequestTicket>)completedField.GetValue(null);
+            object queueLock = queueLockField.GetValue(null);
+
+            try
+            {
+                lock (queueLock)
+                    completed[ticketId] = ticket;
+                var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+                var actual = waitMethod.Invoke(null, new object[] { ticket });
+                stopwatch.Stop();
+
+                Assert.That(actual, Is.SameAs(expected));
+                Assert.That(stopwatch.ElapsedMilliseconds, Is.LessThan(1000));
+            }
+            finally
+            {
+                lock (queueLock)
+                    completed.Remove(ticketId);
+            }
+        }
+
+        [Test]
+        public void RequestTicketSnapshots_AreAtomicallyReplacedWithValidBackup()
+        {
+            string path = Path.Combine(Path.GetTempPath(),
+                "unity-mcp-ticket-snapshot-" + Guid.NewGuid().ToString("N") + ".json");
+            var writeMethod = typeof(MCPRequestQueue).GetMethod("WriteTextAtomically",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var readMethod = typeof(MCPRequestQueue).GetMethod("TryReadValidSnapshotJson",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(writeMethod, Is.Not.Null);
+            Assert.That(readMethod, Is.Not.Null);
+
+            try
+            {
+                writeMethod.Invoke(null, new object[] { path, "[{\"generation\":1}]" });
+                writeMethod.Invoke(null, new object[] { path, "[{\"generation\":2}]" });
+
+                var mainReadArguments = new object[] { path, null };
+                var backupReadArguments = new object[] { path + ".bak", null };
+                Assert.That(readMethod.Invoke(null, mainReadArguments), Is.EqualTo(true));
+                Assert.That(readMethod.Invoke(null, backupReadArguments), Is.EqualTo(true));
+                Assert.That(mainReadArguments[1].ToString(), Does.Contain("\"generation\":2"));
+                Assert.That(backupReadArguments[1].ToString(), Does.Contain("\"generation\":1"));
+            }
+            finally
+            {
+                foreach (string candidate in new[] { path, path + ".bak", path + ".tmp" })
+                {
+                    if (File.Exists(candidate))
+                        File.Delete(candidate);
+                }
+            }
+        }
+
+        [Test]
         public void ExecutionOptions_ParseAndResolveMode()
         {
             Assert.That(MCPExecutionOptions.TryParse(new Dictionary<string, object>(), out var automatic,

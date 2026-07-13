@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -50,6 +51,9 @@ namespace UnityMCP.Editor
             public string ErrorMessage { get; set; }
             public string ErrorCode    { get; set; }
             public bool   Retryable    { get; set; }
+            public string RequestKey   { get; set; }
+            public Dictionary<string, object> PersistentArguments { get; set; }
+            public int ResumeCount { get; set; }
 
             // Timing
             public DateTime  SubmittedAt   { get; set; }
@@ -92,8 +96,8 @@ namespace UnityMCP.Editor
         private static bool _persistentSnapshotsLoaded;
 
         // Synchronous waiters (backward compat)
-        private static readonly Dictionary<long, ManualResetEventSlim> _waiters
-            = new Dictionary<long, ManualResetEventSlim>();
+        private static readonly Dictionary<long, List<ManualResetEventSlim>> _waiters
+            = new Dictionary<long, List<ManualResetEventSlim>>();
 
         // Session tracking
         private static readonly Dictionary<string, MCPAgentSession> _sessions
@@ -169,21 +173,60 @@ namespace UnityMCP.Editor
         public static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
             Action<Action<object>, Action<object>> deferredAction)
         {
+            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, null, out _);
+        }
+
+        public static RequestTicket SubmitResumableEditorIdleWait(string agentId,
+            Dictionary<string, object> args, out bool reused)
+        {
+            var normalized = MCPEditorCommands.NormalizeWaitForIdleArguments(args);
+            var persistentArguments = new Dictionary<string, object>
+            {
+                { "timeoutMs", normalized["timeoutMs"] },
+                { "stableFrames", normalized["stableFrames"] },
+                { "stableMs", normalized["stableMs"] },
+                { "_resumeCount", normalized["resumeCount"] },
+                { "_deadlineUtc", DateTime.UtcNow.AddMilliseconds((int)normalized["timeoutMs"]).ToString("O") },
+            };
+            string requestKey = MCPEditorCommands.BuildWaitForIdleRequestKey(persistentArguments);
+            return SubmitDeferredRequest(agentId, "wait/editor-idle",
+                (resolve, _) => MCPEditorCommands.WaitForIdle(persistentArguments, resolve),
+                persistentArguments, requestKey, out reused);
+        }
+
+        private static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
+            Action<Action<object>, Action<object>> deferredAction,
+            Dictionary<string, object> persistentArguments, string requestKey, out bool reused)
+        {
             EnsurePersistentSnapshotsLoaded();
             if (string.IsNullOrEmpty(agentId)) agentId = "anonymous";
-
-            var ticket = new RequestTicket
-            {
-                TicketId       = Interlocked.Increment(ref _nextTicketId),
-                AgentId        = agentId,
-                ActionName     = actionName,
-                Status         = RequestStatus.Queued,
-                SubmittedAt    = DateTime.UtcNow,
-                ProgressiveDeferredAction = deferredAction,
-            };
+            reused = false;
 
             lock (_queueLock)
             {
+                if (!string.IsNullOrEmpty(requestKey))
+                {
+                    var existing = FindActiveTicketByRequestKeyLocked(requestKey);
+                    if (existing != null)
+                    {
+                        reused = true;
+                        return existing;
+                    }
+                }
+
+                var ticket = new RequestTicket
+                {
+                    TicketId       = Interlocked.Increment(ref _nextTicketId),
+                    AgentId        = agentId,
+                    ActionName     = actionName,
+                    Status         = RequestStatus.Queued,
+                    SubmittedAt    = DateTime.UtcNow,
+                    ProgressiveDeferredAction = deferredAction,
+                    PersistentArguments = persistentArguments,
+                    RequestKey = requestKey,
+                    ResumeCount = GetInt(persistentArguments, "_resumeCount", 0),
+                };
+
                 if (!_agentQueues.ContainsKey(agentId))
                 {
                     _agentQueues[agentId] = new Queue<RequestTicket>();
@@ -196,9 +239,8 @@ namespace UnityMCP.Editor
                 EnsureSession(agentId).LogAction(actionName);
                 _sessions[agentId].IncrementQueuedRequest();
                 PersistTicketSnapshotsLocked();
+                return ticket;
             }
-
-            return ticket;
         }
 
         /// <summary>
@@ -224,10 +266,31 @@ namespace UnityMCP.Editor
             return WaitForTicket(ticket);
         }
 
+        public static object ExecuteResumableEditorIdleWait(string agentId, Dictionary<string, object> args)
+        {
+            var ticket = SubmitResumableEditorIdleWait(agentId, args, out _);
+            return WaitForTicket(ticket);
+        }
+
         private static object WaitForTicket(RequestTicket ticket)
         {
             var waiter = new ManualResetEventSlim(false);
-            lock (_queueLock) { _waiters[ticket.TicketId] = waiter; }
+            lock (_queueLock)
+            {
+                if (_completedTickets.ContainsKey(ticket.TicketId))
+                {
+                    waiter.Set();
+                }
+                else
+                {
+                    if (!_waiters.TryGetValue(ticket.TicketId, out var waiters))
+                    {
+                        waiters = new List<ManualResetEventSlim>();
+                        _waiters[ticket.TicketId] = waiters;
+                    }
+                    waiters.Add(waiter);
+                }
+            }
 
             try
             {
@@ -275,7 +338,15 @@ namespace UnityMCP.Editor
             finally
             {
                 waiter.Dispose();
-                lock (_queueLock) { _waiters.Remove(ticket.TicketId); }
+                lock (_queueLock)
+                {
+                    if (_waiters.TryGetValue(ticket.TicketId, out var waiters))
+                    {
+                        waiters.Remove(waiter);
+                        if (waiters.Count == 0)
+                            _waiters.Remove(ticket.TicketId);
+                    }
+                }
             }
         }
 
@@ -340,8 +411,7 @@ namespace UnityMCP.Editor
                             {
                                 _executingTickets.Remove(deferredTicket.TicketId);
                                 _completedTickets[deferredTicket.TicketId] = deferredTicket;
-                                if (_waiters.TryGetValue(deferredTicket.TicketId, out var w))
-                                    w.Set();
+                                SignalWaitersLocked(deferredTicket.TicketId);
                                 if (_sessions.TryGetValue(deferredTicket.AgentId, out var s))
                                     s.IncrementCompletedRequest(deferredTicket.ExecutionTimeMs);
                                 PersistTicketSnapshotsLocked();
@@ -372,8 +442,7 @@ namespace UnityMCP.Editor
                         {
                             _executingTickets.Remove(deferredTicket.TicketId);
                             _completedTickets[deferredTicket.TicketId] = deferredTicket;
-                            if (_waiters.TryGetValue(deferredTicket.TicketId, out var w))
-                                w.Set();
+                            SignalWaitersLocked(deferredTicket.TicketId);
                             PersistTicketSnapshotsLocked();
                         }
                     }
@@ -433,8 +502,7 @@ namespace UnityMCP.Editor
                     _executingTickets.Remove(ticket.TicketId);
                     _completedTickets[ticket.TicketId] = ticket;
 
-                    if (_waiters.TryGetValue(ticket.TicketId, out var waiter))
-                        waiter.Set();
+                    SignalWaitersLocked(ticket.TicketId);
 
                     if (_sessions.TryGetValue(ticket.AgentId, out var session))
                         session.IncrementCompletedRequest(ticket.ExecutionTimeMs);
@@ -590,6 +658,34 @@ namespace UnityMCP.Editor
         //  Internals
         // ═══════════════════════════════════════════════════════
 
+        private static RequestTicket FindActiveTicketByRequestKeyLocked(string requestKey)
+        {
+            foreach (var ticket in _executingTickets.Values)
+            {
+                if (ticket.RequestKey == requestKey)
+                    return ticket;
+            }
+
+            foreach (var queue in _agentQueues.Values)
+            {
+                foreach (var ticket in queue)
+                {
+                    if (ticket.RequestKey == requestKey)
+                        return ticket;
+                }
+            }
+
+            return null;
+        }
+
+        private static void SignalWaitersLocked(long ticketId)
+        {
+            if (!_waiters.TryGetValue(ticketId, out var waiters))
+                return;
+            foreach (var waiter in waiters.ToArray())
+                waiter.Set();
+        }
+
         /// <summary>
         /// Fair round-robin dequeue. Returns 1 write OR a caller-bounded read batch.
         /// Must be called under _queueLock.
@@ -691,6 +787,7 @@ namespace UnityMCP.Editor
                 || lower == "scene/info"
                 || lower == "scene/hierarchy"
                 || lower == "editor/state"
+                || lower == "wait/editor-idle"
                 || lower == "project/info"
                 || lower == "console/log"
                 || lower == "debug/attach-unity"
@@ -773,8 +870,7 @@ namespace UnityMCP.Editor
                         "stale_execution", true);
                     _executingTickets.Remove(ticket.TicketId);
                     _completedTickets[ticket.TicketId] = ticket;
-                    if (_waiters.TryGetValue(ticket.TicketId, out var waiter))
-                        waiter.Set();
+                    SignalWaitersLocked(ticket.TicketId);
                 }
 
                 PersistTicketSnapshotsLocked();
@@ -808,12 +904,119 @@ namespace UnityMCP.Editor
                         continue;
 
                     maxTicketId = Math.Max(maxTicketId, ticketId);
-                    _reloadedTicketSnapshots[ticketId] = BuildReloadedSnapshot(snapshot);
+                    if (TryRestoreEditorIdleWait(snapshot, out var restoredTicket))
+                    {
+                        if (restoredTicket.Status == RequestStatus.Queued)
+                            EnqueueRestoredTicketLocked(restoredTicket);
+                        else
+                            _completedTickets[restoredTicket.TicketId] = restoredTicket;
+                    }
+                    else
+                    {
+                        _reloadedTicketSnapshots[ticketId] = BuildReloadedSnapshot(snapshot);
+                    }
                 }
 
                 if (maxTicketId > _nextTicketId)
                     Interlocked.Exchange(ref _nextTicketId, maxTicketId);
             }
+        }
+
+        private static bool TryRestoreEditorIdleWait(Dictionary<string, object> snapshot,
+            out RequestTicket ticket)
+        {
+            ticket = null;
+            string actionName = GetString(snapshot, "actionName");
+            if (actionName != "wait/editor-idle" ||
+                !TryGetLong(snapshot, "ticketId", out long ticketId))
+                return false;
+
+            var persistentArguments = snapshot.TryGetValue("persistentArguments", out var rawArguments)
+                ? MCPResponse.ToDictionary(rawArguments)
+                : null;
+            string statusText = GetString(snapshot, "status");
+            if (!Enum.TryParse(statusText, out RequestStatus previousStatus))
+                return false;
+
+            DateTime submittedAt = GetDateTime(snapshot, "submittedAt", DateTime.UtcNow);
+            DateTime? completedAt = TryGetDateTime(snapshot, "completedAt", out var parsedCompletedAt)
+                ? parsedCompletedAt
+                : null;
+            ticket = new RequestTicket
+            {
+                TicketId = ticketId,
+                AgentId = GetString(snapshot, "agentId", "anonymous"),
+                ActionName = actionName,
+                SubmittedAt = submittedAt,
+                CompletedAt = completedAt,
+                QueuePosition = GetInt(snapshot, "queuePosition", 0),
+                ErrorMessage = GetString(snapshot, "errorMessage"),
+                ErrorCode = GetString(snapshot, "errorCode"),
+                Retryable = GetBool(snapshot, "retryable", false),
+                RequestKey = GetString(snapshot, "requestKey"),
+                PersistentArguments = persistentArguments,
+                ResumeCount = GetInt(snapshot, "resumeCount", 0),
+                Progress = snapshot.TryGetValue("progress", out var progress) ? progress : null,
+            };
+
+            if (previousStatus == RequestStatus.Completed || previousStatus == RequestStatus.Failed ||
+                previousStatus == RequestStatus.TimedOut)
+            {
+                if (!snapshot.TryGetValue("result", out var result))
+                {
+                    ticket = null;
+                    return false;
+                }
+                ticket.Status = previousStatus;
+                ticket.Result = result;
+                return true;
+            }
+
+            if ((previousStatus != RequestStatus.Queued && previousStatus != RequestStatus.Executing) ||
+                persistentArguments == null)
+            {
+                ticket = null;
+                return false;
+            }
+
+            int originalTimeoutMs = Math.Max(1, GetInt(persistentArguments, "timeoutMs", 30000));
+            DateTime deadlineUtc = GetDateTime(persistentArguments, "_deadlineUtc",
+                submittedAt.AddMilliseconds(originalTimeoutMs));
+            int remainingTimeoutMs = (int)Math.Max(1,
+                Math.Min(int.MaxValue, (deadlineUtc - DateTime.UtcNow).TotalMilliseconds));
+            var resumedArguments = new Dictionary<string, object>(persistentArguments)
+            {
+                ["timeoutMs"] = remainingTimeoutMs,
+                ["_resumeCount"] = ticket.ResumeCount + 1,
+                ["_deadlineUtc"] = deadlineUtc.ToString("O"),
+            };
+            ticket.Status = RequestStatus.Queued;
+            ticket.CompletedAt = null;
+            ticket.Result = null;
+            ticket.Progress = null;
+            ticket.ErrorMessage = null;
+            ticket.ErrorCode = null;
+            ticket.Retryable = false;
+            ticket.PersistentArguments = resumedArguments;
+            ticket.ResumeCount++;
+            if (string.IsNullOrEmpty(ticket.RequestKey))
+                ticket.RequestKey = MCPEditorCommands.BuildWaitForIdleRequestKey(persistentArguments);
+            ticket.ProgressiveDeferredAction = (resolve, _) =>
+                MCPEditorCommands.WaitForIdle(resumedArguments, resolve);
+            return true;
+        }
+
+        private static void EnqueueRestoredTicketLocked(RequestTicket ticket)
+        {
+            if (!_agentQueues.TryGetValue(ticket.AgentId, out var queue))
+            {
+                queue = new Queue<RequestTicket>();
+                _agentQueues[ticket.AgentId] = queue;
+                _rrOrder.Add(ticket.AgentId);
+            }
+            ticket.QueuePosition = queue.Count;
+            queue.Enqueue(ticket);
+            EnsureSession(ticket.AgentId).LogAction(ticket.ActionName + " (resumed)");
         }
 
         private static Dictionary<string, object> BuildReloadedSnapshot(Dictionary<string, object> snapshot)
@@ -869,6 +1072,17 @@ namespace UnityMCP.Editor
             if (ticket.Progress != null)
                 snapshot["progress"] = ticket.Progress;
 
+            if (!string.IsNullOrEmpty(ticket.RequestKey))
+                snapshot["requestKey"] = ticket.RequestKey;
+            if (ticket.PersistentArguments != null)
+                snapshot["persistentArguments"] = ticket.PersistentArguments;
+            if (ticket.ResumeCount > 0)
+                snapshot["resumeCount"] = ticket.ResumeCount;
+            if (ticket.ActionName == "wait/editor-idle" && ticket.Result != null &&
+                (ticket.Status == RequestStatus.Completed || ticket.Status == RequestStatus.Failed ||
+                 ticket.Status == RequestStatus.TimedOut))
+                snapshot["result"] = ticket.Result;
+
             if (ticket.CompletedAt.HasValue)
                 snapshot["completedAt"] = ticket.CompletedAt.Value.ToString("O");
 
@@ -883,12 +1097,60 @@ namespace UnityMCP.Editor
                    long.TryParse(raw.ToString(), out value);
         }
 
+        private static int GetInt(Dictionary<string, object> dictionary, string key, int defaultValue)
+        {
+            return dictionary != null && dictionary.TryGetValue(key, out var raw) && raw != null &&
+                   int.TryParse(raw.ToString(), out int value)
+                ? value
+                : defaultValue;
+        }
+
+        private static string GetString(Dictionary<string, object> dictionary, string key,
+            string defaultValue = "")
+        {
+            return dictionary != null && dictionary.TryGetValue(key, out var raw) && raw != null
+                ? raw.ToString()
+                : defaultValue;
+        }
+
+        private static bool GetBool(Dictionary<string, object> dictionary, string key, bool defaultValue)
+        {
+            if (dictionary == null || !dictionary.TryGetValue(key, out var raw) || raw == null)
+                return defaultValue;
+            if (raw is bool value)
+                return value;
+            return bool.TryParse(raw.ToString(), out value) ? value : defaultValue;
+        }
+
+        private static DateTime GetDateTime(Dictionary<string, object> dictionary, string key,
+            DateTime defaultValue)
+        {
+            return TryGetDateTime(dictionary, key, out var value) ? value : defaultValue;
+        }
+
+        private static bool TryGetDateTime(Dictionary<string, object> dictionary, string key,
+            out DateTime value)
+        {
+            value = default;
+            return dictionary != null && dictionary.TryGetValue(key, out var raw) && raw != null &&
+                   DateTime.TryParse(raw.ToString(), CultureInfo.InvariantCulture,
+                       DateTimeStyles.RoundtripKind, out value);
+        }
+
         private static string ReadPersistentTicketSnapshots()
         {
             try
             {
                 string path = GetPersistentTicketSnapshotPath();
-                return File.Exists(path) ? File.ReadAllText(path) : "";
+                if (TryReadValidSnapshotJson(path, out string json))
+                    return json;
+                string backupPath = GetPersistentTicketSnapshotBackupPath();
+                if (TryReadValidSnapshotJson(backupPath, out json))
+                {
+                    Debug.LogWarning("[Unity MCP Queue] Recovered ticket snapshots from the atomic backup file.");
+                    return json;
+                }
+                return "";
             }
             catch (Exception ex)
             {
@@ -906,7 +1168,7 @@ namespace UnityMCP.Editor
                 if (!string.IsNullOrEmpty(directory))
                     Directory.CreateDirectory(directory);
 
-                File.WriteAllText(path, json ?? "");
+                WriteTextAtomically(path, json ?? "[]");
             }
             catch (Exception ex)
             {
@@ -914,10 +1176,66 @@ namespace UnityMCP.Editor
             }
         }
 
+        private static bool TryReadValidSnapshotJson(string path, out string json)
+        {
+            json = "";
+            if (!File.Exists(path))
+                return false;
+            try
+            {
+                json = File.ReadAllText(path);
+                return MiniJson.Deserialize(json) is List<object>;
+            }
+            catch
+            {
+                json = "";
+                return false;
+            }
+        }
+
+        private static void WriteTextAtomically(string path, string contents)
+        {
+            string tempPath = path + ".tmp";
+            string backupPath = path + ".bak";
+            if (File.Exists(tempPath))
+                File.Delete(tempPath);
+            using (var stream = new FileStream(tempPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            using (var writer = new StreamWriter(stream))
+            {
+                writer.Write(contents);
+                writer.Flush();
+                stream.Flush(true);
+            }
+
+            if (!File.Exists(path))
+            {
+                File.Move(tempPath, path);
+                return;
+            }
+
+            if (File.Exists(backupPath))
+                File.Delete(backupPath);
+            try
+            {
+                File.Replace(tempPath, path, backupPath, true);
+            }
+            catch (PlatformNotSupportedException)
+            {
+                File.Copy(path, backupPath, true);
+                File.Copy(tempPath, path, true);
+                File.Delete(tempPath);
+            }
+        }
+
         private static string GetPersistentTicketSnapshotPath()
         {
             return Path.Combine(Directory.GetCurrentDirectory(), "Library", "UnityMCP",
                 PersistentTicketSnapshotFileName);
+        }
+
+        private static string GetPersistentTicketSnapshotBackupPath()
+        {
+            return GetPersistentTicketSnapshotPath() + ".bak";
         }
 
         private static Dictionary<string, object> TicketToDict(RequestTicket t)
@@ -955,7 +1273,8 @@ namespace UnityMCP.Editor
             }
 
             // Include result for completed tickets
-            if (t.Status == RequestStatus.Completed || t.Status == RequestStatus.Failed)
+            if (t.Status == RequestStatus.Completed || t.Status == RequestStatus.Failed ||
+                t.Status == RequestStatus.TimedOut)
                 dict["result"] = t.Result;
 
             return dict;

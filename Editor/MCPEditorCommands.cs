@@ -35,9 +35,11 @@ namespace UnityMCP.Editor
 
         public static void WaitForIdle(Dictionary<string, object> args, Action<object> resolve)
         {
-            int timeoutMs = Math.Max(1, GetInt(args, "timeoutMs", 30000));
-            int stableFrames = Math.Max(1, GetInt(args, "stableFrames", 3));
-            int stableMs = Math.Max(0, GetInt(args, "stableMs", 500));
+            var normalizedArgs = NormalizeWaitForIdleArguments(args);
+            int timeoutMs = (int)normalizedArgs["timeoutMs"];
+            int stableFrames = (int)normalizedArgs["stableFrames"];
+            int stableMs = (int)normalizedArgs["stableMs"];
+            int resumeCount = (int)normalizedArgs["resumeCount"];
             double startTime = EditorApplication.timeSinceStartup;
             double stableStartTime = -1;
             int currentStableFrames = 0;
@@ -80,7 +82,7 @@ namespace UnityMCP.Editor
                 {
                     EditorApplication.update -= Tick;
                     Resolve(BuildIdleResult(true, false, timeoutMs, stableFrames, stableMs,
-                        currentStableFrames, stableDurationMs, startTime, snapshot, lastBusyReasons));
+                        currentStableFrames, stableDurationMs, startTime, snapshot, lastBusyReasons, resumeCount));
                     return;
                 }
 
@@ -89,7 +91,7 @@ namespace UnityMCP.Editor
                 {
                     EditorApplication.update -= Tick;
                     Resolve(BuildIdleResult(false, true, timeoutMs, stableFrames, stableMs,
-                        currentStableFrames, stableDurationMs, startTime, snapshot, lastBusyReasons));
+                        currentStableFrames, stableDurationMs, startTime, snapshot, lastBusyReasons, resumeCount));
                 }
             }
 
@@ -98,6 +100,23 @@ namespace UnityMCP.Editor
             {
                 EditorApplication.update += Tick;
             }
+        }
+
+        internal static Dictionary<string, object> NormalizeWaitForIdleArguments(Dictionary<string, object> args)
+        {
+            return new Dictionary<string, object>
+            {
+                { "timeoutMs", Math.Max(1, GetInt(args, "timeoutMs", 30000)) },
+                { "stableFrames", Math.Max(1, GetInt(args, "stableFrames", 3)) },
+                { "stableMs", Math.Max(0, GetInt(args, "stableMs", 500)) },
+                { "resumeCount", Math.Max(0, GetInt(args, "_resumeCount", 0)) },
+            };
+        }
+
+        internal static string BuildWaitForIdleRequestKey(Dictionary<string, object> args)
+        {
+            var normalized = NormalizeWaitForIdleArguments(args);
+            return $"wait/editor-idle|{normalized["timeoutMs"]}|{normalized["stableFrames"]}|{normalized["stableMs"]}";
         }
 
         public static object SetPlayMode(Dictionary<string, object> args)
@@ -1060,7 +1079,7 @@ namespace UnityMCP.Editor
 
         private static Dictionary<string, object> BuildIdleResult(bool success, bool timedOut, int timeoutMs,
             int stableFrames, int stableMs, int currentStableFrames, double stableDurationMs, double startTime,
-            EditorIdleSnapshot snapshot, List<string> lastBusyReasons)
+            EditorIdleSnapshot snapshot, List<string> lastBusyReasons, int resumeCount)
         {
             var scene = UnityEngine.SceneManagement.SceneManager.GetActiveScene();
             return new Dictionary<string, object>
@@ -1083,6 +1102,8 @@ namespace UnityMCP.Editor
                 { "currentStableFrames", currentStableFrames },
                 { "stableDurationMs", (long)stableDurationMs },
                 { "elapsedMs", (long)((EditorApplication.timeSinceStartup - startTime) * 1000d) },
+                { "resumedAfterReload", resumeCount > 0 },
+                { "resumeCount", resumeCount },
             };
         }
 

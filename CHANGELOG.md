@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.20] - 2026-07-14
+
+- Made `wait/editor-idle` tickets reload-resumable with the original ticket ID, remaining deadline, persisted terminal result, and explicit resume diagnostics.
+- Coalesced duplicate active editor-idle waits across reconnecting agents and allowed multiple synchronous callers to observe the same ticket safely.
+- Persisted queue snapshots with atomic replacement and a validated backup, preventing a domain reload from reading a partial ticket file.
+- Classified editor-idle waits as non-mutating queue work so they no longer block unrelated reads while waiting for Unity to settle.
+
 ## [3.1.19] - 2026-07-14
 
 - Added decoded-pixel and file-byte duplicate detection to batch `asset/import`, including project/folder scopes, skip/error/report policies, existing-asset matches, and within-batch matches.
