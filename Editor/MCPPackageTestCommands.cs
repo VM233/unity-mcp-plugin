@@ -31,6 +31,8 @@ namespace UnityMCP.Editor
         {
             if (_workflow != null && !_workflow.IsTerminal)
             {
+                EnsureUpdateRegistered();
+                ContinueWorkflow();
                 return new Dictionary<string, object>
                 {
                     { "error", "A package test workflow is already running" },
@@ -89,6 +91,12 @@ namespace UnityMCP.Editor
             string workflowId = GetString(args, "workflowId");
             if (!string.IsNullOrEmpty(workflowId) && workflowId != _workflow.WorkflowId)
                 return new { error = $"Package test workflow '{workflowId}' not found" };
+
+            if (!_workflow.IsTerminal)
+            {
+                EnsureUpdateRegistered();
+                ContinueWorkflow();
+            }
 
             bool clear = GetBool(args, "clear", false);
             var response = BuildResponse(_workflow);
