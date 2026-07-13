@@ -1358,6 +1358,49 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void ToolMetadata_ExposesDocumentedAnimatorEditingToolsAsFirstClass()
+        {
+            var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: true, includeSchema: true, limit: 200));
+            var tools = (List<Dictionary<string, object>>)result["tools"];
+            var toolsByRoute = tools.ToDictionary(tool => tool["route"].ToString());
+
+            foreach (var expected in new[]
+                     {
+                         (Route: "animation/transition-info", ToolName: "unity_animation_transition_info"),
+                         (Route: "animation/update-state", ToolName: "unity_animation_update_state"),
+                         (Route: "animation/update-transition", ToolName: "unity_animation_update_transition"),
+                         (Route: "animation/connect-states", ToolName: "unity_animation_connect_states"),
+                     })
+            {
+                Assert.That(toolsByRoute.ContainsKey(expected.Route), Is.True,
+                    $"{expected.Route} must be exposed as a first-class MCP tool.");
+                var tool = toolsByRoute[expected.Route];
+                Assert.That(tool["toolName"], Is.EqualTo(expected.ToolName));
+                Assert.That(tool["firstClass"], Is.EqualTo(true));
+
+                var schema = RequireDictionary(tool["inputSchema"]);
+                var properties = RequireDictionary(schema["properties"]);
+                Assert.That(properties, Is.Not.Empty, $"{expected.Route} must publish a concrete input schema.");
+            }
+
+            var transitionInfoAnnotations = RequireDictionary(
+                toolsByRoute["animation/transition-info"]["annotations"]);
+            Assert.That(transitionInfoAnnotations["readOnlyHint"], Is.EqualTo(true));
+
+            foreach (string route in new[]
+                     {
+                         "animation/update-state",
+                         "animation/update-transition",
+                         "animation/connect-states",
+                     })
+            {
+                var annotations = RequireDictionary(toolsByRoute[route]["annotations"]);
+                Assert.That(annotations.ContainsKey("readOnlyHint"), Is.False);
+            }
+        }
+
+        [Test]
         public void ToolMetadata_ValueSchemasAcceptPrimitiveNumbers()
         {
             MethodInfo getSchema = typeof(MCPToolMetadata).GetMethod("GetToolInputSchema",

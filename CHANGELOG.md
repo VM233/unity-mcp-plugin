@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.11] - 2026-07-13
+
+- Exposed Animator transition inspection, state updates, transition updates, and state connection workflows as first-class MCP tools.
+
 ## [3.1.10] - 2026-07-13
 
 - Exposed texture inspection and sprite-import preset application as first-class MCP tools alongside external asset import.

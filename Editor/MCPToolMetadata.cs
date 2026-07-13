@@ -122,6 +122,7 @@ namespace UnityMCP.Editor
                 "packages/status",
                 "packages/lint-metas",
                 "texture/info",
+                "animation/transition-info",
                 "testing/get-job",
                 "testing/get-package-job",
                 "project-tools/list");
@@ -157,6 +158,9 @@ namespace UnityMCP.Editor
                 "asset/move",
                 "asset/export-unitypackage",
                 "texture/apply-sprite-preset",
+                "animation/update-state",
+                "animation/update-transition",
+                "animation/connect-states",
                 "uitoolkit/runtime-repaint",
                 "uitoolkit/refresh",
                 "uitoolkit/assert-layout",
