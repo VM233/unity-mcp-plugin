@@ -388,7 +388,7 @@ namespace UnityMCP.Editor
         }
 
         internal static void OnRunFinished(int totalPassed, int totalFailed, int totalSkipped,
-            int totalInconclusive, double totalDuration)
+            int totalInconclusive, double totalDuration, IReadOnlyCollection<TestResult> leafResults)
         {
             if (_currentJobId == null || !_jobs.TryGetValue(_currentJobId, out var job))
                 return;
@@ -399,6 +399,15 @@ namespace UnityMCP.Editor
             job.CompletedTests = Math.Max(job.CompletedTests,
                 totalPassed + totalFailed + totalSkipped + totalInconclusive);
             job.TotalTests = Math.Max(job.TotalTests, job.CompletedTests);
+            if (leafResults != null)
+            {
+                job.AllResults = leafResults.ToList();
+                job.FailuresSoFar = job.AllResults
+                    .Where(result => result.Status == TestStatus.Failed.ToString() ||
+                                     result.Status == TestStatus.Inconclusive.ToString())
+                    .Take(MaxFailuresTracked)
+                    .ToList();
+            }
             FinalizeJob(job, totalDuration, false);
 
             Debug.Log($"[MCP TestRunner] Job {job.JobId}: Finished — " +
@@ -620,7 +629,9 @@ namespace UnityMCP.Editor
                         { "skippedCount", j.SkippedCount },
                         { "totalDuration", j.TotalDuration },
                         { "completionRecovered", j.CompletionRecovered },
-                        { "error", j.Error ?? "" }
+                        { "error", j.Error ?? "" },
+                        { "failures", j.FailuresSoFar.Take(MaxFailuresTracked)
+                            .Select(SerializeTestResult).Cast<object>().ToList() }
                     });
                 }
 
@@ -682,6 +693,15 @@ namespace UnityMCP.Editor
                         job.CompletedAt = completed;
                     if (!string.IsNullOrEmpty(dict["error"]?.ToString()))
                         job.Error = dict["error"].ToString();
+                    if (dict.TryGetValue("failures", out object rawFailures) &&
+                        rawFailures is List<object> failures)
+                    {
+                        job.FailuresSoFar = failures.Select(MCPResponse.ToDictionary)
+                            .Where(values => values != null)
+                            .Select(DeserializeTestResult)
+                            .ToList();
+                        job.AllResults = job.FailuresSoFar.ToList();
+                    }
 
                     // If job was running but survived a domain reload, mark as failed
                     if (job.Status == TestJobStatus.Running)
@@ -717,6 +737,36 @@ namespace UnityMCP.Editor
 
             foreach (var id in expired)
                 _jobs.Remove(id);
+        }
+
+        private static Dictionary<string, object> SerializeTestResult(TestResult result)
+        {
+            return new Dictionary<string, object>
+            {
+                { "fullName", result.FullName ?? "" },
+                { "name", result.Name ?? "" },
+                { "status", result.Status ?? "" },
+                { "duration", result.Duration },
+                { "message", result.Message ?? "" },
+                { "stackTrace", result.StackTrace ?? "" },
+            };
+        }
+
+        private static TestResult DeserializeTestResult(Dictionary<string, object> values)
+        {
+            return new TestResult
+            {
+                FullName = values.TryGetValue("fullName", out object fullName) ? fullName?.ToString() : "",
+                Name = values.TryGetValue("name", out object name) ? name?.ToString() : "",
+                Status = values.TryGetValue("status", out object status) ? status?.ToString() : "",
+                Duration = values.TryGetValue("duration", out object duration) && duration != null
+                    ? Convert.ToDouble(duration)
+                    : 0,
+                Message = values.TryGetValue("message", out object message) ? message?.ToString() : "",
+                StackTrace = values.TryGetValue("stackTrace", out object stackTrace)
+                    ? stackTrace?.ToString()
+                    : "",
+            };
         }
 
         // ─── PlayMode Domain Reload Guard ────────────────────────────
@@ -846,10 +896,12 @@ namespace UnityMCP.Editor
         {
             int passed = 0, failed = 0, skipped = 0, inconclusive = 0;
             double totalDuration = result.Duration;
+            var leafResults = new List<MCPTestRunnerCommands.TestResult>();
 
-            CountResults(result, ref passed, ref failed, ref skipped, ref inconclusive);
+            CountResults(result, ref passed, ref failed, ref skipped, ref inconclusive, leafResults);
 
-            MCPTestRunnerCommands.OnRunFinished(passed, failed, skipped, inconclusive, totalDuration);
+            MCPTestRunnerCommands.OnRunFinished(passed, failed, skipped, inconclusive, totalDuration,
+                leafResults);
         }
 
         public void TestStarted(ITestAdaptor test)
@@ -885,10 +937,20 @@ namespace UnityMCP.Editor
         }
 
         private static void CountResults(ITestResultAdaptor result,
-            ref int passed, ref int failed, ref int skipped, ref int inconclusive)
+            ref int passed, ref int failed, ref int skipped, ref int inconclusive,
+            ICollection<MCPTestRunnerCommands.TestResult> leafResults)
         {
             if (!result.Test.HasChildren)
             {
+                leafResults.Add(new MCPTestRunnerCommands.TestResult
+                {
+                    FullName = result.Test.FullName,
+                    Name = result.Test.Name,
+                    Status = result.TestStatus.ToString(),
+                    Duration = result.Duration,
+                    Message = result.Message,
+                    StackTrace = result.StackTrace,
+                });
                 switch (result.TestStatus)
                 {
                     case TestStatus.Passed:
@@ -908,7 +970,7 @@ namespace UnityMCP.Editor
             else if (result.Children != null)
             {
                 foreach (var child in result.Children)
-                    CountResults(child, ref passed, ref failed, ref skipped, ref inconclusive);
+                    CountResults(child, ref passed, ref failed, ref skipped, ref inconclusive, leafResults);
             }
         }
     }

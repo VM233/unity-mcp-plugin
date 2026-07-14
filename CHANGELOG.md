@@ -23,6 +23,7 @@ All notable changes to this package will be documented in this file.
 - Added owner-scoped persistent job history for asset refresh, Player Build, Unity Test Runner, and package-test workflows.
 - Added queue cancellation, stable request idempotency, per-agent/global capacity limits, metadata-driven read scheduling, and general domain-reload restoration. Interrupted reads resume; interrupted mutations become explicit non-retryable `UncertainAfterReload` results.
 - Made `asset/refresh` reuse its persisted job and queue ticket for the same owner/request across a domain reload, while persisting `Executing` before every Unity action so unrelated mutations are never replayed as if they had not started.
+- Rebuilt terminal Unity Test Runner details from the final result tree and persisted failure diagnostics across reloads, so package-test failures retain their names, messages, and stacks after manifest restoration.
 - Replaced runtime C# source parsing with an explicit route registry guarded by regression tests, and filtered optional Localization, Shader Graph, Amplify, and UMA routes by live capability detection.
 - Made project-tool first-class exposure explicit through `MCPProjectToolAttribute.FirstClass`; unselected project tools remain available through paginated discovery and `project-tools/execute`.
 - Required mutating requests to bind to an expected Unity project, with the MCP server automatically forwarding selected-instance identity and stable idempotency keys.
