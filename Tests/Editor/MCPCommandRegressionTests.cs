@@ -1401,7 +1401,8 @@ namespace UnityMCP.Editor.Tests
                 "asset/create-folder", new Dictionary<string, object>(), null
             };
             Assert.That(method.Invoke(null, writeArguments), Is.EqualTo(true));
-            Assert.That(RequireDictionary(writeArguments[2])["error"], Is.EqualTo("target_project_required"));
+            Assert.That(RequireDictionary(writeArguments[2])["errorCode"],
+                Is.EqualTo("target_project_required"));
 
             var readArguments = new object[]
             {

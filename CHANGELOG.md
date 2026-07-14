@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.2.2] - 2026-07-14
+
+- Normalized unbound and wrong-project rejection payloads with stable `target_project_required` and `wrong_unity_project` error codes.
+
 ## [3.2.1] - 2026-07-14
 
 - Fixed package-test compilation by keeping regression access to internal refresh and localization types reflection-based.

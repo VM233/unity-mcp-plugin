@@ -713,17 +713,16 @@ namespace UnityMCP.Editor
                 if (!MCPToolMetadata.RouteRequiresTargetBinding(route))
                     return false;
 
-                response = new Dictionary<string, object>
+                response = MCPResponse.Error(
+                    "Mutating requests must bind to a Unity project by expectedProjectPath or expectedProjectName.",
+                    "target_project_required", false, new Dictionary<string, object>
                 {
-                    { "success", false },
-                    { "error", "target_project_required" },
-                    { "message", "Mutating requests must bind to a Unity project by expectedProjectPath or expectedProjectName." },
                     { "route", route },
                     { "actualProjectPath", MCPInstanceRegistry.CurrentProjectPath },
                     { "actualProjectName", MCPInstanceRegistry.CurrentProjectName },
                     { "actualPort", ActivePort },
                     { "currentInstance", MCPInstanceRegistry.GetCurrentInstanceInfo() }
-                };
+                });
                 return true;
             }
 

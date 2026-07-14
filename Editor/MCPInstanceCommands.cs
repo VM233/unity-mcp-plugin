@@ -115,11 +115,10 @@ namespace UnityMCP.Editor
 
         private static object BuildMismatchResult(string route, string expectedProjectPath, string expectedProjectName)
         {
-            return new Dictionary<string, object>
+            return MCPResponse.Error(
+                "This request targeted a different Unity project. Resolve the correct instance by project path and retry with its port.",
+                "wrong_unity_project", false, new Dictionary<string, object>
             {
-                { "success", false },
-                { "error", "wrong_unity_project" },
-                { "message", "This request targeted a different Unity project. Resolve the correct instance by project path and retry with its port." },
                 { "route", route },
                 { "expectedProjectPath", expectedProjectPath ?? "" },
                 { "expectedProjectName", expectedProjectName ?? "" },
@@ -127,7 +126,7 @@ namespace UnityMCP.Editor
                 { "actualProjectName", MCPInstanceRegistry.CurrentProjectName },
                 { "actualPort", MCPBridgeServer.ActivePort },
                 { "currentInstance", MCPInstanceRegistry.GetCurrentInstanceInfo() }
-            };
+            });
         }
 
         private static IEnumerable<Dictionary<string, object>> GetMatches(
