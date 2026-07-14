@@ -109,6 +109,18 @@ http://127.0.0.1:7890/api/ping
 | Player Build | `unity_build_run_test` | `build/run-test` | Start a persistent Player Build job and optionally run the built player. |
 | Player Build | `unity_build_get_job` | `build/get-job` | Poll the Player Build job for its final BuildReport and optional run result. |
 | Package management | `unity_packages_update_git` | `packages/update-git` | Update a Git package through a deferred route; same-commit updates skip Unity Package Manager resolve by default. |
+| Package management | `unity_packages_add` | `packages/add` | Add a registry, Git, local, or tarball package through Unity Package Manager. |
+| Package management | `unity_packages_remove` | `packages/remove` | Remove an installed package without blocking the Editor main thread. |
+| Package management | `unity_packages_search` | `packages/search` | Search the package registry with bounded pagination. |
+| Asset workspace | `unity_asset_create_folder` | `asset/create-folder` | Ensure an Assets folder hierarchy, with dry-run support. |
+| Asset workspace | `unity_asset_copy` | `asset/copy` | Copy one or more Unity assets with overwrite snapshots and rollback. |
+| Asset workspace | `unity_asset_dependencies` | `asset/dependencies` | Read paginated incoming and outgoing asset references. |
+| Asset workspace | `unity_asset_transaction` | `asset/transaction` | Apply folder, copy, move, delete, and serialized edits as a rollback-capable transaction. |
+| UI Toolkit authoring | `unity_uitoolkit_edit_uxml` | `uitoolkit/edit-uxml` | Edit UXML elements, attributes, classes, hierarchy, and text structurally. |
+| UI Toolkit authoring | `unity_uitoolkit_edit_uss` | `uitoolkit/edit-uss` | Upsert/remove USS selectors and declarations structurally. |
+| UI Toolkit authoring | `unity_uitoolkit_authoring_transaction` | `uitoolkit/authoring-transaction` | Apply multi-file UXML/USS edits with rollback. |
+| Jobs | `unity_jobs_list` | `jobs/list` | List paginated job history owned by the calling agent. |
+| Jobs | `unity_jobs_get` | `jobs/get` | Read one owned historical job snapshot. |
 | Project extensions | `unity_project_tools_list` | `project-tools/list` | List project-defined extension tools from loaded Unity editor assemblies. |
 | Project extensions | `unity_project_tools_execute` | `project-tools/execute` | Execute a project-defined extension tool by `toolName`. |
 
@@ -125,7 +137,8 @@ public static class ProjectMcpTools
     [MCPProjectTool("battleidle/add-property",
         Description = "Create and register a BattleIdle property.",
         InputSchemaJson = "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}",
-        MutatesAssets = true)]
+        MutatesAssets = true,
+        FirstClass = true)]
     public static object AddProperty(Dictionary<string, object> args)
     {
         // Project-specific AssetDatabase / prefab / settings edits go here.
@@ -134,7 +147,7 @@ public static class ProjectMcpTools
 }
 ```
 
-Project tools are exposed in metadata as first-class concrete routes and tool names, using their declared schema:
+Project tools opt into first-class concrete exposure with `FirstClass = true`, using their declared schema:
 
 ```json
 {
@@ -152,9 +165,9 @@ Project tools are exposed in metadata as first-class concrete routes and tool na
 }
 ```
 
-Declare the behavior explicitly: use `ReadOnly = true` for inspection, `MutatesAssets = true` for serialized project content, and `MutatesRuntime = true` for Play Mode state changes. Runtime mutations are first-class without being mislabeled as asset edits.
+Declare the behavior explicitly: use exactly one of `ReadOnly = true`, `MutatesAssets = true`, or `MutatesRuntime = true`. A first-class project tool must declare one of these operation kinds. Tools without `FirstClass = true` stay out of the default tool surface and remain discoverable through paginated `project-tools/list`.
 
-Older clients can still call `project-tools/list` to discover tools and `project-tools/execute` with:
+Execute a lazily exposed project tool through `project-tools/execute` with:
 
 ```json
 {
@@ -165,20 +178,20 @@ Older clients can still call `project-tools/list` to discover tools and `project
 }
 ```
 
-If an MCP client has stale tool metadata, use the concrete direct route `project-tools/call/battleidle/add-property` first. Use `advanced/execute` only as a fallback for clients that cannot call newly exposed routes yet.
+Concrete `project-tools/call/...` routes are reserved for tools that explicitly opt into first-class exposure; `project-tools/execute` is the canonical route for the remaining project catalog.
 
 ## Notes
 
 - Use the upstream README for the general feature list and MCP setup flow.
 - `_meta/tools` defaults to compact first-class metadata, 50 tools per page, and no schemas. Use `includeSchema=true`, `offset`, `limit`, and optional `category` as needed. Legacy duplicate collections are returned only with `compact=false&includeCollections=true`.
-- Error payloads are normalized with `success=false`, `errorCode`, `message`, and `retryable`. Successful payloads keep their existing shape for compatibility.
-- Queue tickets now keep validated atomic status snapshots through Unity domain reloads. `wait/editor-idle` keeps its original ticket ID, remaining deadline, and terminal result across reloads; duplicate reconnect/replay requests reuse the active wait instead of creating another ticket. Other non-resumable tickets return `ticket_lost_after_reload` with `retryable=true` instead of an ambiguous expired-ticket response.
-- For multiple Unity projects open at once, call `instance/resolve` with the target `projectPath`, then send later calls to the returned `port`. Also pass `expectedProjectPath` on mutating calls; the Editor rejects the request with `wrong_unity_project` if it reaches the wrong project.
+- Error payloads are normalized with `success=false`, `errorCode`, `message`, and `retryable`.
+- Queue tickets keep atomic status snapshots through Unity domain reloads. Queued work and interrupted reads resume with the same ticket; an interrupted mutation returns `UncertainAfterReload` and requires target reconciliation before a new request. Stable idempotency keys prevent retry submissions from duplicating work.
+- For multiple Unity projects open at once, select or resolve the target instance before mutation. The MCP server forwards its path/name automatically, and the Editor rejects unbound mutations with `target_project_required` or mismatches with `wrong_unity_project`.
 - `unity_wait_editor_idle` waits for both consecutive idle editor frames and a continuous idle time window (`stableMs`, default `500`) to avoid returning before a delayed compile or asset import starts.
 - `mcp/health` is intended for diagnosing editor slowdown caused by MCP usage. It does not stop the bridge; use `mcp/set-autostart` to prevent the bridge from coming back automatically after reload.
 - `texture/import-image` is the preferred route for Figma/exported UI images: pass `sourceUrl` or `sourcePath`, `targetPath` or `targetFolder` + `assetName`, then use `preset=pixel-sprite` and `border` when needed.
 - For UI visual QA, use `uitoolkit/locate-element` first to confirm the measured semantic target, then `uitoolkit/capture-element` or `uitoolkit/compare-element` for local crops. Use `uitoolkit/generated-children` when controls such as `TabView`, `DropdownField`, `Scroller`, or `ToggleButtonGroup` may be drawing default child indicators.
-- Prefab asset mutation tools return a summary-only `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it or request `prefabFileDiffMode=minimal/full` when line details are required. Use `unity_prefab_asset_transaction_edit` for multi-step edits; the legacy batch alias remains available through the advanced catalog.
+- Prefab asset mutation tools return a summary-only `prefabFileDiff` by default. Pass `includePrefabFileDiff=false` to suppress it or request `prefabFileDiffMode=minimal/full` when line details are required. Use `unity_prefab_asset_transaction_edit` for multi-step edits.
 - `uitoolkit/builder-preview` opens and screenshots UI Builder. Unity does not expose a stable public UI Builder zoom API, so the route records requested zoom values but does not use reflection to force the viewport zoom.
 - `build/run-test` returns a job ID before `BuildPipeline.BuildPlayer` begins. Poll `build/get-job`; the terminal result contains the authoritative BuildReport, so do not force an AssetDatabase refresh after a successful build. Keep `overwrite=true` for repeat tests so output folders do not accumulate.
 - `asset/refresh` likewise returns a job ID. Poll `asset/get-refresh-job`; if scripts trigger a domain reload, the persisted workflow resumes after the Editor becomes idle instead of losing the active MCP response.

@@ -32,6 +32,16 @@ namespace UnityMCP.Editor
         public static object Start(Dictionary<string, object> args)
         {
             bool clearStuck = GetBool(args, "clearStuck", false);
+            if (_job != null && !_job.IsTerminal && !IsOwnedBy(_job.Arguments, args))
+                return MCPResponse.Error("Asset refresh job belongs to another agent.",
+                    "job_owner_mismatch");
+            if (_job != null && !clearStuck && IsSameRequest(_job.Arguments, args))
+            {
+                var reused = BuildResponse(_job);
+                reused["reused"] = true;
+                return reused;
+            }
+
             if (_job != null && !_job.IsTerminal && !clearStuck)
             {
                 var active = BuildResponse(_job);
@@ -58,12 +68,43 @@ namespace UnityMCP.Editor
             return BuildResponse(_job);
         }
 
+        private static bool IsSameRequest(Dictionary<string, object> existingArgs,
+            Dictionary<string, object> requestedArgs)
+        {
+            string existingRequestId = GetString(existingArgs, "_requestId");
+            string requestedRequestId = GetString(requestedArgs, "_requestId");
+            if (string.IsNullOrEmpty(existingRequestId) || string.IsNullOrEmpty(requestedRequestId) ||
+                !string.Equals(existingRequestId, requestedRequestId, StringComparison.Ordinal))
+                return false;
+
+            string existingOwner = GetString(existingArgs, "_agentId");
+            string requestedOwner = GetString(requestedArgs, "_agentId");
+            return string.Equals(existingOwner, requestedOwner, StringComparison.Ordinal);
+        }
+
+        private static bool IsOwnedBy(Dictionary<string, object> existingArgs,
+            Dictionary<string, object> requestedArgs)
+        {
+            string owner = GetString(existingArgs, "_agentId");
+            string requester = GetString(requestedArgs, "_agentId");
+            if (string.IsNullOrEmpty(owner)) owner = "anonymous";
+            if (string.IsNullOrEmpty(requester)) requester = "anonymous";
+            return string.Equals(owner, requester, StringComparison.Ordinal);
+        }
+
         public static object Get(Dictionary<string, object> args)
         {
             if (_job == null)
                 _job = LoadJob();
             if (_job == null)
                 return new { error = "No AssetDatabase refresh job was found." };
+            string owner = _job.Arguments != null && _job.Arguments.TryGetValue("_agentId", out object ownerValue)
+                ? ownerValue?.ToString()
+                : "anonymous";
+            string requester = GetString(args, "_agentId");
+            if (string.IsNullOrEmpty(requester)) requester = "anonymous";
+            if (!string.Equals(owner, requester, StringComparison.Ordinal))
+                return MCPResponse.Error("Asset refresh job belongs to another agent.", "job_owner_mismatch");
 
             string jobId = GetString(args, "jobId");
             if (!string.IsNullOrEmpty(jobId) && jobId != _job.JobId)
@@ -219,6 +260,10 @@ namespace UnityMCP.Editor
             string path = GetJobPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             File.WriteAllText(path, MiniJson.Serialize(_job.ToDictionary()));
+            string owner = _job.Arguments != null && _job.Arguments.TryGetValue("_agentId", out object value)
+                ? value?.ToString()
+                : "anonymous";
+            MCPJobHistory.Record("asset-refresh", _job.JobId, owner, _job.Status, BuildResponse(_job));
         }
 
         private static AssetRefreshJob LoadJob()

@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
-using UnityEditor;
-using UnityEngine;
 
 namespace UnityMCP.Editor
 {
@@ -102,6 +99,10 @@ namespace UnityMCP.Editor
             var profiles = new Dictionary<string, ToolProfile>(StringComparer.Ordinal);
 
             AddProfile(profiles, ToolProfile.FirstClass(readOnly: true),
+                "_meta/capabilities",
+                "queue/info",
+                "queue/status",
+                "asset/list",
                 "scene/hierarchy",
                 "serialized-object/get",
                 "prefab-asset/get-properties",
@@ -129,8 +130,11 @@ namespace UnityMCP.Editor
                 "texture/info",
                 "texture/find-duplicates",
                 "animation/transition-info",
+                "asset/dependencies",
                 "asset/get-refresh-job",
                 "build/get-job",
+                "jobs/list",
+                "jobs/get",
                 "testing/get-job",
                 "testing/get-package-job",
                 "project-tools/list");
@@ -166,6 +170,9 @@ namespace UnityMCP.Editor
                 "asset/rename",
                 "asset/move",
                 "asset/export-unitypackage",
+                "asset/create-folder",
+                "asset/copy",
+                "asset/transaction",
                 "texture/apply-sprite-preset",
                 "animation/update-state",
                 "animation/update-transition",
@@ -173,6 +180,9 @@ namespace UnityMCP.Editor
                 "uitoolkit/runtime-repaint",
                 "uitoolkit/refresh",
                 "uitoolkit/assert-layout",
+                "uitoolkit/edit-uxml",
+                "uitoolkit/edit-uss",
+                "uitoolkit/authoring-transaction",
                 "localization/create-locale",
                 "localization/create-collection",
                 "localization/upsert-entry",
@@ -185,20 +195,29 @@ namespace UnityMCP.Editor
                     mayReloadDomain: true),
                 "asset/refresh");
 
-            AddProfile(profiles, ToolProfile.FirstClass(),
+            AddProfile(profiles, ToolProfile.FirstClass(mutatesRuntime: true),
                 "localization/set-selected-locale",
                 "component/set-property",
                 "component/set-reference");
 
+            AddProfile(profiles, ToolProfile.FirstClass(),
+                "queue/cancel");
+
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true,
                     mayReloadDomain: true),
                 "packages/update-git",
+                "packages/add",
+                "packages/remove",
                 "testing/run-package-tests");
+
+            AddProfile(profiles, ToolProfile.FirstClass(readOnly: true, longRunning: true),
+                "packages/search");
 
             AddProfile(profiles, ToolProfile.Fallback(),
                 "advanced/execute");
 
-            AddProfile(profiles, ToolProfile.FirstClass(),
+            AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, mutatesRuntime: true,
+                    dangerous: true),
                 "project-tools/execute");
 
             return profiles;
@@ -363,9 +382,6 @@ namespace UnityMCP.Editor
                 return;
 
             _cachedFirstClassTools = _cachedRoutes
-                .Where(route => route.StartsWith("project-tools/call/", StringComparison.Ordinal) ||
-                                ToolProfiles.TryGetValue(route, out var profile) &&
-                                profile.Exposure == ExposureFirstClass)
                 .Select(BuildToolMetadata)
                 .Where(IsFirstClassTool)
                 .ToList();
@@ -385,103 +401,15 @@ namespace UnityMCP.Editor
 
         private static List<string> GetRegisteredRouteList()
         {
-            var routes = ExtractRouteCasesFromSource();
+            var routes = MCPRouteRegistry.BuiltInRoutes.ToList();
             routes.AddRange(MCPBridgeServer.DeferredRouteNames);
             routes.AddRange(MCPProjectToolCommands.GetDirectRoutePaths());
             return routes
                 .Where(route => !string.IsNullOrEmpty(route))
-                .Where(route => IsRouteAvailable(route, MCPLocalizationBridge.IsAvailable))
+                .Where(MCPCapabilityRegistry.IsRouteAvailable)
                 .Distinct()
                 .OrderBy(route => route)
                 .ToList();
-        }
-
-        private static bool IsRouteAvailable(string route, bool localizationAvailable)
-        {
-            return localizationAvailable ||
-                   !route.StartsWith("localization/", StringComparison.Ordinal);
-        }
-
-        private static List<string> ExtractRouteCasesFromSource()
-        {
-            try
-            {
-                foreach (string absolutePath in GetSourceCandidatePaths())
-                {
-                    if (!File.Exists(absolutePath))
-                        continue;
-
-                    string source = File.ReadAllText(absolutePath);
-                    var routes = ExtractRouteCases(source);
-
-                    if (routes.Count > 0)
-                        return routes;
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[Unity MCP] Failed to extract routes from source: {ex.Message}");
-            }
-
-            return new List<string>();
-        }
-
-        private static IEnumerable<string> GetSourceCandidatePaths()
-        {
-            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
-
-            var packageInfo = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(MCPBridgeServer).Assembly);
-            if (!string.IsNullOrEmpty(packageInfo?.resolvedPath))
-                yield return Path.Combine(packageInfo.resolvedPath, "Editor", "MCPBridgeServer.cs");
-
-            yield return Path.Combine(projectRoot, "Packages", "com.anklebreaker.unity-mcp", "Editor",
-                "MCPBridgeServer.cs");
-
-            string packageCacheRoot = Path.Combine(projectRoot, "Library", "PackageCache");
-            if (Directory.Exists(packageCacheRoot))
-            {
-                foreach (string path in Directory.EnumerateFiles(packageCacheRoot, "MCPBridgeServer.cs",
-                             SearchOption.AllDirectories))
-                {
-                    if (path.Replace('\\', '/').Contains("com.anklebreaker.unity-mcp"))
-                        yield return path;
-                }
-            }
-
-            foreach (string guid in AssetDatabase.FindAssets("MCPBridgeServer t:MonoScript"))
-            {
-                string path = AssetDatabase.GUIDToAssetPath(guid);
-                if (!path.EndsWith("MCPBridgeServer.cs", StringComparison.Ordinal))
-                    continue;
-
-                yield return Path.IsPathRooted(path)
-                    ? path
-                    : Path.Combine(projectRoot, path);
-            }
-        }
-
-        private static List<string> ExtractRouteCases(string source)
-        {
-            int methodIndex = source.LastIndexOf("private static object RouteRequest(string path", StringComparison.Ordinal);
-            if (methodIndex < 0)
-                return new List<string>();
-
-            int switchIndex = source.IndexOf("switch (path)", methodIndex, StringComparison.Ordinal);
-            if (switchIndex < 0)
-                return new List<string>();
-
-            int defaultIndex = source.IndexOf("default:", switchIndex, StringComparison.Ordinal);
-            if (defaultIndex < 0)
-                defaultIndex = source.Length;
-
-            string switchBlock = source.Substring(switchIndex, defaultIndex - switchIndex);
-            var routes = new List<string>();
-            foreach (Match match in Regex.Matches(switchBlock, "case\\s+\"([^\"]+)\"\\s*:"))
-            {
-                routes.Add(match.Groups[1].Value);
-            }
-
-            return routes;
         }
 
         private static Dictionary<string, object> BuildToolMetadata(string route)
@@ -500,6 +428,7 @@ namespace UnityMCP.Editor
                 { "toolName", toolName },
                 { "name", toolName },
                 { "category", ExtractCategory(route) },
+                { "capability", MCPCapabilityRegistry.GetCapabilityName(route) },
                 { "description", description },
                 { "inputSchema", inputSchema },
                 { "firstClass", isFirstClass },
@@ -538,15 +467,13 @@ namespace UnityMCP.Editor
             string legacyToolName = "unity_project_tool_" + NormalizeProjectToolName(projectToolName);
             bool explicitMutatesAssets = GetBool(projectTool, "mutatesAssets", false);
             bool mutatesRuntime = GetBool(projectTool, "mutatesRuntime", false);
-            bool readOnly = GetBool(projectTool, "readOnly", false) ||
-                            (!explicitMutatesAssets && InferProjectToolReadOnly(projectToolName));
-            bool mutatesAssets = explicitMutatesAssets ||
-                                 (!readOnly && InferProjectToolMutatesAssets(projectToolName));
+            bool readOnly = GetBool(projectTool, "readOnly", false);
+            bool mutatesAssets = explicitMutatesAssets;
             bool dangerous = GetBool(projectTool, "dangerous", false);
             bool longRunning = GetBool(projectTool, "longRunning", false);
             bool mayReloadDomain = GetBool(projectTool, "mayReloadDomain", false);
             bool requiresPlayMode = GetBool(projectTool, "requiresPlayMode", false);
-            bool isFirstClass = readOnly || mutatesAssets || mutatesRuntime;
+            bool isFirstClass = GetBool(projectTool, "firstClass", false);
             var profile = new ToolProfile
             {
                 Exposure = isFirstClass ? ExposureFirstClass : ExposureLazy,
@@ -566,6 +493,7 @@ namespace UnityMCP.Editor
                 { "toolName", toolName },
                 { "name", toolName },
                 { "category", "project-tools" },
+                { "capability", "project" },
                 { "description", string.IsNullOrEmpty(description) ? $"Project MCP tool: {projectToolName}" : description },
                 { "inputSchema", inputSchema },
                 { "projectToolName", projectToolName },
@@ -597,47 +525,51 @@ namespace UnityMCP.Editor
             return bool.TryParse(value.ToString(), out var parsed) ? parsed : fallback;
         }
 
-        private static bool InferProjectToolReadOnly(string projectToolName)
-        {
-            string name = (projectToolName ?? "").ToLowerInvariant();
-            string action = name.Contains("/") ? name.Substring(name.LastIndexOf('/') + 1) : name;
-            return action.StartsWith("get-") ||
-                   action.StartsWith("list-") ||
-                   action.StartsWith("find-") ||
-                   action.StartsWith("inspect-") ||
-                   action.StartsWith("query-") ||
-                   action.EndsWith("-summary") ||
-                   action.EndsWith("-state") ||
-                   action.EndsWith("-info") ||
-                   action.EndsWith("-status");
-        }
-
-        private static bool InferProjectToolMutatesAssets(string projectToolName)
-        {
-            string name = (projectToolName ?? "").ToLowerInvariant();
-            string action = name.Contains("/") ? name.Substring(name.LastIndexOf('/') + 1) : name;
-            bool assetLike = action.Contains("asset") ||
-                             action.Contains("prefab") ||
-                             action.Contains("resource") ||
-                             action.Contains("config");
-
-            if (!assetLike)
-                return false;
-
-            return action.StartsWith("add-") ||
-                   action.StartsWith("create-") ||
-                   action.StartsWith("delete-") ||
-                   action.StartsWith("move-") ||
-                   action.StartsWith("rename-") ||
-                   action.StartsWith("remove-") ||
-                   action.StartsWith("replace-") ||
-                   action.StartsWith("set-") ||
-                   action.StartsWith("update-");
-        }
-
         private static ToolProfile GetToolProfile(string route)
         {
             return ToolProfiles.TryGetValue(route, out var profile) ? profile : ToolProfile.Lazy();
+        }
+
+        internal static bool IsRouteReadOnly(string route)
+        {
+            if (MCPProjectToolCommands.TryGetToolDictionaryForDirectRoute(route, out var projectTool))
+                return GetBool(projectTool, "readOnly", false);
+            return GetToolProfile(route).ReadOnly;
+        }
+
+        internal static bool RouteMutatesAssets(string route)
+        {
+            if (MCPProjectToolCommands.TryGetToolDictionaryForDirectRoute(route, out var projectTool))
+                return GetBool(projectTool, "mutatesAssets", false);
+            return GetToolProfile(route).MutatesAssets;
+        }
+
+        internal static bool RouteMutatesRuntime(string route)
+        {
+            if (MCPProjectToolCommands.TryGetToolDictionaryForDirectRoute(route, out var projectTool))
+                return GetBool(projectTool, "mutatesRuntime", false);
+            return GetToolProfile(route).MutatesRuntime;
+        }
+
+        internal static bool RouteIsDangerous(string route)
+        {
+            if (MCPProjectToolCommands.TryGetToolDictionaryForDirectRoute(route, out var projectTool))
+                return GetBool(projectTool, "dangerous", false);
+            return GetToolProfile(route).Dangerous;
+        }
+
+        internal static bool RouteRequiresTargetBinding(string route)
+        {
+            // Unknown/lazy routes are treated conservatively as writes. A route may skip
+            // target binding only by declaring itself read-only in metadata.
+            return !IsRouteReadOnly(route);
+        }
+
+        internal static bool RouteMayReloadDomain(string route)
+        {
+            if (MCPProjectToolCommands.TryGetToolDictionaryForDirectRoute(route, out var projectTool))
+                return GetBool(projectTool, "mayReloadDomain", false);
+            return GetToolProfile(route).MayReloadDomain;
         }
 
         private static Dictionary<string, object> ToMcpToolDescriptor(Dictionary<string, object> tool,
@@ -846,6 +778,14 @@ namespace UnityMCP.Editor
                     return "Preflight and move one or more Unity assets with configurable execution, GUID preservation, and rollback.";
                 case "asset/export-unitypackage":
                     return "Export one or more Unity assets to a .unitypackage file using AssetDatabase.ExportPackage.";
+                case "asset/create-folder":
+                    return "Create or ensure an Assets folder hierarchy through AssetDatabase, with dry-run support.";
+                case "asset/copy":
+                    return "Copy one or more Unity asset files with parent-folder creation, overwrite snapshots, and rollback.";
+                case "asset/dependencies":
+                    return "Read paginated outgoing dependencies and incoming references for an asset.";
+                case "asset/transaction":
+                    return "Apply folder, copy, move, delete, and serialized-property edits as one rollback-capable asset transaction.";
                 case "console/query":
                     return "Query recent Unity Console entries with time, source, message, stack, and last-Play filters.";
                 case "debug/attach-unity":
@@ -920,6 +860,18 @@ namespace UnityMCP.Editor
                     return "Assert UI Toolkit runtime layout constraints such as edge touching, containment, and size.";
                 case "uitoolkit/builder-preview":
                     return "Open a UXML asset in UI Builder, wait for the preview to settle, and optionally capture the UI Builder window.";
+                case "uitoolkit/edit-uxml":
+                    return "Structurally edit UXML elements by VisualElementPath or authored name, then synchronously reimport the asset.";
+                case "uitoolkit/edit-uss":
+                    return "Add, remove, or update USS selectors and declarations, then synchronously reimport the asset.";
+                case "uitoolkit/authoring-transaction":
+                    return "Apply UXML and USS edits across multiple files with atomic file snapshots and rollback.";
+                case "packages/add":
+                    return "Add a Unity package by registry name, Git URL, local path, or tarball and wait for Package Manager completion.";
+                case "packages/remove":
+                    return "Remove a Unity package dependency and wait for Package Manager completion.";
+                case "packages/search":
+                    return "Search Unity Package Manager registry packages with bounded results.";
                 case "screenshot/game":
                     return "Capture the current Game View, including while Play Mode is paused, and return only after the PNG is fully written and decodable.";
                 case "screenshot/crop":
@@ -968,6 +920,10 @@ namespace UnityMCP.Editor
                     return "Start a persistent Player build job, optionally run the executable, and return immediately with a job ID. Poll build/get-job for the final BuildReport; no post-build asset refresh is required.";
                 case "build/get-job":
                     return "Poll the current or latest persistent Player build job and return its final BuildReport and optional run result.";
+                case "jobs/list":
+                    return "List paginated persistent Unity MCP job history owned by the current agent.";
+                case "jobs/get":
+                    return "Get one persistent Unity MCP job snapshot with owner enforcement.";
                 case "animation/set-object-reference-curve":
                     return "Set AnimationClip ObjectReference keyframes, such as SpriteRenderer.m_Sprite.";
                 case "localization/status":
@@ -1002,6 +958,14 @@ namespace UnityMCP.Editor
                     return "List project-defined MCP extension tools discovered in loaded Unity editor assemblies.";
                 case "project-tools/execute":
                     return "Execute a project-defined MCP extension tool by toolName.";
+                case "queue/info":
+                    return "Inspect queue capacity, active work, and per-agent depth.";
+                case "queue/status":
+                    return "Read one owned queue ticket and its terminal result.";
+                case "queue/cancel":
+                    return "Cancel one owned queued request; executing Unity work is not preempted.";
+                case "_meta/capabilities":
+                    return "List core and optional Unity MCP capabilities detected in this project.";
                 default:
                     return $"Lazy Unity route: {route}";
             }
@@ -1011,6 +975,77 @@ namespace UnityMCP.Editor
         {
             switch (route)
             {
+                case "asset/list":
+                    return Schema(Props(
+                        Prop("folder", "string", "Folder to search. Defaults to Assets."),
+                        Prop("type", "string", "Optional Unity asset type filter."),
+                        Prop("search", "string", "Optional AssetDatabase search expression."),
+                        Prop("recursive", "boolean", "Include descendants. Defaults to true."),
+                        Prop("offset", "number", "Result offset."),
+                        Prop("limit", "number", "Maximum assets. Defaults to 100; capped at 500.")));
+                case "_meta/capabilities":
+                case "queue/info":
+                    return Schema(Props());
+                case "queue/status":
+                case "queue/cancel":
+                    return Schema(Props(
+                        Prop("ticketId", "number", "Owned queue ticket identifier.")), "ticketId");
+                case "asset/create-folder":
+                    return Schema(Props(
+                        Prop("path", "string", "Folder path below Assets/."),
+                        Prop("dryRun", "boolean", "Validate and report without creating folders.")), "path");
+                case "asset/copy":
+                    return Schema(Props(
+                        Prop("sourcePath", "string", "Single source asset path."),
+                        Prop("targetPath", "string", "Single target asset path."),
+                        Prop("copies", "array", "Optional batch of sourcePath/targetPath objects."),
+                        Prop("overwrite", "boolean", "Replace existing targets with rollback snapshots."),
+                        Prop("dryRun", "boolean", "Preflight without copying.")));
+                case "asset/dependencies":
+                    return Schema(Props(
+                        Prop("path", "string", "Asset whose references should be inspected."),
+                        Prop("direction", "string", "outgoing, incoming, or both. Defaults to both."),
+                        Prop("recursive", "boolean", "Use recursive dependency resolution. Defaults to true."),
+                        Prop("searchRoots", "array", "Folders scanned for incoming references. Defaults to Assets."),
+                        Prop("offset", "number", "Result offset."),
+                        Prop("limit", "number", "Maximum results. Defaults to 100; capped at 500.")), "path");
+                case "asset/transaction":
+                    return Schema(Props(
+                        Prop("operations", "array", "Ordered ensure-folder, copy, move, delete, or serialized-set operations."),
+                        Prop("requiredAssets", "array", "Assets or folders that must exist after execution."),
+                        Prop("referenceChecks", "array", "Postconditions containing assetPath and requiredDependencies."),
+                        Prop("dryRun", "boolean", "Preflight all operations without mutation.")), "operations");
+                case "uitoolkit/edit-uxml":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "UXML asset path below Assets/."),
+                        Prop("operations", "array", "Ordered structural UXML edit operations."),
+                        Prop("dryRun", "boolean", "Return the edit result without writing.")), "assetPath", "operations");
+                case "uitoolkit/edit-uss":
+                    return Schema(Props(
+                        Prop("assetPath", "string", "USS asset path below Assets/."),
+                        Prop("operations", "array", "Ordered selector/declaration edit operations."),
+                        Prop("dryRun", "boolean", "Return the edit result without writing.")), "assetPath", "operations");
+                case "uitoolkit/authoring-transaction":
+                    return Schema(Props(
+                        Prop("edits", "array", "Ordered edit objects with kind, assetPath, and operations."),
+                        Prop("dryRun", "boolean", "Validate all edits without writing.")), "edits");
+                case "packages/add":
+                    return Schema(Props(
+                        Prop("identifier", "string", "Registry package name, Git URL, local path, or tarball identifier.")),
+                        "identifier");
+                case "packages/list":
+                    return Schema(Props(
+                        Prop("offset", "number", "Result offset."),
+                        Prop("limit", "number", "Maximum packages. Defaults to 100; capped at 200.")));
+                case "packages/remove":
+                    return Schema(Props(
+                        Prop("name", "string", "Installed package name to remove.")), "name");
+                case "packages/search":
+                    return Schema(Props(
+                        Prop("query", "string", "Registry search query."),
+                        Prop("offset", "number", "Result offset."),
+                        Prop("limit", "number", "Maximum returned packages. Defaults to 50; capped at 200.")),
+                        "query");
                 case "advanced/execute":
                     return Schema(Props(
                         Prop("route", "string", "Unity route to execute, e.g. prefab-asset/transaction-edit or project-tools/execute."),
@@ -1135,6 +1170,16 @@ namespace UnityMCP.Editor
                     return Schema(Props(
                         Prop("enabled", "boolean", "Whether this Unity Editor instance should auto-start the MCP bridge after reload.")
                     ), "enabled");
+                case "jobs/list":
+                    return Schema(Props(
+                        Prop("jobType", "string", "Optional job type filter."),
+                        Prop("status", "string", "Optional status filter."),
+                        Prop("offset", "number", "Result offset."),
+                        Prop("limit", "number", "Maximum jobs. Defaults to 50; capped at 200.")));
+                case "jobs/get":
+                    return Schema(Props(
+                        Prop("jobId", "string", "Job identifier."),
+                        Prop("jobType", "string", "Optional job type disambiguator.")), "jobId");
                 case "instance/current":
                     return Schema(Props());
                 case "instance/list":
@@ -1546,7 +1591,9 @@ namespace UnityMCP.Editor
                         Prop("stateNames", "array", "States used by full mesh validation. Defaults to all layer states.")
                     ), "controllerPath");
                 case "project-tools/list":
-                    return Schema(Props());
+                    return Schema(Props(
+                        Prop("offset", "number", "Result offset."),
+                        Prop("limit", "number", "Maximum project tools. Defaults to 100; capped at 200.")));
                 case "project-tools/execute":
                     return Schema(Props(
                         Prop("toolName", "string", "Project tool name from project-tools/list."),

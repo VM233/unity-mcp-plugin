@@ -146,6 +146,9 @@ namespace UnityMCP.Editor
                 TestNames = testNames,
                 Categories = testCategories,
                 Assemblies = assemblyNames,
+                AgentId = args != null && args.TryGetValue("_agentId", out object agentValue)
+                    ? agentValue?.ToString()
+                    : "anonymous",
             };
 
             _jobs[job.JobId] = job;
@@ -219,6 +222,11 @@ namespace UnityMCP.Editor
                     { "availableJobs", _jobs.Keys.ToArray() }
                 };
             }
+            string requester = args != null && args.TryGetValue("_agentId", out object agentValue)
+                ? agentValue?.ToString()
+                : "anonymous";
+            if (!string.Equals(job.AgentId ?? "anonymous", requester, StringComparison.Ordinal))
+                return MCPResponse.Error("Test job belongs to another agent.", "job_owner_mismatch");
 
             bool includeDetails = args.ContainsKey("includeDetails") && Convert.ToBoolean(args["includeDetails"]);
             bool includeFailedOnly = args.ContainsKey("includeFailedOnly") && Convert.ToBoolean(args["includeFailedOnly"]);
@@ -600,6 +608,7 @@ namespace UnityMCP.Editor
                     jobList.Add(new Dictionary<string, object>
                     {
                         { "jobId", j.JobId },
+                        { "agentId", j.AgentId ?? "anonymous" },
                         { "mode", j.Mode.ToString() },
                         { "status", j.Status.ToString() },
                         { "startedAt", j.StartedAt.ToString("O") },
@@ -618,6 +627,9 @@ namespace UnityMCP.Editor
                 string json = MiniJson.Serialize(jobList);
                 SessionState.SetString(SessionKey, json);
                 SessionState.SetString(SessionCurrentKey, _currentJobId ?? "");
+                foreach (var job in _jobs.Values)
+                    MCPJobHistory.Record("unity-test", job.JobId, job.AgentId, job.Status.ToString(),
+                        SerializeJob(job, false, false, false, 0, 100, 20));
             }
             catch (Exception ex)
             {
@@ -646,6 +658,9 @@ namespace UnityMCP.Editor
                     var job = new TestJob
                     {
                         JobId = dict["jobId"].ToString(),
+                        AgentId = dict.TryGetValue("agentId", out object agentValue)
+                            ? agentValue?.ToString()
+                            : "anonymous",
                         Mode = Enum.TryParse<TestMode>(dict["mode"].ToString(), out var m) ? m : TestMode.EditMode,
                         Status = Enum.TryParse<TestJobStatus>(dict["status"].ToString(), out var s)
                             ? s
@@ -774,6 +789,7 @@ namespace UnityMCP.Editor
         internal class TestJob
         {
             public string JobId;
+            public string AgentId;
             public TestMode Mode;
             public TestJobStatus Status;
             public DateTime StartedAt;

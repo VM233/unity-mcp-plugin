@@ -29,7 +29,10 @@ namespace UnityMCP.Editor
         //  Ticket
         // ═══════════════════════════════════════════════════════
 
-        public enum RequestStatus { Queued, Executing, Completed, Failed, TimedOut, LostAfterReload }
+        public enum RequestStatus
+        {
+            Queued, Executing, Completed, Failed, TimedOut, Canceled, UncertainAfterReload
+        }
 
         public class RequestTicket
         {
@@ -53,6 +56,9 @@ namespace UnityMCP.Editor
             public bool   Retryable    { get; set; }
             public string RequestKey   { get; set; }
             public Dictionary<string, object> PersistentArguments { get; set; }
+            public string PersistentBody { get; set; }
+            public string PersistentMethod { get; set; }
+            public bool IsReadOnly { get; set; }
             public int ResumeCount { get; set; }
 
             // Timing
@@ -115,6 +121,8 @@ namespace UnityMCP.Editor
         private const string PersistentTicketSnapshotFileName = "request-queue-tickets-v2.json";
         public const int SyncTimeoutMs                = 30_000;
         private const int MaxReadBatchSize            = 5;
+        private const int MaxTotalQueuedRequests      = 256;
+        private const int MaxQueuedRequestsPerAgent   = 64;
 
         // ═══════════════════════════════════════════════════════
         //  Public API — Submit
@@ -126,8 +134,50 @@ namespace UnityMCP.Editor
         /// </summary>
         public static RequestTicket SubmitRequest(string agentId, string actionName, Func<object> action)
         {
+            return SubmitRequest(agentId, actionName, action, null, null, null,
+                MCPToolMetadata.IsRouteReadOnly(actionName), out _);
+        }
+
+        public static RequestTicket SubmitPersistentRequest(string agentId, string actionName, string method,
+            string body, string requestKey, out bool reused)
+        {
+            return SubmitRequest(agentId, actionName,
+                () => MCPBridgeServer.ExecutePersistedRoute(actionName, method, body), requestKey, body, method,
+                MCPToolMetadata.IsRouteReadOnly(actionName), out reused);
+        }
+
+        private static RequestTicket SubmitRequest(string agentId, string actionName, Func<object> action,
+            string requestKey, string persistentBody, string persistentMethod, bool readOnly, out bool reused)
+        {
             EnsurePersistentSnapshotsLoaded();
             if (string.IsNullOrEmpty(agentId)) agentId = "anonymous";
+            reused = false;
+
+            lock (_queueLock)
+            {
+                if (!string.IsNullOrEmpty(requestKey))
+                {
+                    var existing = FindActiveTicketByRequestKeyLocked(requestKey);
+                    if (existing != null)
+                    {
+                        reused = true;
+                        return existing;
+                    }
+                    foreach (var completed in _completedTickets.Values)
+                    {
+                        if (completed.RequestKey == requestKey)
+                        {
+                            reused = true;
+                            return completed;
+                        }
+                    }
+                }
+
+                int totalQueued = _agentQueues.Values.Sum(queue => queue.Count);
+                int agentQueued = _agentQueues.TryGetValue(agentId, out var agentQueue) ? agentQueue.Count : 0;
+                if (totalQueued >= MaxTotalQueuedRequests || agentQueued >= MaxQueuedRequestsPerAgent)
+                    return CreateRejectedTicketLocked(agentId, actionName, requestKey, totalQueued, agentQueued);
+            }
 
             var ticket = new RequestTicket
             {
@@ -137,6 +187,10 @@ namespace UnityMCP.Editor
                 Status      = RequestStatus.Queued,
                 SubmittedAt = DateTime.UtcNow,
                 Action      = action,
+                RequestKey = requestKey,
+                PersistentBody = persistentBody,
+                PersistentMethod = persistentMethod,
+                IsReadOnly = readOnly,
             };
 
             lock (_queueLock)
@@ -176,6 +230,26 @@ namespace UnityMCP.Editor
             return SubmitDeferredRequest(agentId, actionName, deferredAction, null, null, out _);
         }
 
+        public static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
+            Action<Action<object>, Action<object>> deferredAction, string requestKey, out bool reused)
+        {
+            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, requestKey, out reused);
+        }
+
+        public static RequestTicket SubmitPersistentDeferredRequest(string agentId, string actionName,
+            Action<Action<object>, Action<object>> deferredAction, string body, string requestKey, out bool reused)
+        {
+            var ticket = SubmitDeferredRequest(agentId, actionName, deferredAction, null, requestKey, out reused);
+            lock (_queueLock)
+            {
+                ticket.PersistentBody = body ?? "";
+                ticket.PersistentMethod = "POST";
+                ticket.IsReadOnly = MCPToolMetadata.IsRouteReadOnly(actionName);
+                PersistTicketSnapshotsLocked();
+            }
+            return ticket;
+        }
+
         public static RequestTicket SubmitResumableEditorIdleWait(string agentId,
             Dictionary<string, object> args, out bool reused)
         {
@@ -212,7 +286,22 @@ namespace UnityMCP.Editor
                         reused = true;
                         return existing;
                     }
+                    foreach (var completed in _completedTickets.Values)
+                    {
+                        if (completed.RequestKey == requestKey)
+                        {
+                            reused = true;
+                            return completed;
+                        }
+                    }
                 }
+
+                int totalQueued = _agentQueues.Values.Sum(queue => queue.Count);
+                int agentQueued = _agentQueues.TryGetValue(agentId, out var currentQueue)
+                    ? currentQueue.Count
+                    : 0;
+                if (totalQueued >= MaxTotalQueuedRequests || agentQueued >= MaxQueuedRequestsPerAgent)
+                    return CreateRejectedTicketLocked(agentId, actionName, requestKey, totalQueued, agentQueued);
 
                 var ticket = new RequestTicket
                 {
@@ -225,6 +314,7 @@ namespace UnityMCP.Editor
                     PersistentArguments = persistentArguments,
                     RequestKey = requestKey,
                     ResumeCount = GetInt(persistentArguments, "_resumeCount", 0),
+                    IsReadOnly = MCPToolMetadata.IsRouteReadOnly(actionName),
                 };
 
                 if (!_agentQueues.ContainsKey(agentId))
@@ -250,6 +340,13 @@ namespace UnityMCP.Editor
         public static object ExecuteWithTracking(string agentId, string actionName, Func<object> action)
         {
             var ticket = SubmitRequest(agentId, actionName, action);
+            return WaitForTicket(ticket);
+        }
+
+        public static object ExecutePersistentWithTracking(string agentId, string actionName, string method,
+            string body, string requestKey)
+        {
+            var ticket = SubmitPersistentRequest(agentId, actionName, method, body, requestKey, out _);
             return WaitForTicket(ticket);
         }
 
@@ -316,7 +413,9 @@ namespace UnityMCP.Editor
                 {
                     if (_completedTickets.TryGetValue(ticket.TicketId, out var done))
                     {
-                        if (done.Status == RequestStatus.Failed || done.Status == RequestStatus.TimedOut)
+                        if (done.Status == RequestStatus.Failed || done.Status == RequestStatus.TimedOut ||
+                            done.Status == RequestStatus.Canceled ||
+                            done.Status == RequestStatus.UncertainAfterReload)
                         {
                             var error = MCPResponse.NormalizeError(done.Result, done.ErrorCode ?? "request_failed",
                                 done.Retryable);
@@ -365,6 +464,8 @@ namespace UnityMCP.Editor
             if (maxRequests <= 0)
                 return 0;
 
+            EnsurePersistentSnapshotsLoaded();
+
             // --- Cleanup cadence ---
             if (++_frameTick >= CleanupEveryNFrames)
             {
@@ -389,6 +490,10 @@ namespace UnityMCP.Editor
                     t.Status = RequestStatus.Executing;
                     _executingTickets[t.TicketId] = t;
                 }
+                // Persist Executing before invoking Unity APIs. A domain reload can begin
+                // inside the action, so persisting only after it returns can replay a
+                // mutation that had already started.
+                PersistTicketSnapshotsLocked();
             }
 
             // --- Execute OUTSIDE lock (main thread) ---
@@ -555,27 +660,92 @@ namespace UnityMCP.Editor
         /// <summary>Returns ticket info for polling, or null if not found/expired.</summary>
         public static Dictionary<string, object> GetTicketStatus(long ticketId)
         {
+            return GetTicketStatus(ticketId, null, false);
+        }
+
+        public static Dictionary<string, object> GetTicketStatus(long ticketId, string agentId,
+            bool enforceOwnership)
+        {
             EnsurePersistentSnapshotsLoaded();
             lock (_queueLock)
             {
                 // Check completed cache first
                 if (_completedTickets.TryGetValue(ticketId, out var done))
-                    return TicketToDict(done);
+                    return OwnedTicketToDict(done, agentId, enforceOwnership);
 
                 // Check in-flight (currently executing on main thread)
                 if (_executingTickets.TryGetValue(ticketId, out var executing))
-                    return TicketToDict(executing);
+                    return OwnedTicketToDict(executing, agentId, enforceOwnership);
 
                 // Check active queues
                 foreach (var q in _agentQueues.Values)
                     foreach (var t in q)
                         if (t.TicketId == ticketId)
-                            return TicketToDict(t);
+                            return OwnedTicketToDict(t, agentId, enforceOwnership);
 
                 if (_reloadedTicketSnapshots.TryGetValue(ticketId, out var snapshot))
+                {
+                    if (enforceOwnership && snapshot.TryGetValue("agentId", out object owner) &&
+                        !string.Equals(owner?.ToString(), agentId, StringComparison.Ordinal))
+                        return MCPResponse.Error("Ticket belongs to another agent.", "ticket_owner_mismatch");
                     return new Dictionary<string, object>(snapshot);
+                }
             }
             return null;
+        }
+
+        public static Dictionary<string, object> CancelTicket(long ticketId, string agentId)
+        {
+            EnsurePersistentSnapshotsLoaded();
+            lock (_queueLock)
+            {
+                foreach (string owner in _agentQueues.Keys.ToList())
+                {
+                    var queue = _agentQueues[owner];
+                    var found = queue.FirstOrDefault(ticket => ticket.TicketId == ticketId);
+                    if (found == null) continue;
+                    if (!string.Equals(found.AgentId, agentId, StringComparison.Ordinal))
+                        return MCPResponse.Error("Ticket belongs to another agent.", "ticket_owner_mismatch");
+                    var retained = new Queue<RequestTicket>();
+                    RequestTicket canceled = null;
+                    while (queue.Count > 0)
+                    {
+                        var ticket = queue.Dequeue();
+                        if (ticket.TicketId == ticketId) canceled = ticket;
+                        else retained.Enqueue(ticket);
+                    }
+                    _agentQueues[owner] = retained;
+                    canceled.Status = RequestStatus.Canceled;
+                    canceled.ErrorMessage = "Canceled before execution.";
+                    canceled.ErrorCode = "request_canceled";
+                    canceled.CompletedAt = DateTime.UtcNow;
+                    canceled.Result = MCPResponse.Error(canceled.ErrorMessage, canceled.ErrorCode);
+                    canceled.Action = null;
+                    canceled.DeferredAction = null;
+                    canceled.ProgressiveDeferredAction = null;
+                    _completedTickets[ticketId] = canceled;
+                    SignalWaitersLocked(ticketId);
+                    PurgeEmptyQueues();
+                    PersistTicketSnapshotsLocked();
+                    return new Dictionary<string, object>
+                    {
+                        { "success", true }, { "ticketId", ticketId }, { "status", "Canceled" },
+                        { "canceledBeforeExecution", true },
+                    };
+                }
+
+                if (_executingTickets.TryGetValue(ticketId, out var executing))
+                {
+                    if (!string.Equals(executing.AgentId, agentId, StringComparison.Ordinal))
+                        return MCPResponse.Error("Ticket belongs to another agent.", "ticket_owner_mismatch");
+                    return MCPResponse.Error(
+                        "The request is already executing and cannot be safely preempted. Poll it to completion.",
+                        "request_not_cancelable");
+                }
+
+                return MCPResponse.Error($"Ticket {ticketId} was not found or is already terminal.",
+                    "ticket_not_found");
+            }
         }
 
         /// <summary>Returns overall queue stats.</summary>
@@ -678,6 +848,39 @@ namespace UnityMCP.Editor
             return null;
         }
 
+        private static RequestTicket CreateRejectedTicketLocked(string agentId, string actionName,
+            string requestKey, int totalQueued, int agentQueued)
+        {
+            var ticket = new RequestTicket
+            {
+                TicketId = Interlocked.Increment(ref _nextTicketId), AgentId = agentId,
+                ActionName = actionName, RequestKey = requestKey, Status = RequestStatus.Failed,
+                SubmittedAt = DateTime.UtcNow, CompletedAt = DateTime.UtcNow,
+                ErrorMessage = totalQueued >= MaxTotalQueuedRequests
+                    ? $"Queue capacity reached ({MaxTotalQueuedRequests})."
+                    : $"Per-agent queue capacity reached ({MaxQueuedRequestsPerAgent}).",
+                ErrorCode = "queue_capacity_reached", Retryable = true,
+            };
+            ticket.Result = MCPResponse.Error(ticket.ErrorMessage, ticket.ErrorCode, true,
+                new Dictionary<string, object>
+                {
+                    { "totalQueued", totalQueued }, { "agentQueued", agentQueued },
+                    { "maxTotalQueued", MaxTotalQueuedRequests },
+                    { "maxPerAgentQueued", MaxQueuedRequestsPerAgent },
+                });
+            _completedTickets[ticket.TicketId] = ticket;
+            PersistTicketSnapshotsLocked();
+            return ticket;
+        }
+
+        private static Dictionary<string, object> OwnedTicketToDict(RequestTicket ticket, string agentId,
+            bool enforceOwnership)
+        {
+            if (enforceOwnership && !string.Equals(ticket.AgentId, agentId, StringComparison.Ordinal))
+                return MCPResponse.Error("Ticket belongs to another agent.", "ticket_owner_mismatch");
+            return TicketToDict(ticket);
+        }
+
         private static void SignalWaitersLocked(long ticketId)
         {
             if (!_waiters.TryGetValue(ticketId, out var waiters))
@@ -771,36 +974,7 @@ namespace UnityMCP.Editor
 
         private static bool IsReadOperation(string actionName)
         {
-            if (string.IsNullOrEmpty(actionName)) return false;
-
-            // Match API path patterns that are read-only
-            string lower = actionName.ToLower();
-            return lower == "ping"
-                || lower.EndsWith("/info")
-                || lower.EndsWith("/list")
-                || lower.EndsWith("/log")
-                || lower.EndsWith("/stats")
-                || lower.EndsWith("/get")
-                || lower.StartsWith("search/")
-                || lower.StartsWith("agents/")
-                || lower.StartsWith("queue/")
-                || lower == "scene/info"
-                || lower == "scene/hierarchy"
-                || lower == "editor/state"
-                || lower == "wait/editor-idle"
-                || lower == "project/info"
-                || lower == "console/log"
-                || lower == "debug/attach-unity"
-                || lower == "debug/stack-trace"
-                || lower == "debug/variables"
-                || lower.StartsWith("profiler/")
-                || lower.StartsWith("debugger/")
-                || lower.StartsWith("selection/get")
-                || lower.StartsWith("selection/find")
-                || lower.Contains("/info")
-                || lower.Contains("/list")
-                || lower.Contains("/get-")
-                || lower.Contains("/status");
+            return !string.IsNullOrEmpty(actionName) && MCPToolMetadata.IsRouteReadOnly(actionName);
         }
 
         private static void PurgeEmptyQueues()
@@ -904,7 +1078,8 @@ namespace UnityMCP.Editor
                         continue;
 
                     maxTicketId = Math.Max(maxTicketId, ticketId);
-                    if (TryRestoreEditorIdleWait(snapshot, out var restoredTicket))
+                    if (TryRestoreEditorIdleWait(snapshot, out var restoredTicket) ||
+                        TryRestorePersistentRequest(snapshot, out restoredTicket))
                     {
                         if (restoredTicket.Status == RequestStatus.Queued)
                             EnqueueRestoredTicketLocked(restoredTicket);
@@ -1006,6 +1181,96 @@ namespace UnityMCP.Editor
             return true;
         }
 
+        private static bool TryRestorePersistentRequest(Dictionary<string, object> snapshot,
+            out RequestTicket ticket)
+        {
+            ticket = null;
+            string actionName = GetString(snapshot, "actionName");
+            string persistentBody = GetString(snapshot, "persistentBody", null);
+            if (string.IsNullOrEmpty(actionName) || persistentBody == null ||
+                !TryGetLong(snapshot, "ticketId", out long ticketId))
+                return false;
+
+            if (!Enum.TryParse(GetString(snapshot, "status"), out RequestStatus previousStatus))
+                return false;
+            ticket = new RequestTicket
+            {
+                TicketId = ticketId,
+                AgentId = GetString(snapshot, "agentId", "anonymous"),
+                ActionName = actionName,
+                SubmittedAt = GetDateTime(snapshot, "submittedAt", DateTime.UtcNow),
+                CompletedAt = TryGetDateTime(snapshot, "completedAt", out var completedAt) ? completedAt : (DateTime?)null,
+                QueuePosition = GetInt(snapshot, "queuePosition", 0),
+                ErrorMessage = GetString(snapshot, "errorMessage"),
+                ErrorCode = GetString(snapshot, "errorCode"),
+                Retryable = GetBool(snapshot, "retryable", false),
+                RequestKey = GetString(snapshot, "requestKey"),
+                PersistentBody = persistentBody,
+                PersistentMethod = GetString(snapshot, "persistentMethod", "POST"),
+                IsReadOnly = GetBool(snapshot, "isReadOnly", MCPToolMetadata.IsRouteReadOnly(actionName)),
+                ResumeCount = GetInt(snapshot, "resumeCount", 0),
+                Progress = snapshot.TryGetValue("progress", out object progress) ? progress : null,
+            };
+
+            if (previousStatus == RequestStatus.Completed || previousStatus == RequestStatus.Failed ||
+                previousStatus == RequestStatus.TimedOut || previousStatus == RequestStatus.Canceled ||
+                previousStatus == RequestStatus.UncertainAfterReload)
+            {
+                ticket.Status = previousStatus;
+                ticket.Result = snapshot.TryGetValue("result", out object result) ? result : null;
+                return true;
+            }
+
+            if (previousStatus != RequestStatus.Queued && previousStatus != RequestStatus.Executing)
+                return false;
+
+            if (previousStatus == RequestStatus.Executing && !ticket.IsReadOnly &&
+                !IsReloadResumableMutation(actionName))
+            {
+                ticket.Status = RequestStatus.UncertainAfterReload;
+                ticket.CompletedAt = DateTime.UtcNow;
+                ticket.ErrorMessage =
+                    "A mutating request crossed a Unity domain reload after execution began. Inspect its target before retrying.";
+                ticket.ErrorCode = "mutation_outcome_uncertain_after_reload";
+                ticket.Retryable = false;
+                ticket.Result = MCPResponse.Error(ticket.ErrorMessage, ticket.ErrorCode, false,
+                    new Dictionary<string, object>
+                    {
+                        { "actionName", actionName }, { "requestKey", ticket.RequestKey ?? "" },
+                        { "requiresReconciliation", true },
+                    });
+                return true;
+            }
+
+            ticket.Status = RequestStatus.Queued;
+            ticket.CompletedAt = null;
+            ticket.ErrorMessage = null;
+            ticket.ErrorCode = null;
+            ticket.Retryable = false;
+            ticket.ResumeCount++;
+            var resumedTicket = ticket;
+            if (MCPBridgeServer.IsDeferredRoute(resumedTicket.ActionName))
+            {
+                resumedTicket.ProgressiveDeferredAction = (resolve, progressCallback) =>
+                    MCPBridgeServer.ExecutePersistedDeferredRoute(resumedTicket.ActionName,
+                        resumedTicket.PersistentBody,
+                        resolve, progressCallback);
+            }
+            else
+            {
+                resumedTicket.Action = () => MCPBridgeServer.ExecutePersistedRoute(resumedTicket.ActionName,
+                    resumedTicket.PersistentMethod, resumedTicket.PersistentBody);
+            }
+            return true;
+        }
+
+        private static bool IsReloadResumableMutation(string actionName)
+        {
+            // Asset refresh persists its own job before entering AssetDatabase.Refresh,
+            // and MCPAssetRefreshWorkflow.Start reuses that job for the same request ID.
+            return actionName == "asset/refresh";
+        }
+
         private static void EnqueueRestoredTicketLocked(RequestTicket ticket)
         {
             if (!_agentQueues.TryGetValue(ticket.AgentId, out var queue))
@@ -1024,13 +1289,14 @@ namespace UnityMCP.Editor
             var restored = new Dictionary<string, object>(snapshot);
             string previousStatus = restored.TryGetValue("status", out var status) ? status?.ToString() : "";
             restored["previousStatus"] = previousStatus;
-            restored["status"] = RequestStatus.LostAfterReload.ToString();
+            restored["status"] = RequestStatus.UncertainAfterReload.ToString();
             restored["success"] = false;
-            restored["error"] = "Ticket state was lost after a Unity domain reload. Resubmit the request.";
+            restored["error"] = "This legacy ticket had no persisted request body, so its outcome cannot be reconstructed after a Unity domain reload.";
             restored["message"] = restored["error"];
-            restored["errorCode"] = "ticket_lost_after_reload";
-            restored["retryable"] = true;
-            restored["result"] = MCPResponse.Error(restored["error"].ToString(), "ticket_lost_after_reload", true);
+            restored["errorCode"] = "legacy_ticket_outcome_uncertain";
+            restored["retryable"] = false;
+            restored["result"] = MCPResponse.Error(restored["error"].ToString(),
+                "legacy_ticket_outcome_uncertain", false);
             return restored;
         }
 
@@ -1076,11 +1342,17 @@ namespace UnityMCP.Editor
                 snapshot["requestKey"] = ticket.RequestKey;
             if (ticket.PersistentArguments != null)
                 snapshot["persistentArguments"] = ticket.PersistentArguments;
+            if (ticket.PersistentBody != null)
+                snapshot["persistentBody"] = ticket.PersistentBody;
+            if (!string.IsNullOrEmpty(ticket.PersistentMethod))
+                snapshot["persistentMethod"] = ticket.PersistentMethod;
+            snapshot["isReadOnly"] = ticket.IsReadOnly;
             if (ticket.ResumeCount > 0)
                 snapshot["resumeCount"] = ticket.ResumeCount;
-            if (ticket.ActionName == "wait/editor-idle" && ticket.Result != null &&
+            if (ticket.Result != null &&
                 (ticket.Status == RequestStatus.Completed || ticket.Status == RequestStatus.Failed ||
-                 ticket.Status == RequestStatus.TimedOut))
+                 ticket.Status == RequestStatus.TimedOut || ticket.Status == RequestStatus.Canceled ||
+                 ticket.Status == RequestStatus.UncertainAfterReload))
                 snapshot["result"] = ticket.Result;
 
             if (ticket.CompletedAt.HasValue)
@@ -1229,7 +1501,8 @@ namespace UnityMCP.Editor
 
         private static string GetPersistentTicketSnapshotPath()
         {
-            return Path.Combine(Directory.GetCurrentDirectory(), "Library", "UnityMCP",
+            string projectRoot = Directory.GetParent(Application.dataPath).FullName;
+            return Path.Combine(projectRoot, "Library", "UnityMCP",
                 PersistentTicketSnapshotFileName);
         }
 
@@ -1262,7 +1535,8 @@ namespace UnityMCP.Editor
 
             if (t.Status == RequestStatus.Failed ||
                 t.Status == RequestStatus.TimedOut ||
-                t.Status == RequestStatus.LostAfterReload)
+                t.Status == RequestStatus.Canceled ||
+                t.Status == RequestStatus.UncertainAfterReload)
             {
                 string message = string.IsNullOrEmpty(t.ErrorMessage)
                     ? "Queue processing failed."
@@ -1274,7 +1548,8 @@ namespace UnityMCP.Editor
 
             // Include result for completed tickets
             if (t.Status == RequestStatus.Completed || t.Status == RequestStatus.Failed ||
-                t.Status == RequestStatus.TimedOut)
+                t.Status == RequestStatus.TimedOut || t.Status == RequestStatus.Canceled ||
+                t.Status == RequestStatus.UncertainAfterReload)
                 dict["result"] = t.Result;
 
             return dict;

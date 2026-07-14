@@ -32,6 +32,8 @@ namespace UnityMCP.Editor
 
         public bool RequiresPlayMode { get; set; }
 
+        public bool FirstClass { get; set; }
+
         public MCPProjectToolAttribute(string toolName)
         {
             ToolName = toolName;
@@ -49,12 +51,19 @@ namespace UnityMCP.Editor
 
         public static object List(Dictionary<string, object> args)
         {
-            var tools = GetToolDictionaries(false);
+            var allTools = GetToolDictionaries(false);
+            int offset = Math.Max(0, GetInt(args, "offset", 0));
+            int limit = Math.Max(1, Math.Min(200, GetInt(args, "limit", 100)));
+            var tools = allTools.Skip(offset).Take(limit).ToList();
 
             return new Dictionary<string, object>
             {
                 { "tools", tools },
-                { "totalTools", tools.Count }
+                { "count", tools.Count },
+                { "totalTools", allTools.Count },
+                { "offset", offset },
+                { "limit", limit },
+                { "hasMore", offset + tools.Count < allTools.Count }
             };
         }
 
@@ -70,7 +79,7 @@ namespace UnityMCP.Editor
         public static List<string> GetDirectRoutePaths()
         {
             return DiscoverTools()
-                .Where(tool => string.IsNullOrEmpty(tool.ValidationError))
+                .Where(tool => string.IsNullOrEmpty(tool.ValidationError) && tool.FirstClass)
                 .OrderBy(tool => tool.ToolName, StringComparer.OrdinalIgnoreCase)
                 .Select(tool => GetDirectRoute(tool.ToolName))
                 .ToList();
@@ -84,7 +93,8 @@ namespace UnityMCP.Editor
                 return false;
 
             var descriptor = FindTool(toolName);
-            if (descriptor == null || string.IsNullOrEmpty(descriptor.ValidationError) == false)
+            if (descriptor == null || !descriptor.FirstClass ||
+                string.IsNullOrEmpty(descriptor.ValidationError) == false)
                 return false;
 
             tool = descriptor.ToDictionary();
@@ -103,6 +113,11 @@ namespace UnityMCP.Editor
                 result = new { error = "Project tool route is missing a tool name." };
                 return true;
             }
+
+            var descriptor = FindTool(toolName);
+            if (descriptor == null || !descriptor.FirstClass ||
+                string.IsNullOrEmpty(descriptor.ValidationError) == false)
+                return false;
 
             result = ExecuteTool(toolName, args ?? new Dictionary<string, object>());
             return true;
@@ -126,6 +141,14 @@ namespace UnityMCP.Editor
                 ?? GetDictionary(args, "arguments")
                 ?? GetDictionary(args, "parameters")
                 ?? new Dictionary<string, object>();
+            foreach (string contextKey in new[]
+                     {
+                         "_agentId", "_requestId", "expectedProjectPath", "expectedProjectName"
+                     })
+            {
+                if (!toolArgs.ContainsKey(contextKey) && args.TryGetValue(contextKey, out object contextValue))
+                    toolArgs[contextKey] = contextValue;
+            }
 
             return ExecuteTool(toolName, toolArgs);
         }
@@ -241,6 +264,21 @@ namespace UnityMCP.Editor
             return value.ToString();
         }
 
+        private static int GetInt(Dictionary<string, object> args, string key, int fallback)
+        {
+            if (args == null || !args.TryGetValue(key, out object value) || value == null)
+                return fallback;
+
+            try
+            {
+                return Convert.ToInt32(value);
+            }
+            catch
+            {
+                return fallback;
+            }
+        }
+
         private static Dictionary<string, object> GetDictionary(Dictionary<string, object> args, string key)
         {
             if (args == null || !args.TryGetValue(key, out object value) || value == null)
@@ -264,6 +302,7 @@ namespace UnityMCP.Editor
             public bool LongRunning;
             public bool MayReloadDomain;
             public bool RequiresPlayMode;
+            public bool FirstClass;
 
             private MethodInfo method;
             private Type type;
@@ -283,10 +322,13 @@ namespace UnityMCP.Editor
                     LongRunning = attribute.LongRunning,
                     MayReloadDomain = attribute.MayReloadDomain,
                     RequiresPlayMode = attribute.RequiresPlayMode,
+                    FirstClass = attribute.FirstClass,
                     method = method
                 };
 
                 descriptor.ValidationError = descriptor.ValidateMethod();
+                descriptor.ValidationError = CombineValidationErrors(descriptor.ValidationError,
+                    descriptor.ValidateOperationProfile());
                 descriptor.ValidationError = CombineValidationErrors(descriptor.ValidationError,
                     descriptor.TrySetInputSchema(attribute.InputSchemaJson));
                 return descriptor;
@@ -307,10 +349,13 @@ namespace UnityMCP.Editor
                     LongRunning = attribute.LongRunning,
                     MayReloadDomain = attribute.MayReloadDomain,
                     RequiresPlayMode = attribute.RequiresPlayMode,
+                    FirstClass = attribute.FirstClass,
                     type = type
                 };
 
                 descriptor.ValidationError = descriptor.ValidateType();
+                descriptor.ValidationError = CombineValidationErrors(descriptor.ValidationError,
+                    descriptor.ValidateOperationProfile());
                 descriptor.ValidationError = CombineValidationErrors(descriptor.ValidationError,
                     descriptor.TrySetInputSchema(attribute.InputSchemaJson));
                 return descriptor;
@@ -350,6 +395,7 @@ namespace UnityMCP.Editor
                     { "longRunning", LongRunning },
                     { "mayReloadDomain", MayReloadDomain },
                     { "requiresPlayMode", RequiresPlayMode },
+                    { "firstClass", FirstClass },
                     { "enforcesInputSchema", true },
                     { "valid", string.IsNullOrEmpty(ValidationError) },
                     { "validationError", ValidationError ?? "" }
@@ -398,6 +444,8 @@ namespace UnityMCP.Editor
                 {
                     foreach (string key in args.Keys)
                     {
+                        if (key.StartsWith("_", StringComparison.Ordinal))
+                            continue;
                         if (!properties.ContainsKey(key))
                             errors.Add($"Unknown argument '{key}'.");
                     }
@@ -454,6 +502,18 @@ namespace UnityMCP.Editor
 
                 if (type.GetConstructor(Type.EmptyTypes) == null)
                     return $"Project tool type '{Source}' must have a public parameterless constructor.";
+
+                return null;
+            }
+
+            private string ValidateOperationProfile()
+            {
+                int operationKinds = (ReadOnly ? 1 : 0) + (MutatesAssets ? 1 : 0) + (MutatesRuntime ? 1 : 0);
+                if (operationKinds > 1)
+                    return $"Project tool '{ToolName}' declares conflicting operation kinds.";
+
+                if (FirstClass && operationKinds == 0)
+                    return $"First-class project tool '{ToolName}' must explicitly declare ReadOnly, MutatesAssets, or MutatesRuntime.";
 
                 return null;
             }

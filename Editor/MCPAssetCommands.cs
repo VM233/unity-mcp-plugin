@@ -16,6 +16,13 @@ namespace UnityMCP.Editor
             string typeFilter = args.ContainsKey("type") ? args["type"].ToString() : null;
             string search = args.ContainsKey("search") ? args["search"].ToString() : null;
             bool recursive = !args.ContainsKey("recursive") || Convert.ToBoolean(args["recursive"]);
+            int offset = Math.Max(0, args.TryGetValue("offset", out var offsetValue) && offsetValue != null
+                ? Convert.ToInt32(offsetValue)
+                : 0);
+            int limit = Math.Max(1, Math.Min(500,
+                args.TryGetValue("limit", out var limitValue) && limitValue != null
+                    ? Convert.ToInt32(limitValue)
+                    : 100));
 
             string searchQuery = "";
             if (!string.IsNullOrEmpty(search))
@@ -57,11 +64,19 @@ namespace UnityMCP.Editor
                 });
             }
 
+            assets = assets.OrderBy(asset => asset["path"].ToString(), StringComparer.Ordinal).ToList();
+            int total = assets.Count;
+            var page = assets.Skip(offset).Take(limit).ToList();
             return new Dictionary<string, object>
             {
                 { "folder", folder },
-                { "count", assets.Count },
-                { "assets", assets },
+                { "count", page.Count },
+                { "total", total },
+                { "offset", offset },
+                { "limit", limit },
+                { "hasMore", offset + page.Count < total },
+                { "nextOffset", offset + page.Count < total ? (object)(offset + page.Count) : null },
+                { "assets", page },
             };
         }
 

@@ -36,13 +36,24 @@ namespace UnityMCP.Editor.Tests
         private const string TEST_FOLDER = "Assets/__UnityMCPTests";
         private const string PREFAB_PATH = TEST_FOLDER + "/MCP Test Prefab.prefab";
         private const string RUNTIME_MUTATION_TOOL_NAME = "unity-mcp-tests/set-runtime-state";
+        private const string LAZY_READ_TOOL_NAME = "unity-mcp-tests/read-lazy-state";
 
         [MCPProjectTool(RUNTIME_MUTATION_TOOL_NAME,
             Description = "Regression fixture for explicit runtime mutation metadata.",
             InputSchemaJson = "{\"type\":\"object\",\"properties\":{}}",
             MutatesRuntime = true,
-            RequiresPlayMode = true)]
+            RequiresPlayMode = true,
+            FirstClass = true)]
         private static object SetRuntimeStateFixture(Dictionary<string, object> args)
+        {
+            return new Dictionary<string, object> { { "success", true } };
+        }
+
+        [MCPProjectTool(LAZY_READ_TOOL_NAME,
+            Description = "Regression fixture for an explicitly lazy project tool.",
+            InputSchemaJson = "{\"type\":\"object\",\"properties\":{}}",
+            ReadOnly = true)]
+        private static object ReadLazyStateFixture(Dictionary<string, object> args)
         {
             return new Dictionary<string, object> { { "success", true } };
         }
@@ -1130,6 +1141,350 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void ProjectTool_FirstClassExposureMustBeExplicit()
+        {
+            var descriptor = MCPProjectToolCommands.GetToolDictionaries(validOnly: true)
+                .Single(tool => tool["toolName"].ToString() == LAZY_READ_TOOL_NAME);
+            Assert.That(descriptor["readOnly"], Is.EqualTo(true));
+            Assert.That(descriptor["firstClass"], Is.EqualTo(false));
+
+            var toolsResult = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: false, includeSchema: true, limit: 500));
+            var tools = (List<Dictionary<string, object>>)toolsResult["tools"];
+            Assert.That(tools.Any(item =>
+                item["route"].ToString() == "project-tools/call/" + LAZY_READ_TOOL_NAME), Is.False);
+        }
+
+        [Test]
+        public void AssetWorkspace_CreateCopyDependenciesAndTransactionRollback()
+        {
+            const string sourcePath = TEST_FOLDER + "/Source.txt";
+            const string folderPath = TEST_FOLDER + "/Nested/Content";
+            const string copiedPath = folderPath + "/Copied.txt";
+            File.WriteAllText(GetAbsolutePath(sourcePath), "source");
+            AssetDatabase.ImportAsset(sourcePath, ImportAssetOptions.ForceSynchronousImport);
+
+            var folder = RequireDictionary(MCPAssetWorkspaceCommands.EnsureFolder(
+                new Dictionary<string, object> { { "path", folderPath } }));
+            Assert.That(folder["success"], Is.EqualTo(true));
+            Assert.That(AssetDatabase.IsValidFolder(folderPath), Is.True);
+
+            var copy = RequireDictionary(MCPAssetWorkspaceCommands.Copy(new Dictionary<string, object>
+            {
+                { "sourcePath", sourcePath }, { "targetPath", copiedPath }
+            }));
+            Assert.That(copy["success"], Is.EqualTo(true));
+            Assert.That(AssetDatabase.LoadAssetAtPath<TextAsset>(copiedPath), Is.Not.Null);
+
+            const string ussPath = TEST_FOLDER + "/Dependency.uss";
+            const string uxmlPath = TEST_FOLDER + "/Dependent.uxml";
+            File.WriteAllText(GetAbsolutePath(ussPath), ".dependency { color: red; }\n");
+            AssetDatabase.ImportAsset(ussPath, ImportAssetOptions.ForceSynchronousImport);
+            string ussGuid = AssetDatabase.AssetPathToGUID(ussPath);
+            File.WriteAllText(GetAbsolutePath(uxmlPath),
+                "<ui:UXML xmlns:ui=\"UnityEngine.UIElements\">" +
+                $"<Style src=\"project://database/{ussPath.Replace(" ", "%20")}?fileID=7433441132597879392&amp;guid={ussGuid}&amp;type=3#Dependency\"/>" +
+                "<ui:VisualElement class=\"dependency\"/></ui:UXML>\n");
+            AssetDatabase.ImportAsset(uxmlPath, ImportAssetOptions.ForceSynchronousImport);
+
+            var graph = RequireDictionary(MCPAssetWorkspaceCommands.Dependencies(
+                new Dictionary<string, object>
+                {
+                    { "path", ussPath }, { "direction", "incoming" },
+                    { "searchRoots", new[] { TEST_FOLDER } }
+                }));
+            var references = (List<Dictionary<string, object>>)graph["references"];
+            Assert.That(references.Any(item => item["path"].ToString() == uxmlPath), Is.True);
+
+            const string rolledBackPath = TEST_FOLDER + "/Rolled Back.txt";
+            var transaction = RequireDictionary(MCPAssetWorkspaceCommands.Transaction(
+                new Dictionary<string, object>
+                {
+                    { "operations", new List<object>
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "type", "copy" }, { "sourcePath", sourcePath },
+                                { "targetPath", rolledBackPath }
+                            }
+                        }
+                    },
+                    { "requiredAssets", new[] { TEST_FOLDER + "/Missing.asset" } }
+                }));
+            Assert.That(transaction["success"], Is.EqualTo(false));
+            Assert.That(transaction["rolledBack"], Is.EqualTo(true));
+            Assert.That(AssetDatabase.LoadMainAssetAtPath(rolledBackPath), Is.Null);
+        }
+
+        [Test]
+        public void UIToolkitAuthoring_EditsStructuredUxmlAndUssAndRollsBackTransactions()
+        {
+            const string uxmlPath = TEST_FOLDER + "/Authoring.uxml";
+            const string ussPath = TEST_FOLDER + "/Authoring.uss";
+            const string originalUxml =
+                "<ui:UXML xmlns:ui=\"UnityEngine.UIElements\"><ui:VisualElement name=\"content\" /></ui:UXML>\n";
+            File.WriteAllText(GetAbsolutePath(uxmlPath), originalUxml);
+            File.WriteAllText(GetAbsolutePath(ussPath), ".content { color: red; }\n");
+            AssetDatabase.ImportAsset(uxmlPath, ImportAssetOptions.ForceSynchronousImport);
+            AssetDatabase.ImportAsset(ussPath, ImportAssetOptions.ForceSynchronousImport);
+
+            var uxml = RequireDictionary(MCPUIAuthoringCommands.EditUxml(new Dictionary<string, object>
+            {
+                { "assetPath", uxmlPath },
+                { "operations", new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "type", "add-element" }, { "parentName", "content" },
+                            { "elementType", "Label" },
+                            { "attributes", new Dictionary<string, object> { { "name", "title" } } }
+                        },
+                        new Dictionary<string, object>
+                        {
+                            { "type", "set-text" }, { "name", "title" }, { "text", "Ready" }
+                        }
+                    }
+                }
+            }));
+            Assert.That(uxml["success"], Is.EqualTo(true));
+            Assert.That(File.ReadAllText(GetAbsolutePath(uxmlPath)), Does.Contain("text=\"Ready\""));
+
+            var uss = RequireDictionary(MCPUIAuthoringCommands.EditUss(new Dictionary<string, object>
+            {
+                { "assetPath", ussPath },
+                { "operations", new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "type", "set-declaration" }, { "selector", ".content" },
+                            { "property", "background-color" }, { "value", "blue" }
+                        }
+                    }
+                }
+            }));
+            Assert.That(uss["success"], Is.EqualTo(true));
+            Assert.That(File.ReadAllText(GetAbsolutePath(ussPath)), Does.Contain("background-color: blue;"));
+
+            string beforeTransaction = File.ReadAllText(GetAbsolutePath(uxmlPath));
+            var rolledBack = RequireDictionary(MCPUIAuthoringCommands.AuthoringTransaction(
+                new Dictionary<string, object>
+                {
+                    { "edits", new List<object>
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "kind", "uxml" }, { "assetPath", uxmlPath },
+                                { "operations", new List<object>
+                                    {
+                                        new Dictionary<string, object>
+                                        {
+                                            { "type", "set-text" }, { "name", "title" }, { "text", "Changed" }
+                                        }
+                                    }
+                                }
+                            },
+                            new Dictionary<string, object>
+                            {
+                                { "kind", "uss" }, { "assetPath", ussPath },
+                                { "operations", new List<object>
+                                    {
+                                        new Dictionary<string, object>
+                                        {
+                                            { "type", "remove-selector" }, { "selector", ".missing" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }));
+            Assert.That(rolledBack["success"], Is.EqualTo(false));
+            Assert.That(rolledBack["rolledBack"], Is.EqualTo(true));
+            Assert.That(File.ReadAllText(GetAbsolutePath(uxmlPath)), Is.EqualTo(beforeTransaction));
+        }
+
+        [Test]
+        public void RequestQueue_IdempotencyCancellationAndReloadRecoveryAreMetadataDriven()
+        {
+            string agentId = "queue-regression-" + Guid.NewGuid().ToString("N");
+            string requestKey = agentId + "|scene/hierarchy|stable";
+            var first = MCPRequestQueue.SubmitPersistentRequest(agentId, "scene/hierarchy", "POST", "{}",
+                requestKey, out bool firstReused);
+            var second = MCPRequestQueue.SubmitPersistentRequest(agentId, "scene/hierarchy", "POST", "{}",
+                requestKey, out bool secondReused);
+            Assert.That(firstReused, Is.False);
+            Assert.That(secondReused, Is.True);
+            Assert.That(second.TicketId, Is.EqualTo(first.TicketId));
+
+            var wrongOwner = MCPRequestQueue.CancelTicket(first.TicketId, agentId + "-other");
+            Assert.That(wrongOwner["success"], Is.EqualTo(false));
+            var canceled = MCPRequestQueue.CancelTicket(first.TicketId, agentId);
+            Assert.That(canceled["success"], Is.EqualTo(true));
+            Assert.That(canceled["status"], Is.EqualTo(MCPRequestQueue.RequestStatus.Canceled.ToString()));
+
+            var restore = typeof(MCPRequestQueue).GetMethod("TryRestorePersistentRequest",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(restore, Is.Not.Null);
+            Dictionary<string, object> Snapshot(string route, bool readOnly) => new Dictionary<string, object>
+            {
+                { "ticketId", DateTime.UtcNow.Ticks + (readOnly ? 1 : 2) },
+                { "agentId", agentId }, { "actionName", route },
+                { "status", MCPRequestQueue.RequestStatus.Executing.ToString() },
+                { "submittedAt", DateTime.UtcNow.ToString("O") },
+                { "persistentBody", "{}" }, { "persistentMethod", "POST" },
+                { "isReadOnly", readOnly }
+            };
+
+            var readArguments = new object[] { Snapshot("scene/hierarchy", true), null };
+            Assert.That(restore.Invoke(null, readArguments), Is.EqualTo(true));
+            Assert.That(((MCPRequestQueue.RequestTicket)readArguments[1]).Status,
+                Is.EqualTo(MCPRequestQueue.RequestStatus.Queued));
+
+            var writeArguments = new object[] { Snapshot("asset/create-folder", false), null };
+            Assert.That(restore.Invoke(null, writeArguments), Is.EqualTo(true));
+            var uncertain = (MCPRequestQueue.RequestTicket)writeArguments[1];
+            Assert.That(uncertain.Status, Is.EqualTo(MCPRequestQueue.RequestStatus.UncertainAfterReload));
+            Assert.That(uncertain.Retryable, Is.False);
+
+            var refreshArguments = new object[] { Snapshot("asset/refresh", false), null };
+            Assert.That(restore.Invoke(null, refreshArguments), Is.EqualTo(true));
+            var refresh = (MCPRequestQueue.RequestTicket)refreshArguments[1];
+            Assert.That(refresh.Status, Is.EqualTo(MCPRequestQueue.RequestStatus.Queued));
+            Assert.That(refresh.ResumeCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void AssetRefresh_IdempotencyRequiresMatchingOwnerAndRequestId()
+        {
+            var method = typeof(MCPAssetRefreshWorkflow).GetMethod("IsSameRequest",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            var existing = new Dictionary<string, object>
+            {
+                { "_agentId", "agent-a" }, { "_requestId", "request-1" }
+            };
+
+            Assert.That(method.Invoke(null, new object[]
+            {
+                existing, new Dictionary<string, object>
+                {
+                    { "_agentId", "agent-a" }, { "_requestId", "request-1" }
+                }
+            }), Is.EqualTo(true));
+            Assert.That(method.Invoke(null, new object[]
+            {
+                existing, new Dictionary<string, object>
+                {
+                    { "_agentId", "agent-b" }, { "_requestId", "request-1" }
+                }
+            }), Is.EqualTo(false));
+            Assert.That(method.Invoke(null, new object[]
+            {
+                existing, new Dictionary<string, object>
+                {
+                    { "_agentId", "agent-a" }, { "_requestId", "request-2" }
+                }
+            }), Is.EqualTo(false));
+        }
+
+        [Test]
+        public void MutatingRoutesRequireAnExplicitTargetProject()
+        {
+            var method = typeof(MCPBridgeServer).GetMethod("TryBuildProjectMismatchResponse",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            var writeArguments = new object[]
+            {
+                "asset/create-folder", new Dictionary<string, object>(), null
+            };
+            Assert.That(method.Invoke(null, writeArguments), Is.EqualTo(true));
+            Assert.That(RequireDictionary(writeArguments[2])["error"], Is.EqualTo("target_project_required"));
+
+            var readArguments = new object[]
+            {
+                "scene/hierarchy", new Dictionary<string, object>(), null
+            };
+            Assert.That(method.Invoke(null, readArguments), Is.EqualTo(false));
+            Assert.That(readArguments[2], Is.Null);
+
+            var copy = typeof(MCPBridgeServer).GetMethod("CopyArgumentIfMissing",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(copy, Is.Not.Null);
+            var outer = new Dictionary<string, object>
+            {
+                { "expectedProjectPath", "D:/UnityProjects/MarbleBattlers" }
+            };
+            var inner = new Dictionary<string, object>();
+            copy.Invoke(null, new object[] { outer, inner, "expectedProjectPath" });
+            Assert.That(inner["expectedProjectPath"], Is.EqualTo(outer["expectedProjectPath"]));
+        }
+
+        [Test]
+        public void JobHistoryIsPaginatedAndOwnerScoped()
+        {
+            Type history = typeof(MCPToolMetadata).Assembly.GetType("UnityMCP.Editor.MCPJobHistory");
+            Assert.That(history, Is.Not.Null);
+            MethodInfo record = history.GetMethod("Record", BindingFlags.Static | BindingFlags.Public);
+            MethodInfo list = history.GetMethod("List", BindingFlags.Static | BindingFlags.Public);
+            Assert.That(record, Is.Not.Null);
+            Assert.That(list, Is.Not.Null);
+            string jobId = "job-regression-" + Guid.NewGuid().ToString("N");
+            record.Invoke(null, new object[]
+            {
+                "regression", jobId, "owner-a", "Completed",
+                new Dictionary<string, object> { { "success", true } }
+            });
+
+            var ownerPage = RequireDictionary(list.Invoke(null, new object[]
+            {
+                new Dictionary<string, object>
+                {
+                    { "_agentId", "owner-a" }, { "jobType", "regression" }, { "limit", 1 }
+                }
+            }));
+            Assert.That(Convert.ToInt32(ownerPage["total"]), Is.GreaterThanOrEqualTo(1));
+            var otherPage = RequireDictionary(list.Invoke(null, new object[]
+            {
+                new Dictionary<string, object>
+                {
+                    { "_agentId", "owner-b" }, { "jobType", "regression" }
+                }
+            }));
+            Assert.That(Convert.ToInt32(otherPage["total"]), Is.EqualTo(0));
+        }
+
+        [Test]
+        public void RouteRegistryMatchesEveryBuiltInSwitchHandlerWithoutRuntimeSourceParsing()
+        {
+            var package = UnityEditor.PackageManager.PackageInfo.FindForAssembly(typeof(MCPBridgeServer).Assembly);
+            Assert.That(package, Is.Not.Null);
+            string source = File.ReadAllText(Path.Combine(package.resolvedPath, "Editor", "MCPBridgeServer.cs"));
+            int methodIndex = source.LastIndexOf("private static object RouteRequest(string path",
+                StringComparison.Ordinal);
+            int switchIndex = source.IndexOf("switch (path)", methodIndex, StringComparison.Ordinal);
+            int defaultIndex = source.IndexOf("\n                default:", switchIndex,
+                StringComparison.Ordinal);
+            Assert.That(methodIndex, Is.GreaterThanOrEqualTo(0));
+            Assert.That(switchIndex, Is.GreaterThan(methodIndex));
+            Assert.That(defaultIndex, Is.GreaterThan(switchIndex));
+            var switchRoutes = Regex.Matches(source.Substring(switchIndex, defaultIndex - switchIndex),
+                    "case\\s+\"([^\"]+)\"\\s*:")
+                .Cast<Match>().Select(match => match.Groups[1].Value).ToHashSet(StringComparer.Ordinal);
+
+            Type registry = typeof(MCPToolMetadata).Assembly.GetType("UnityMCP.Editor.MCPRouteRegistry");
+            Assert.That(registry, Is.Not.Null);
+            var property = registry.GetProperty("BuiltInRoutes", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(property, Is.Not.Null);
+            var registered = ((IEnumerable<string>)property.GetValue(null)).ToHashSet(StringComparer.Ordinal);
+            CollectionAssert.IsSubsetOf(switchRoutes, registered);
+            CollectionAssert.AreEquivalent(new[]
+            {
+                "_meta/routes", "_meta/tools", "_meta/capabilities",
+                "queue/cancel", "queue/info", "queue/status"
+            }, registered.Except(switchRoutes).ToArray());
+        }
+
+        [Test]
         public void PrefabHierarchy_MaxNodesReturnsTruncationMetadata()
         {
             CreateTestPrefab();
@@ -2197,12 +2552,13 @@ namespace UnityMCP.Editor.Tests
         [Test]
         public void ToolMetadata_LocalizationRoutesRequireOptionalPackage()
         {
-            var method = typeof(MCPToolMetadata).GetMethod("IsRouteAvailable",
-                BindingFlags.Static | BindingFlags.NonPublic);
+            Type registry = typeof(MCPToolMetadata).Assembly.GetType("UnityMCP.Editor.MCPCapabilityRegistry");
+            Assert.That(registry, Is.Not.Null);
+            var method = registry.GetMethod("IsRouteAvailable", BindingFlags.Static | BindingFlags.NonPublic);
             Assert.That(method, Is.Not.Null);
-            Assert.That(method.Invoke(null, new object[] { "localization/status", false }), Is.EqualTo(false));
-            Assert.That(method.Invoke(null, new object[] { "localization/status", true }), Is.EqualTo(true));
-            Assert.That(method.Invoke(null, new object[] { "scene/hierarchy", false }), Is.EqualTo(true));
+            Assert.That(method.Invoke(null, new object[] { "localization/status" }),
+                Is.EqualTo(MCPLocalizationBridge.IsAvailable));
+            Assert.That(method.Invoke(null, new object[] { "scene/hierarchy" }), Is.EqualTo(true));
         }
 
         private static void CreateTestPrefab(bool addCollider = false, bool addRenderer = false,

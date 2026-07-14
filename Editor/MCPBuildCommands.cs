@@ -87,6 +87,18 @@ namespace UnityMCP.Editor
         public static object BuildAndRunTest(Dictionary<string, object> args)
         {
             bool clearStuck = GetBool(args, "clearStuck", false);
+            if (_job != null && !_job.IsTerminal)
+            {
+                string owner = _job.Arguments != null &&
+                               _job.Arguments.TryGetValue("_agentId", out object ownerValue)
+                    ? ownerValue?.ToString()
+                    : "anonymous";
+                string requester = GetString(args, "_agentId");
+                if (string.IsNullOrEmpty(requester)) requester = "anonymous";
+                if (!string.Equals(owner, requester, StringComparison.Ordinal))
+                    return MCPResponse.Error("Player build job belongs to another agent.",
+                        "job_owner_mismatch");
+            }
             if (_job != null && !_job.IsTerminal && !clearStuck)
             {
                 var active = BuildJobResponse(_job);
@@ -118,6 +130,13 @@ namespace UnityMCP.Editor
                 _job = LoadBuildJob();
             if (_job == null)
                 return new { error = "No Player build job was found." };
+            string owner = _job.Arguments != null && _job.Arguments.TryGetValue("_agentId", out object ownerValue)
+                ? ownerValue?.ToString()
+                : "anonymous";
+            string requester = GetString(args, "_agentId");
+            if (string.IsNullOrEmpty(requester)) requester = "anonymous";
+            if (!string.Equals(owner, requester, StringComparison.Ordinal))
+                return MCPResponse.Error("Player build job belongs to another agent.", "job_owner_mismatch");
 
             string jobId = GetString(args, "jobId");
             if (!string.IsNullOrEmpty(jobId) && jobId != _job.JobId)
@@ -258,6 +277,10 @@ namespace UnityMCP.Editor
             string path = GetBuildJobPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             File.WriteAllText(path, MiniJson.Serialize(_job.ToDictionary()));
+            string owner = _job.Arguments != null && _job.Arguments.TryGetValue("_agentId", out object value)
+                ? value?.ToString()
+                : "anonymous";
+            MCPJobHistory.Record("player-build", _job.JobId, owner, _job.Status, BuildJobResponse(_job));
         }
 
         private static PlayerBuildJob LoadBuildJob()

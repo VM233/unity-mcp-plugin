@@ -51,6 +51,10 @@ namespace UnityMCP.Editor
             { "uitoolkit/builder-preview", (args, resolve, _) => MCPUICommands.OpenUIBuilderPreview(args, resolve) },
             { "screenshot/game", (args, resolve, _) => MCPScreenshotCommands.CaptureGameView(args, resolve) },
             { "packages/update-git", (args, resolve, _) => MCPPackageManagerCommands.UpdateGitPackageDeferred(args, resolve) },
+            { "packages/list", (args, resolve, _) => MCPPackageManagerCommands.ListPackagesDeferred(args, resolve) },
+            { "packages/add", (args, resolve, _) => MCPPackageManagerCommands.AddPackageDeferred(args, resolve) },
+            { "packages/remove", (args, resolve, _) => MCPPackageManagerCommands.RemovePackageDeferred(args, resolve) },
+            { "packages/search", (args, resolve, _) => MCPPackageManagerCommands.SearchPackageDeferred(args, resolve) },
             { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },
             { "prefab-asset/transaction-edit", MCPPrefabAssetCommands.TransactionEditDeferred },
             { "asset/import", MCPAssetCommands.ImportDeferred },
@@ -361,6 +365,13 @@ namespace UnityMCP.Editor
                 string agentId = request.Headers["X-Agent-Id"] ?? "anonymous";
                 var requestArgs = ParseJson(body);
                 AddExpectedProjectHeaders(request, requestArgs);
+                requestArgs["_agentId"] = agentId;
+                string requestId = request.Headers["Idempotency-Key"] ?? request.Headers["X-Request-Id"];
+                if (string.IsNullOrEmpty(requestId))
+                    requestId = GetArgumentString(requestArgs, "requestId");
+                if (!string.IsNullOrEmpty(requestId))
+                    requestArgs["_requestId"] = requestId;
+                body = MiniJson.Serialize(requestArgs);
                 if (TryBuildProjectMismatchResponse(apiPath, requestArgs, out var projectMismatch))
                 {
                     SendJson(response, 409, projectMismatch);
@@ -375,7 +386,12 @@ namespace UnityMCP.Editor
                 }
                 if (apiPath == "queue/status")
                 {
-                    HandleQueueStatus(response, request);
+                    HandleQueueStatus(response, request, requestArgs, agentId);
+                    return;
+                }
+                if (apiPath == "queue/cancel")
+                {
+                    HandleQueueCancel(response, agentId, requestArgs);
                     return;
                 }
                 if (apiPath == "queue/info")
@@ -414,8 +430,9 @@ namespace UnityMCP.Editor
 
                 // ═══ Legacy synchronous path (blocks until main thread processes) ═══
                 {
-                    var result = MCPRequestQueue.ExecuteWithTracking(agentId, apiPath,
-                        () => RouteRequest(apiPath, request.HttpMethod, body));
+                    string requestKey = BuildRequestKey(agentId, apiPath, request, requestArgs);
+                    var result = MCPRequestQueue.ExecutePersistentWithTracking(agentId, apiPath,
+                        request.HttpMethod, body, requestKey);
                     SendJson(response, 200, result);
                 }
             }
@@ -442,6 +459,10 @@ namespace UnityMCP.Editor
                 }
 
                 var innerArgs = ParseJson(innerBody);
+                innerArgs["_agentId"] = agentId;
+                CopyArgumentIfMissing(args, innerArgs, "expectedProjectPath");
+                CopyArgumentIfMissing(args, innerArgs, "expectedProjectName");
+                innerBody = MiniJson.Serialize(innerArgs);
                 if (TryBuildProjectMismatchResponse(apiPath, innerArgs, out var projectMismatch))
                 {
                     SendJson(response, 409, projectMismatch);
@@ -451,6 +472,19 @@ namespace UnityMCP.Editor
                 // Override agentId if provided in the body
                 if (args.ContainsKey("agentId") && !string.IsNullOrEmpty(args["agentId"]?.ToString()))
                     agentId = args["agentId"].ToString();
+                innerArgs["_agentId"] = agentId;
+                innerBody = MiniJson.Serialize(innerArgs);
+                string requestId = GetArgumentString(args, "requestId");
+                if (string.IsNullOrEmpty(requestId))
+                    requestId = GetArgumentString(innerArgs, "requestId");
+                if (!string.IsNullOrEmpty(requestId))
+                {
+                    innerArgs["_requestId"] = requestId;
+                    innerBody = MiniJson.Serialize(innerArgs);
+                }
+                string requestKey = string.IsNullOrEmpty(requestId)
+                    ? null
+                    : agentId + "|" + apiPath + "|" + requestId;
 
                 MCPRequestQueue.RequestTicket ticket;
                 bool reused = false;
@@ -460,13 +494,14 @@ namespace UnityMCP.Editor
                 }
                 else if (_deferredRoutes.TryGetValue(apiPath, out var deferredHandler))
                 {
-                    ticket = MCPRequestQueue.SubmitDeferredRequest(agentId, apiPath, (resolve, progress) =>
-                        deferredHandler(ParseJson(innerBody), resolve, progress));
+                    ticket = MCPRequestQueue.SubmitPersistentDeferredRequest(agentId, apiPath,
+                        (resolve, progress) => deferredHandler(ParseJson(innerBody), resolve, progress),
+                        innerBody, requestKey, out reused);
                 }
                 else
                 {
-                    ticket = MCPRequestQueue.SubmitRequest(agentId, apiPath, () =>
-                        RouteRequest(apiPath, "POST", innerBody));
+                    ticket = MCPRequestQueue.SubmitPersistentRequest(agentId, apiPath, "POST", innerBody,
+                        requestKey, out reused);
                 }
 
                 // Return immediately with ticket info
@@ -487,16 +522,19 @@ namespace UnityMCP.Editor
 
         // ─── Queue Status (polling) ───
 
-        private static void HandleQueueStatus(HttpListenerResponse response, HttpListenerRequest request)
+        private static void HandleQueueStatus(HttpListenerResponse response, HttpListenerRequest request,
+            Dictionary<string, object> args, string agentId)
         {
             string ticketIdStr = request.QueryString["ticketId"];
+            if (string.IsNullOrEmpty(ticketIdStr))
+                ticketIdStr = GetArgumentString(args, "ticketId");
             if (string.IsNullOrEmpty(ticketIdStr) || !long.TryParse(ticketIdStr, out long ticketId))
             {
                 SendJson(response, 400, new { error = "Missing or invalid 'ticketId' query parameter" });
                 return;
             }
 
-            var status = MCPRequestQueue.GetTicketStatus(ticketId);
+            var status = MCPRequestQueue.GetTicketStatus(ticketId, agentId, true);
             if (status == null)
             {
                 SendJson(response, 404, new { error = $"Ticket {ticketId} not found or expired" });
@@ -504,6 +542,28 @@ namespace UnityMCP.Editor
             }
 
             SendJson(response, 200, status);
+        }
+
+        private static void HandleQueueCancel(HttpListenerResponse response, string agentId,
+            Dictionary<string, object> args)
+        {
+            if (args == null || !args.TryGetValue("ticketId", out object value) || value == null ||
+                !long.TryParse(value.ToString(), out long ticketId))
+            {
+                SendJson(response, 400, MCPResponse.Error("ticketId is required.", "invalid_arguments"));
+                return;
+            }
+            object result = MCPRequestQueue.CancelTicket(ticketId, agentId);
+            SendJson(response, MCPResponse.TryGetError(result, out _, out _, out _) ? 409 : 200, result);
+        }
+
+        private static string BuildRequestKey(string agentId, string apiPath, HttpListenerRequest request,
+            Dictionary<string, object> args)
+        {
+            string requestId = request?.Headers["Idempotency-Key"] ?? request?.Headers["X-Request-Id"];
+            if (string.IsNullOrEmpty(requestId))
+                requestId = GetArgumentString(args, "requestId");
+            return string.IsNullOrEmpty(requestId) ? null : agentId + "|" + apiPath + "|" + requestId;
         }
 
         // ─── Route Request (runs on main thread) ───
@@ -598,6 +658,15 @@ namespace UnityMCP.Editor
             return value as Dictionary<string, object>;
         }
 
+        private static void CopyArgumentIfMissing(Dictionary<string, object> source,
+            Dictionary<string, object> destination, string key)
+        {
+            if (source == null || destination == null || destination.ContainsKey(key) ||
+                !source.TryGetValue(key, out object value) || value == null)
+                return;
+            destination[key] = value;
+        }
+
         private static void AddExpectedProjectHeaders(HttpListenerRequest request, Dictionary<string, object> args)
         {
             if (request == null || args == null)
@@ -640,7 +709,23 @@ namespace UnityMCP.Editor
                 expectedProjectName = GetArgumentString(args, "unityProjectName");
 
             if (string.IsNullOrEmpty(expectedProjectPath) && string.IsNullOrEmpty(expectedProjectName))
-                return false;
+            {
+                if (!MCPToolMetadata.RouteRequiresTargetBinding(route))
+                    return false;
+
+                response = new Dictionary<string, object>
+                {
+                    { "success", false },
+                    { "error", "target_project_required" },
+                    { "message", "Mutating requests must bind to a Unity project by expectedProjectPath or expectedProjectName." },
+                    { "route", route },
+                    { "actualProjectPath", MCPInstanceRegistry.CurrentProjectPath },
+                    { "actualProjectName", MCPInstanceRegistry.CurrentProjectName },
+                    { "actualPort", ActivePort },
+                    { "currentInstance", MCPInstanceRegistry.GetCurrentInstanceInfo() }
+                };
+                return true;
+            }
 
             response = MCPInstanceCommands.BuildProjectMismatch(expectedProjectPath, expectedProjectName, route);
             return response != null;
@@ -660,6 +745,7 @@ namespace UnityMCP.Editor
                 case "ping":
                 case "queue/status":
                 case "queue/info":
+                case "queue/cancel":
                 case "instance/current":
                 case "instance/list":
                 case "instance/resolve":
@@ -703,6 +789,10 @@ namespace UnityMCP.Editor
                 return MCPToolMetadata.GetRegisteredTools(firstClassOnly, compact, includeSchema,
                     offset, limit, metadataCategory, includeCollections);
             }
+            if (path == "_meta/capabilities")
+            {
+                return MCPCapabilityRegistry.GetCapabilities();
+            }
 
             if (TryBuildProjectMismatchResponse(path, ParseJson(body), out var projectMismatch))
             {
@@ -720,6 +810,11 @@ namespace UnityMCP.Editor
             if (MCPProjectToolCommands.TryExecuteDirectRoute(path, ParseJson(body), out var projectToolResult))
             {
                 return projectToolResult;
+            }
+
+            if (!MCPRouteRegistry.ContainsBuiltInRoute(path))
+            {
+                return MCPResponse.Error($"Unknown MCP route '{path}'.", "unknown_route");
             }
 
             switch (path)
@@ -751,6 +846,10 @@ namespace UnityMCP.Editor
                     return MCPHealthCommands.GetHealth(ParseJson(body));
                 case "mcp/set-autostart":
                     return MCPHealthCommands.SetServerAutoStart(ParseJson(body));
+                case "jobs/list":
+                    return MCPJobHistory.List(ParseJson(body));
+                case "jobs/get":
+                    return MCPJobHistory.Get(ParseJson(body));
 
                 // ─── Stable Generic Route ───
                 case "advanced/execute":
@@ -837,6 +936,14 @@ namespace UnityMCP.Editor
                     return MCPAssetCommands.InstantiatePrefab(ParseJson(body));
                 case "asset/create-material":
                     return MCPAssetCommands.CreateMaterial(ParseJson(body));
+                case "asset/create-folder":
+                    return MCPAssetWorkspaceCommands.EnsureFolder(ParseJson(body));
+                case "asset/copy":
+                    return MCPAssetWorkspaceCommands.Copy(ParseJson(body));
+                case "asset/dependencies":
+                    return MCPAssetWorkspaceCommands.Dependencies(ParseJson(body));
+                case "asset/transaction":
+                    return MCPAssetWorkspaceCommands.Transaction(ParseJson(body));
 
                 // ─── Scripts ───
                 case "script/create":
@@ -1552,6 +1659,12 @@ namespace UnityMCP.Editor
                     return MCPUICommands.AssertUIToolkitLayout(ParseJson(body));
                 case "uitoolkit/builder-preview":
                     return MCPUICommands.OpenUIBuilderPreview(ParseJson(body));
+                case "uitoolkit/edit-uxml":
+                    return MCPUIAuthoringCommands.EditUxml(ParseJson(body));
+                case "uitoolkit/edit-uss":
+                    return MCPUIAuthoringCommands.EditUss(ParseJson(body));
+                case "uitoolkit/authoring-transaction":
+                    return MCPUIAuthoringCommands.AuthoringTransaction(ParseJson(body));
 
                 // ─── Localization (optional package) ───
                 case "localization/status":
@@ -1737,6 +1850,27 @@ namespace UnityMCP.Editor
             response.ContentLength64 = buffer.Length;
             response.OutputStream.Write(buffer, 0, buffer.Length);
             response.OutputStream.Close();
+        }
+
+        internal static object ExecutePersistedRoute(string path, string method, string body)
+        {
+            return RouteRequest(path, string.IsNullOrEmpty(method) ? "POST" : method, body ?? "");
+        }
+
+        internal static bool IsDeferredRoute(string path)
+        {
+            return !string.IsNullOrEmpty(path) && _deferredRoutes.ContainsKey(path);
+        }
+
+        internal static void ExecutePersistedDeferredRoute(string path, string body, Action<object> resolve,
+            Action<object> progress)
+        {
+            if (!_deferredRoutes.TryGetValue(path, out var handler))
+            {
+                resolve(MCPResponse.Error($"Deferred route was not found: '{path}'.", "route_not_found"));
+                return;
+            }
+            handler(ParseJson(body), resolve, progress);
         }
 
         private static object AttachInstanceContext(object data)

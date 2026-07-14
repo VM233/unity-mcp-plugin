@@ -31,6 +31,10 @@ namespace UnityMCP.Editor
         {
             if (_workflow != null && !_workflow.IsTerminal)
             {
+                if (!string.Equals(_workflow.OwnerAgentId ?? "anonymous",
+                        GetString(args, "_agentId", "anonymous"), StringComparison.Ordinal))
+                    return MCPResponse.Error("Package test workflow belongs to another agent.",
+                        "job_owner_mismatch");
                 EnsureUpdateRegistered();
                 ContinueWorkflow();
                 return new Dictionary<string, object>
@@ -73,6 +77,7 @@ namespace UnityMCP.Editor
                 State = alreadyTestable ? "waiting-for-assembly" : "enabling",
                 StartedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
+                OwnerAgentId = GetString(args, "_agentId", "anonymous"),
             };
             SaveWorkflow();
             EnsureUpdateRegistered();
@@ -87,6 +92,10 @@ namespace UnityMCP.Editor
                 _workflow = LoadWorkflow();
             if (_workflow == null)
                 return new { error = "No package test workflow found" };
+            if (!string.Equals(_workflow.OwnerAgentId ?? "anonymous", GetString(args, "_agentId", "anonymous"),
+                    StringComparison.Ordinal))
+                return MCPResponse.Error("Package test workflow belongs to another agent.",
+                    "job_owner_mismatch");
 
             string workflowId = GetString(args, "workflowId");
             if (!string.IsNullOrEmpty(workflowId) && workflowId != _workflow.WorkflowId)
@@ -210,7 +219,8 @@ namespace UnityMCP.Editor
             var runArgs = new Dictionary<string, object>
             {
                 { "mode", _workflow.Mode },
-                { "assemblies", _workflow.Assemblies.Cast<object>().ToList() }
+                { "assemblies", _workflow.Assemblies.Cast<object>().ToList() },
+                { "_agentId", _workflow.OwnerAgentId ?? "anonymous" }
             };
             AddArray(runArgs, "testNames", _workflow.TestNames);
             AddArray(runArgs, "categories", _workflow.Categories);
@@ -241,6 +251,7 @@ namespace UnityMCP.Editor
                     { "includeFailedOnly", true },
                     { "includeStackTrace", true },
                     { "limit", 100 },
+                    { "_agentId", _workflow.OwnerAgentId ?? "anonymous" },
                 }));
             if (jobResult == null)
                 return;
@@ -503,6 +514,8 @@ namespace UnityMCP.Editor
             string path = GetWorkflowPath();
             Directory.CreateDirectory(Path.GetDirectoryName(path));
             File.WriteAllText(path, MiniJson.Serialize(_workflow.ToDictionary()));
+            MCPJobHistory.Record("package-test", _workflow.WorkflowId, _workflow.OwnerAgentId,
+                _workflow.State, BuildResponse(_workflow));
         }
 
         private static PackageTestWorkflow LoadWorkflow()
@@ -596,6 +609,7 @@ namespace UnityMCP.Editor
             public string Error;
             public DateTime StartedAt;
             public DateTime UpdatedAt;
+            public string OwnerAgentId;
 
             public bool IsTerminal => State == "succeeded" || State == "failed";
 
@@ -621,6 +635,7 @@ namespace UnityMCP.Editor
                     { "error", Error ?? "" },
                     { "startedAt", StartedAt.ToString("O") },
                     { "updatedAt", UpdatedAt.ToString("O") },
+                    { "ownerAgentId", OwnerAgentId ?? "anonymous" },
                 };
             }
 
@@ -648,6 +663,7 @@ namespace UnityMCP.Editor
                     Error = GetValue(values, "error"),
                     StartedAt = GetDateTime(values, "startedAt"),
                     UpdatedAt = GetDateTime(values, "updatedAt"),
+                    OwnerAgentId = GetValue(values, "ownerAgentId", "anonymous"),
                 };
             }
 
