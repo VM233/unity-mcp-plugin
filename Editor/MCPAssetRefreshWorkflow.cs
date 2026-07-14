@@ -106,6 +106,15 @@ namespace UnityMCP.Editor
             if (!string.Equals(owner, requester, StringComparison.Ordinal))
                 return MCPResponse.Error("Asset refresh job belongs to another agent.", "job_owner_mismatch");
 
+            string refreshRequestId = GetString(args, "refreshRequestId");
+            if (!string.IsNullOrEmpty(refreshRequestId) &&
+                !MatchesRequestId(_job.Arguments, refreshRequestId))
+            {
+                return MCPResponse.Error(
+                    $"Asset refresh job does not match request '{refreshRequestId}'.",
+                    "refresh_job_request_mismatch");
+            }
+
             string jobId = GetString(args, "jobId");
             if (!string.IsNullOrEmpty(jobId) && jobId != _job.JobId)
                 return new { error = $"AssetDatabase refresh job '{jobId}' was not found." };
@@ -118,6 +127,15 @@ namespace UnityMCP.Editor
                 response["cleared"] = true;
             }
             return response;
+        }
+
+        private static bool MatchesRequestId(Dictionary<string, object> jobArguments,
+            string refreshRequestId)
+        {
+            if (string.IsNullOrEmpty(refreshRequestId))
+                return true;
+            return string.Equals(GetString(jobArguments, "_requestId"), refreshRequestId,
+                StringComparison.Ordinal);
         }
 
         private static void ContinueJob()

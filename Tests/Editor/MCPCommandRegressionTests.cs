@@ -940,6 +940,15 @@ namespace UnityMCP.Editor.Tests
             var refreshProperties = RequireDictionary(refreshSchema["properties"]);
             Assert.That(refreshProperties.ContainsKey("assetPaths"), Is.True);
             Assert.That(refreshProperties.ContainsKey("reconcileExternalChanges"), Is.False);
+            Assert.That(refreshProperties.ContainsKey("expectedProjectPath"), Is.True);
+
+            foreach (var tool in tools.Where(item => !(bool)item["readOnly"]))
+            {
+                var schema = RequireDictionary(tool["inputSchema"]);
+                var properties = RequireDictionary(schema["properties"]);
+                Assert.That(properties.ContainsKey("expectedProjectPath"), Is.True,
+                    tool["route"].ToString());
+            }
         }
 
         [Test]
@@ -1432,6 +1441,14 @@ namespace UnityMCP.Editor.Tests
                     { "_agentId", "agent-a" }, { "_requestId", "request-2" }
                 }
             }), Is.EqualTo(false));
+
+            var matchesRequestId = workflow.GetMethod("MatchesRequestId",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(matchesRequestId, Is.Not.Null);
+            Assert.That(matchesRequestId.Invoke(null, new object[] { existing, "request-1" }),
+                Is.EqualTo(true));
+            Assert.That(matchesRequestId.Invoke(null, new object[] { existing, "request-2" }),
+                Is.EqualTo(false));
         }
 
         [Test]

@@ -421,8 +421,9 @@ namespace UnityMCP.Editor
 
             string toolName = RouteToToolName(route);
             string description = GetToolDescription(route);
-            Dictionary<string, object> inputSchema = GetToolInputSchema(route);
             ToolProfile profile = GetToolProfile(route);
+            Dictionary<string, object> inputSchema = AddTargetBindingSchema(
+                GetToolInputSchema(route), !profile.ReadOnly);
             bool isFirstClass = string.Equals(profile.Exposure, ExposureFirstClass, StringComparison.Ordinal);
             return new Dictionary<string, object>
             {
@@ -453,8 +454,9 @@ namespace UnityMCP.Editor
         {
             var projectToolName = projectTool.TryGetValue("toolName", out var name) ? name?.ToString() : "";
             var description = projectTool.TryGetValue("description", out var desc) ? desc?.ToString() : "";
-            var inputSchema = projectTool.TryGetValue("inputSchema", out var schema)
-                ? schema
+            var inputSchema = projectTool.TryGetValue("inputSchema", out var schema) &&
+                              schema is Dictionary<string, object> schemaDictionary
+                ? schemaDictionary
                 : new Dictionary<string, object>
                 {
                     { "type", "object" },
@@ -488,6 +490,7 @@ namespace UnityMCP.Editor
                 MayReloadDomain = mayReloadDomain,
                 RequiresPlayMode = requiresPlayMode,
             };
+            inputSchema = AddTargetBindingSchema(inputSchema, !profile.ReadOnly);
 
             return new Dictionary<string, object>
             {
@@ -525,6 +528,29 @@ namespace UnityMCP.Editor
                 return boolValue;
 
             return bool.TryParse(value.ToString(), out var parsed) ? parsed : fallback;
+        }
+
+        private static Dictionary<string, object> AddTargetBindingSchema(
+            Dictionary<string, object> inputSchema, bool requiresTargetBinding)
+        {
+            if (!requiresTargetBinding)
+                return inputSchema;
+
+            var schema = inputSchema != null
+                ? new Dictionary<string, object>(inputSchema)
+                : new Dictionary<string, object> { { "type", "object" } };
+            var properties = schema.TryGetValue("properties", out object propertiesValue) &&
+                             propertiesValue is Dictionary<string, object> existingProperties
+                ? new Dictionary<string, object>(existingProperties)
+                : new Dictionary<string, object>();
+            if (!properties.ContainsKey("expectedProjectPath"))
+            {
+                KeyValuePair<string, object> bindingProperty = Prop("expectedProjectPath", "string",
+                    "Expected Unity project root path. The request is rejected before mutation if it reaches another project.");
+                properties[bindingProperty.Key] = bindingProperty.Value;
+            }
+            schema["properties"] = properties;
+            return schema;
         }
 
         private static ToolProfile GetToolProfile(string route)
@@ -1464,6 +1490,7 @@ namespace UnityMCP.Editor
                 case "asset/get-refresh-job":
                     return Schema(Props(
                         Prop("jobId", "string", "Optional refresh job ID. Defaults to the current or latest job."),
+                        Prop("refreshRequestId", "string", "Optional original asset/refresh request ID used to recover the matching persistent job after a transport timeout or domain reload."),
                         Prop("clear", "boolean", "Clear the persisted job after a terminal result is read. Defaults to false.")
                     ));
                 case "asset/move":

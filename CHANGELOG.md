@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.2.7] - 2026-07-15
+
+- Added `expectedProjectPath` to every mutating route schema so first-class tools can bind multi-instance requests without falling back to `advanced/execute`.
+- Added request-ID matching to `asset/get-refresh-job`, allowing the MCP server to recover the exact persistent refresh job after an outer queue timeout or domain reload without mistaking an older job for the current request.
+
 ## [3.2.6] - 2026-07-15
 
 - Made `asset/refresh` strictly targeted whenever `assetPaths` are supplied, removing the implicit full synchronous AssetDatabase refresh that amplified Unity memory pressure during repeated small USS/UXML imports. Full external-change reconciliation now requires omitting `assetPaths`, and refresh results report an explicit `targeted` or `full` mode.
