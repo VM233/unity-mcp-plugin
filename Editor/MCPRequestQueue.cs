@@ -227,19 +227,20 @@ namespace UnityMCP.Editor
         public static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
             Action<Action<object>, Action<object>> deferredAction)
         {
-            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, null, out _);
+            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, null, false, out _);
         }
 
         public static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
             Action<Action<object>, Action<object>> deferredAction, string requestKey, out bool reused)
         {
-            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, requestKey, out reused);
+            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, requestKey, true, out reused);
         }
 
         public static RequestTicket SubmitPersistentDeferredRequest(string agentId, string actionName,
             Action<Action<object>, Action<object>> deferredAction, string body, string requestKey, out bool reused)
         {
-            var ticket = SubmitDeferredRequest(agentId, actionName, deferredAction, null, requestKey, out reused);
+            var ticket = SubmitDeferredRequest(agentId, actionName, deferredAction, null, requestKey, true,
+                out reused);
             lock (_queueLock)
             {
                 ticket.PersistentBody = body ?? "";
@@ -265,12 +266,13 @@ namespace UnityMCP.Editor
             string requestKey = MCPEditorCommands.BuildWaitForIdleRequestKey(persistentArguments);
             return SubmitDeferredRequest(agentId, "wait/editor-idle",
                 (resolve, _) => MCPEditorCommands.WaitForIdle(persistentArguments, resolve),
-                persistentArguments, requestKey, out reused);
+                persistentArguments, requestKey, false, out reused);
         }
 
         private static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
             Action<Action<object>, Action<object>> deferredAction,
-            Dictionary<string, object> persistentArguments, string requestKey, out bool reused)
+            Dictionary<string, object> persistentArguments, string requestKey, bool reuseCompleted,
+            out bool reused)
         {
             EnsurePersistentSnapshotsLoaded();
             if (string.IsNullOrEmpty(agentId)) agentId = "anonymous";
@@ -286,7 +288,9 @@ namespace UnityMCP.Editor
                         reused = true;
                         return existing;
                     }
-                    foreach (var completed in _completedTickets.Values)
+                    foreach (var completed in reuseCompleted
+                                 ? _completedTickets.Values
+                                 : Enumerable.Empty<RequestTicket>())
                     {
                         if (completed.RequestKey == requestKey)
                         {

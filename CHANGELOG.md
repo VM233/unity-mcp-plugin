@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.2.3] - 2026-07-14
+
+- Limited parameter-level `wait/editor-idle` coalescing to active tickets, preventing a later wait from reusing a stale completed result while retaining completed-ticket reuse for transport idempotency keys.
+
 ## [3.2.2] - 2026-07-14
 
 - Normalized unbound and wrong-project rejection payloads with stable `target_project_required` and `wrong_unity_project` error codes.
