@@ -860,13 +860,10 @@ namespace UnityMCP.Editor
                 }
                 else
                 {
-                    foreach (string rawPath in assetPaths)
+                    foreach (string path in OrderTargetedImportPaths(assetPaths))
                     {
-                        string path = NormalizeAssetPath(rawPath);
-                        if (string.IsNullOrEmpty(path))
-                            continue;
-
-                        AssetDatabase.ImportAsset(path, options);
+                        AssetDatabase.ImportAsset(path,
+                            options | ImportAssetOptions.ForceSynchronousImport);
                         importedPaths.Add(path);
                     }
                 }
@@ -891,6 +888,47 @@ namespace UnityMCP.Editor
                 { "isUpdating", EditorApplication.isUpdating },
                 { "isCompiling", EditorApplication.isCompiling },
             };
+        }
+
+        internal static List<string> OrderTargetedImportPaths(IEnumerable<string> rawPaths)
+        {
+            var requestedPaths = new List<string>();
+            var requestedSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string rawPath in rawPaths ?? Enumerable.Empty<string>())
+            {
+                string path = NormalizeAssetPath(rawPath);
+                if (!string.IsNullOrEmpty(path) && requestedSet.Add(path))
+                    requestedPaths.Add(path);
+            }
+
+            var orderedPaths = new List<string>();
+            var visitStates = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            foreach (string path in requestedPaths)
+                AppendTargetedImport(path, requestedSet, visitStates, orderedPaths);
+            return orderedPaths;
+        }
+
+        private static void AppendTargetedImport(string path, HashSet<string> requestedPaths,
+            Dictionary<string, int> visitStates, List<string> orderedPaths)
+        {
+            if (visitStates.TryGetValue(path, out int state))
+            {
+                if (state == 2 || state == 1)
+                    return;
+            }
+
+            visitStates[path] = 1;
+            foreach (string dependency in AssetDatabase.GetDependencies(path, false))
+            {
+                string normalizedDependency = NormalizeAssetPath(dependency);
+                if (requestedPaths.Contains(normalizedDependency))
+                {
+                    AppendTargetedImport(normalizedDependency, requestedPaths, visitStates, orderedPaths);
+                }
+            }
+
+            visitStates[path] = 2;
+            orderedPaths.Add(path);
         }
 
         public static object ExportUnityPackage(Dictionary<string, object> args)

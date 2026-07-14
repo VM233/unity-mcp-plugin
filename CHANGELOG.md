@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.22] - 2026-07-14
+
+- Ordered targeted asset refreshes by known AssetDatabase dependencies and completed each import synchronously, preventing dependent UXML imports from observing stale USS timestamps in SourceAssetDB.
+
 ## [3.1.21] - 2026-07-14
 
 - Made `screenshot/game` capture the Game View's completed render texture directly while Play Mode is paused, without advancing simulation ticks or waiting for a new rendered frame.

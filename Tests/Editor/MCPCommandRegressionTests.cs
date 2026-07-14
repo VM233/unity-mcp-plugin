@@ -822,6 +822,51 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void AssetRefresh_TargetedImportsOrderDependenciesBeforeDependents()
+        {
+            const string ussPath = TEST_FOLDER + "/Refresh Dependency.uss";
+            const string uxmlPath = TEST_FOLDER + "/Refresh Dependent.uxml";
+            File.WriteAllText(GetAbsolutePath(ussPath), ".refresh-dependency { color: red; }");
+            AssetDatabase.ImportAsset(ussPath,
+                ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+            string ussGuid = AssetDatabase.AssetPathToGUID(ussPath);
+            Assert.That(ussGuid, Is.Not.Empty);
+
+            File.WriteAllText(GetAbsolutePath(uxmlPath),
+                "<ui:UXML xmlns:ui=\"UnityEngine.UIElements\">" +
+                $"<Style src=\"project://database/{ussPath.Replace(" ", "%20")}?fileID=7433441132597879392&amp;guid={ussGuid}&amp;type=3#Refresh%20Dependency\"/>" +
+                "<ui:VisualElement class=\"refresh-dependency\"/>" +
+                "</ui:UXML>");
+            AssetDatabase.ImportAsset(uxmlPath,
+                ImportAssetOptions.ForceUpdate | ImportAssetOptions.ForceSynchronousImport);
+            CollectionAssert.Contains(AssetDatabase.GetDependencies(uxmlPath, false), ussPath);
+
+            File.WriteAllText(GetAbsolutePath(ussPath), ".refresh-dependency { color: blue; }");
+            File.SetLastWriteTimeUtc(GetAbsolutePath(ussPath),
+                File.GetLastWriteTimeUtc(GetAbsolutePath(ussPath)).AddSeconds(10));
+
+            var method = typeof(MCPAssetCommands).GetMethod("ExecuteRefreshImmediate",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            var response = RequireDictionary(method.Invoke(null, new object[]
+            {
+                new Dictionary<string, object>
+                {
+                    { "assetPaths", new[] { uxmlPath, ussPath } },
+                    { "forceUpdate", true },
+                    { "reconcileExternalChanges", false },
+                },
+            }));
+
+            Assert.That(response["success"], Is.EqualTo(true));
+            CollectionAssert.AreEqual(new[] { ussPath, uxmlPath },
+                (List<string>)response["importedPaths"]);
+            Assert.That(AssetDatabase.LoadAssetAtPath<StyleSheet>(ussPath), Is.Not.Null);
+            Assert.That(AssetDatabase.LoadAssetAtPath<VisualTreeAsset>(uxmlPath), Is.Not.Null);
+            LogAssert.NoUnexpectedReceived();
+        }
+
+        [Test]
         public void ToolMetadata_ExposesPersistentPlayerBuildAndAssetRefreshJobs()
         {
             var toolsResult = RequireDictionary(MCPToolMetadata.GetRegisteredTools(

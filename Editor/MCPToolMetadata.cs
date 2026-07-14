@@ -1409,7 +1409,7 @@ namespace UnityMCP.Editor
                     return AssetImportSchema();
                 case "asset/refresh":
                     return Schema(Props(
-                        Prop("assetPaths", "array", "Optional Unity asset paths to reconcile or import."),
+                        Prop("assetPaths", "array", "Optional Unity asset paths to reconcile or import. Targeted imports run known dependencies before dependents."),
                         Prop("forceUpdate", "boolean", "Use ImportAssetOptions.ForceUpdate. Defaults to true."),
                         Prop("saveAssets", "boolean", "Call AssetDatabase.SaveAssets after refresh/import. Defaults to false."),
                         Prop("reconcileExternalChanges", "boolean", "Run one full synchronous AssetDatabase refresh instead of repeating targeted imports. Defaults to true."),
