@@ -2532,7 +2532,10 @@ namespace UnityMCP.Editor.Tests
             var assetImportSchema = RequireDictionary(toolsByRoute["asset/import"]["inputSchema"]);
             var assetImportProperties = RequireDictionary(assetImportSchema["properties"]);
             Assert.That(assetImportProperties.Keys,
-                Is.EquivalentTo(new[] { "dryRun", "defaults", "execution", "imports" }));
+                Is.EquivalentTo(new[]
+                {
+                    "dryRun", "defaults", "execution", "imports", "expectedProjectPath"
+                }));
             Assert.That(assetImportProperties.ContainsKey("sourcePath"), Is.False);
             Assert.That(assetImportProperties.ContainsKey("destinationPath"), Is.False);
             var defaultsSchema = RequireDictionary(assetImportProperties["defaults"]);
