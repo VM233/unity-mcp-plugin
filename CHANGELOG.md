@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.2.1] - 2026-07-14
+
+- Fixed package-test compilation by keeping regression access to internal refresh and localization types reflection-based.
+- Explicitly classified route/tool metadata endpoints as read-only under conservative target-binding defaults.
+
 ## [3.2.0] - 2026-07-14
 
 - Added first-class asset folder creation, generic asset copy, incoming/outgoing dependency graphs, and rollback-capable cross-asset transactions.

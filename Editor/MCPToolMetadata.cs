@@ -100,6 +100,8 @@ namespace UnityMCP.Editor
 
             AddProfile(profiles, ToolProfile.FirstClass(readOnly: true),
                 "_meta/capabilities",
+                "_meta/routes",
+                "_meta/tools",
                 "queue/info",
                 "queue/status",
                 "asset/list",

@@ -1356,7 +1356,10 @@ namespace UnityMCP.Editor.Tests
         [Test]
         public void AssetRefresh_IdempotencyRequiresMatchingOwnerAndRequestId()
         {
-            var method = typeof(MCPAssetRefreshWorkflow).GetMethod("IsSameRequest",
+            Type workflow = typeof(MCPToolMetadata).Assembly.GetType(
+                "UnityMCP.Editor.MCPAssetRefreshWorkflow");
+            Assert.That(workflow, Is.Not.Null);
+            var method = workflow.GetMethod("IsSameRequest",
                 BindingFlags.Static | BindingFlags.NonPublic);
             Assert.That(method, Is.Not.Null);
             var existing = new Dictionary<string, object>
@@ -2556,8 +2559,14 @@ namespace UnityMCP.Editor.Tests
             Assert.That(registry, Is.Not.Null);
             var method = registry.GetMethod("IsRouteAvailable", BindingFlags.Static | BindingFlags.NonPublic);
             Assert.That(method, Is.Not.Null);
+            Type localizationBridge = typeof(MCPToolMetadata).Assembly.GetType(
+                "UnityMCP.Editor.MCPLocalizationBridge");
+            Assert.That(localizationBridge, Is.Not.Null);
+            var isAvailable = localizationBridge.GetProperty("IsAvailable",
+                BindingFlags.Static | BindingFlags.Public);
+            Assert.That(isAvailable, Is.Not.Null);
             Assert.That(method.Invoke(null, new object[] { "localization/status" }),
-                Is.EqualTo(MCPLocalizationBridge.IsAvailable));
+                Is.EqualTo(isAvailable.GetValue(null)));
             Assert.That(method.Invoke(null, new object[] { "scene/hierarchy" }), Is.EqualTo(true));
         }
 
