@@ -802,7 +802,7 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
-        public void AssetRefresh_TargetedImportReconcilesExternalDeletion()
+        public void AssetRefresh_FullRefreshReconcilesExternalDeletion()
         {
             const string deletedPath = TEST_FOLDER + "/Externally Deleted.txt";
             const string importedPath = TEST_FOLDER + "/Imported First.txt";
@@ -821,18 +821,52 @@ namespace UnityMCP.Editor.Tests
             {
                 new Dictionary<string, object>
                 {
+                    { "forceUpdate", true },
+                },
+            }));
+
+            Assert.That(response["success"], Is.EqualTo(true));
+            Assert.That(response["refreshMode"], Is.EqualTo("full"));
+            Assert.That(response["refreshedAllAssets"], Is.EqualTo(true));
+            Assert.That(((List<string>)response["importedPaths"]).Count, Is.Zero);
+            Assert.That(File.Exists(GetAbsolutePath(deletedPath)), Is.False);
+            Assert.That(File.Exists(GetAbsolutePath(deletedPath) + ".meta"), Is.False);
+            Assert.That(AssetDatabase.LoadMainAssetAtPath(deletedPath), Is.Null);
+            Assert.That(AssetDatabase.GetMainAssetTypeAtPath(deletedPath), Is.Null);
+        }
+
+        [Test]
+        public void AssetRefresh_TargetedImportDoesNotScanUnrelatedExternalChanges()
+        {
+            const string deletedPath = TEST_FOLDER + "/Unrelated Deleted.txt";
+            const string importedPath = TEST_FOLDER + "/Targeted Import.txt";
+            File.WriteAllText(GetAbsolutePath(deletedPath), "delete me externally");
+            File.WriteAllText(GetAbsolutePath(importedPath), "import me");
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+            Assert.That(AssetDatabase.GetMainAssetTypeAtPath(deletedPath), Is.Not.Null);
+
+            File.Delete(GetAbsolutePath(deletedPath));
+            File.Delete(GetAbsolutePath(deletedPath) + ".meta");
+
+            var method = typeof(MCPAssetCommands).GetMethod("ExecuteRefreshImmediate",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+            var response = RequireDictionary(method.Invoke(null, new object[]
+            {
+                new Dictionary<string, object>
+                {
                     { "assetPaths", new[] { importedPath } },
                     { "forceUpdate", true },
                 },
             }));
 
             Assert.That(response["success"], Is.EqualTo(true));
-            Assert.That(response["preReconciledExternalChanges"], Is.EqualTo(true));
-            Assert.That(response["reconciledExternalChanges"], Is.EqualTo(true));
-            Assert.That(File.Exists(GetAbsolutePath(deletedPath)), Is.False);
-            Assert.That(File.Exists(GetAbsolutePath(deletedPath) + ".meta"), Is.False);
-            Assert.That(AssetDatabase.LoadMainAssetAtPath(deletedPath), Is.Null);
-            Assert.That(AssetDatabase.GetMainAssetTypeAtPath(deletedPath), Is.Null);
+            Assert.That(response["refreshMode"], Is.EqualTo("targeted"));
+            Assert.That(response["refreshedAllAssets"], Is.EqualTo(false));
+            CollectionAssert.AreEqual(new[] { importedPath },
+                (List<string>)response["importedPaths"]);
+            Assert.That(AssetDatabase.GetMainAssetTypeAtPath(deletedPath), Is.Not.Null,
+                "A targeted import must not reconcile unrelated external changes.");
         }
 
         [Test]
@@ -868,11 +902,12 @@ namespace UnityMCP.Editor.Tests
                 {
                     { "assetPaths", new[] { uxmlPath, ussPath } },
                     { "forceUpdate", true },
-                    { "reconcileExternalChanges", false },
                 },
             }));
 
             Assert.That(response["success"], Is.EqualTo(true));
+            Assert.That(response["refreshMode"], Is.EqualTo("targeted"));
+            Assert.That(response["refreshedAllAssets"], Is.EqualTo(false));
             CollectionAssert.AreEqual(new[] { ussPath, uxmlPath },
                 (List<string>)response["importedPaths"]);
             Assert.That(AssetDatabase.LoadAssetAtPath<StyleSheet>(ussPath), Is.Not.Null);
@@ -899,6 +934,12 @@ namespace UnityMCP.Editor.Tests
                 Assert.That(tool["firstClass"], Is.EqualTo(true), route);
                 Assert.That(tool["inputSchema"], Is.InstanceOf<Dictionary<string, object>>(), route);
             }
+
+            var refreshTool = tools.Single(item => item["route"].ToString() == "asset/refresh");
+            var refreshSchema = RequireDictionary(refreshTool["inputSchema"]);
+            var refreshProperties = RequireDictionary(refreshSchema["properties"]);
+            Assert.That(refreshProperties.ContainsKey("assetPaths"), Is.True);
+            Assert.That(refreshProperties.ContainsKey("reconcileExternalChanges"), Is.False);
         }
 
         [Test]

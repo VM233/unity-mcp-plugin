@@ -196,16 +196,14 @@ namespace UnityMCP.Editor
         private static Dictionary<string, object> BuildRecoveredResult(Dictionary<string, object> args)
         {
             var paths = GetStringList(args, "assetPaths");
-            bool reconcile = GetBool(args, "reconcileExternalChanges", true);
             return new Dictionary<string, object>
             {
                 { "success", true },
                 { "forceUpdate", GetBool(args, "forceUpdate", true) },
                 { "saveAssets", GetBool(args, "saveAssets", false) },
                 { "importedPaths", paths },
-                { "preReconciledExternalChanges", paths.Count > 0 && reconcile },
-                { "reconciledExternalChanges", paths.Count == 0 || reconcile },
-                { "refreshedAllAssets", paths.Count == 0 || reconcile },
+                { "refreshMode", paths.Count > 0 ? "targeted" : "full" },
+                { "refreshedAllAssets", paths.Count == 0 },
                 { "recoveredAfterReload", true },
                 { "isUpdating", EditorApplication.isUpdating },
                 { "isCompiling", EditorApplication.isCompiling },

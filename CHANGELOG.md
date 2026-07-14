@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.2.6] - 2026-07-15
+
+- Made `asset/refresh` strictly targeted whenever `assetPaths` are supplied, removing the implicit full synchronous AssetDatabase refresh that amplified Unity memory pressure during repeated small USS/UXML imports. Full external-change reconciliation now requires omitting `assetPaths`, and refresh results report an explicit `targeted` or `full` mode.
+
 ## [3.2.5] - 2026-07-14
 
 - Blocked Git package updates while a package-test workflow is non-terminal, preventing its exact manifest restoration from overwriting a concurrent package revision change.

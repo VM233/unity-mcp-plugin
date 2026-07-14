@@ -855,7 +855,6 @@ namespace UnityMCP.Editor
         {
             bool forceUpdate = GetBool(args, "forceUpdate", true);
             bool saveAssets = GetBool(args, "saveAssets", false);
-            bool reconcileExternalChanges = GetBool(args, "reconcileExternalChanges", true);
             var assetPaths = GetStringList(args, "assetPaths");
 
             var options = forceUpdate ? ImportAssetOptions.ForceUpdate : ImportAssetOptions.Default;
@@ -863,29 +862,16 @@ namespace UnityMCP.Editor
 
             if (assetPaths.Count > 0)
             {
-                // Reconcile the AssetDatabase before targeted imports. Importing a
-                // file whose on-disk timestamp changed before SourceAssetDB has
-                // observed it can produce a timestamp mismatch warning. A single
-                // synchronous pass also removes externally deleted compiler inputs.
-                if (reconcileExternalChanges)
+                foreach (string path in OrderTargetedImportPaths(assetPaths))
                 {
-                    AssetDatabase.Refresh(options | ImportAssetOptions.ForceSynchronousImport);
-                    importedPaths.AddRange(assetPaths.Select(NormalizeAssetPath)
-                        .Where(path => !string.IsNullOrEmpty(path)).Distinct());
-                }
-                else
-                {
-                    foreach (string path in OrderTargetedImportPaths(assetPaths))
-                    {
-                        AssetDatabase.ImportAsset(path,
-                            options | ImportAssetOptions.ForceSynchronousImport);
-                        importedPaths.Add(path);
-                    }
+                    AssetDatabase.ImportAsset(path,
+                        options | ImportAssetOptions.ForceSynchronousImport);
+                    importedPaths.Add(path);
                 }
             }
             else
             {
-                AssetDatabase.Refresh(options);
+                AssetDatabase.Refresh(options | ImportAssetOptions.ForceSynchronousImport);
             }
 
             if (saveAssets)
@@ -897,9 +883,8 @@ namespace UnityMCP.Editor
                 { "forceUpdate", forceUpdate },
                 { "saveAssets", saveAssets },
                 { "importedPaths", importedPaths },
-                { "preReconciledExternalChanges", assetPaths.Count > 0 && reconcileExternalChanges },
-                { "reconciledExternalChanges", assetPaths.Count == 0 || reconcileExternalChanges },
-                { "refreshedAllAssets", importedPaths.Count == 0 || reconcileExternalChanges },
+                { "refreshMode", assetPaths.Count > 0 ? "targeted" : "full" },
+                { "refreshedAllAssets", assetPaths.Count == 0 },
                 { "isUpdating", EditorApplication.isUpdating },
                 { "isCompiling", EditorApplication.isCompiling },
             };
