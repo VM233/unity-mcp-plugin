@@ -2,10 +2,15 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.2.5] - 2026-07-14
+
+- Blocked Git package updates while a package-test workflow is non-terminal, preventing its exact manifest restoration from overwriting a concurrent package revision change.
+- Made the deferred prefab refresh regression assert the plugin's missing-type refresh scheduling directly, avoiding false failures from prefab loading importing unrelated files on Unity 6.4.
+- Failed filtered Unity Test Runner jobs with `no_tests_matched` when zero tests are selected, eliminating false-success package-test runs.
+
 ## [3.2.4] - 2026-07-14
 
 - Rebuilt terminal Unity Test Runner details from the final result tree and persisted failure diagnostics across reloads, so package-test failures retain their names, messages, and stacks after manifest restoration.
-- Blocked Git package updates while a package-test workflow is non-terminal, preventing its exact manifest restoration from overwriting a concurrent package revision change.
 
 ## [3.2.3] - 2026-07-14
 

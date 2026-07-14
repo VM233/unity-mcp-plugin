@@ -146,6 +146,10 @@ namespace UnityMCP.Editor
                 TestNames = testNames,
                 Categories = testCategories,
                 Assemblies = assemblyNames,
+                HasExplicitFilters = (testNames?.Length ?? 0) > 0 ||
+                                     (testCategories?.Length ?? 0) > 0 ||
+                                     (assemblyNames?.Length ?? 0) > 0 ||
+                                     (groupNames?.Length ?? 0) > 0,
                 AgentId = args != null && args.TryGetValue("_agentId", out object agentValue)
                     ? agentValue?.ToString()
                     : "anonymous",
@@ -432,7 +436,16 @@ namespace UnityMCP.Editor
 
         private static void FinalizeJob(TestJob job, double totalDuration, bool recoveredFromLeafResults)
         {
-            job.Status = job.FailedCount > 0 ? TestJobStatus.Failed : TestJobStatus.Succeeded;
+            if (job.TotalTests == 0 && job.HasExplicitFilters)
+            {
+                job.Status = TestJobStatus.Failed;
+                job.Error = "No tests matched the requested filters.";
+                job.ErrorCode = "no_tests_matched";
+            }
+            else
+            {
+                job.Status = job.FailedCount > 0 ? TestJobStatus.Failed : TestJobStatus.Succeeded;
+            }
             job.CompletedAt = DateTime.UtcNow;
             job.TotalDuration = totalDuration;
             job.CurrentTestName = null;
@@ -513,6 +526,8 @@ namespace UnityMCP.Editor
 
             if (job.Error != null)
                 result["error"] = job.Error;
+            if (job.ErrorCode != null)
+                result["errorCode"] = job.ErrorCode;
             if (job.CompletionRecovered)
                 result["completionRecoveredFromLeafResults"] = true;
 
@@ -629,7 +644,9 @@ namespace UnityMCP.Editor
                         { "skippedCount", j.SkippedCount },
                         { "totalDuration", j.TotalDuration },
                         { "completionRecovered", j.CompletionRecovered },
+                        { "hasExplicitFilters", j.HasExplicitFilters },
                         { "error", j.Error ?? "" },
+                        { "errorCode", j.ErrorCode ?? "" },
                         { "failures", j.FailuresSoFar.Take(MaxFailuresTracked)
                             .Select(SerializeTestResult).Cast<object>().ToList() }
                     });
@@ -684,6 +701,8 @@ namespace UnityMCP.Editor
                         TotalDuration = Convert.ToDouble(dict["totalDuration"]),
                         CompletionRecovered = dict.TryGetValue("completionRecovered", out var recovered) &&
                                               Convert.ToBoolean(recovered),
+                        HasExplicitFilters = dict.TryGetValue("hasExplicitFilters", out var hasFilters) &&
+                                             Convert.ToBoolean(hasFilters),
                     };
 
                     if (DateTime.TryParse(dict["startedAt"].ToString(), out var started))
@@ -693,6 +712,9 @@ namespace UnityMCP.Editor
                         job.CompletedAt = completed;
                     if (!string.IsNullOrEmpty(dict["error"]?.ToString()))
                         job.Error = dict["error"].ToString();
+                    if (dict.TryGetValue("errorCode", out object errorCode) &&
+                        !string.IsNullOrEmpty(errorCode?.ToString()))
+                        job.ErrorCode = errorCode.ToString();
                     if (dict.TryGetValue("failures", out object rawFailures) &&
                         rawFailures is List<object> failures)
                     {
@@ -846,11 +868,13 @@ namespace UnityMCP.Editor
             public DateTime? CompletedAt;
             public DateTime LastUpdatedAt;
             public string Error;
+            public string ErrorCode;
 
             // Filters used
             public string[] TestNames;
             public string[] Categories;
             public string[] Assemblies;
+            public bool HasExplicitFilters;
 
             // Progress
             public int TotalTests;

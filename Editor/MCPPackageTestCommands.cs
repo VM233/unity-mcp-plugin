@@ -118,6 +118,26 @@ namespace UnityMCP.Editor
             return response;
         }
 
+        internal static bool TryGetActiveWorkflow(out string workflowId, out string packageName,
+            out string state)
+        {
+            if (_workflow == null)
+                _workflow = LoadWorkflow();
+
+            if (_workflow == null || _workflow.IsTerminal)
+            {
+                workflowId = "";
+                packageName = "";
+                state = "";
+                return false;
+            }
+
+            workflowId = _workflow.WorkflowId ?? "";
+            packageName = _workflow.PackageName ?? "";
+            state = _workflow.State ?? "";
+            return true;
+        }
+
         private static void EnablePackageTests()
         {
             if (_workflow == null || _workflow.State != "enabling")
@@ -262,6 +282,8 @@ namespace UnityMCP.Editor
 
             _workflow.TestResult = jobResult;
             _workflow.TestSucceeded = status == "succeeded";
+            if (!_workflow.TestSucceeded)
+                _workflow.Error = GetString(jobResult, "error", "Package tests failed");
             if (_workflow.ManifestChanged)
                 BeginRestore();
             else

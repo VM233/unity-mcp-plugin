@@ -332,12 +332,13 @@ namespace UnityMCP.Editor.Tests
         }
 
         [UnityTest]
-        public IEnumerator TransactionEditDeferred_LoadedComponentTypes_DoNotRefreshAssets()
+        public IEnumerator TransactionEditDeferred_LoadedComponentTypes_DoNotScheduleAssetRefresh()
         {
             CreateTestPrefab();
-            const string sentinelPath = TEST_FOLDER + "/Refresh Sentinel.txt";
-            File.WriteAllText(GetAbsolutePath(sentinelPath), "not imported");
-            Assert.That(AssetDatabase.AssetPathToGUID(sentinelPath), Is.Empty);
+            FieldInfo refreshScheduledField = typeof(MCPPrefabAssetCommands).GetField("_assetRefreshScheduled",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(refreshScheduledField, Is.Not.Null);
+            refreshScheduledField.SetValue(null, false);
 
             object completedResult = null;
             MCPPrefabAssetCommands.TransactionEditDeferred(new Dictionary<string, object>
@@ -346,35 +347,37 @@ namespace UnityMCP.Editor.Tests
                 { "refreshAssets", true },
                 { "typeResolveStableMs", 0 },
                 { "execution", new Dictionary<string, object>
-                    {
-                        { "mode", "batched" },
-                        { "operationsPerFrame", 1 },
-                        { "frameBudgetMs", 1 },
-                    }
-                },
+                {
+                    { "mode", "batched" },
+                    { "operationsPerFrame", 1 },
+                    { "frameBudgetMs", 1 },
+                } },
                 { "operations", new List<object>
+                {
+                    new Dictionary<string, object>
                     {
-                        new Dictionary<string, object>
-                        {
-                            { "type", "setProperty" },
-                            { "prefabPath", "Source" },
-                            { "componentType", typeof(Transform).FullName },
-                            { "propertyName", "m_LocalPosition.x" },
-                            { "value", 3f },
-                        },
-                    }
-                },
+                        { "type", "setProperty" },
+                        { "prefabPath", "Source" },
+                        { "componentType", typeof(Transform).FullName },
+                        { "propertyName", "m_LocalPosition.x" },
+                        { "value", 3f },
+                    },
+                } },
             }, result => completedResult = result, _ => { });
 
-            Assert.That(AssetDatabase.AssetPathToGUID(sentinelPath), Is.Empty,
-                "The transaction refreshed the AssetDatabase even though every referenced type was already loaded.");
+            Assert.That(refreshScheduledField.GetValue(null), Is.EqualTo(false),
+                "Loaded component types must not schedule the missing-type asset refresh path.");
 
             double timeoutAt = EditorApplication.timeSinceStartup + 5d;
             while (completedResult == null && EditorApplication.timeSinceStartup < timeoutAt)
                 yield return null;
 
             Assert.That(completedResult, Is.Not.Null);
-            Assert.That(RequireDictionary(completedResult)["success"], Is.EqualTo(true));
+            var result = RequireDictionary(completedResult);
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(result.TryGetValue("errorCode", out object errorCode) &&
+                        Equals(errorCode, "asset_refresh_scheduled"), Is.False);
+            Assert.That(refreshScheduledField.GetValue(null), Is.EqualTo(false));
         }
 
         [Test]
