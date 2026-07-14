@@ -17,6 +17,9 @@ namespace UnityMCP.Editor
     /// </summary>
     public static class MCPScreenshotCommands
     {
+        private const BindingFlags GameViewMemberFlags = BindingFlags.Instance | BindingFlags.Public |
+                                                         BindingFlags.NonPublic;
+
         // ─── Capture Game View ───
 
         public static void CaptureGameView(Dictionary<string, object> args, Action<object> resolve)
@@ -36,7 +39,9 @@ namespace UnityMCP.Editor
             if (string.IsNullOrEmpty(path))
                 path = "Assets/Screenshots/GameView_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png";
 
-            int superSize = args.ContainsKey("superSize") ? Convert.ToInt32(args["superSize"]) : 1;
+            int superSize = Math.Max(1, args.ContainsKey("superSize")
+                ? Convert.ToInt32(args["superSize"])
+                : 1);
             int waitFrames = Math.Max(1, GetInt(args, "waitFrames", 2));
             int stableFrames = Math.Max(1, GetInt(args, "stableFrames", 2));
             int timeoutMs = Math.Max(1000, GetInt(args, "timeoutMs", 10000));
@@ -57,6 +62,12 @@ namespace UnityMCP.Editor
                     { "success", false },
                     { "error", $"Could not prepare screenshot path '{path}': {ex.Message}" },
                 });
+                return;
+            }
+
+            if (EditorApplication.isPaused)
+            {
+                resolve(CapturePausedGameView(path, fullPath, superSize));
                 return;
             }
 
@@ -153,6 +164,166 @@ namespace UnityMCP.Editor
                 { "success", false },
                 { "error", "screenshot/game must be executed through the deferred route." },
             };
+        }
+
+        private static object CapturePausedGameView(string path, string fullPath, int superSize)
+        {
+            double startedAt = EditorApplication.timeSinceStartup;
+            Type gameViewType = typeof(EditorWindow).Assembly.GetType("UnityEditor.GameView");
+            if (gameViewType == null)
+            {
+                return MCPResponse.Error("Paused Game View capture is unavailable because UnityEditor.GameView could not be resolved.",
+                    "paused_game_view_unavailable", false, new Dictionary<string, object>
+                    {
+                        { "path", path },
+                        { "paused", true },
+                    });
+            }
+
+            EditorWindow focusedWindow = EditorWindow.focusedWindow;
+            EditorWindow[] gameViews = Resources.FindObjectsOfTypeAll(gameViewType).OfType<EditorWindow>().ToArray();
+            EditorWindow gameView = gameViews.FirstOrDefault(window => window == focusedWindow) ??
+                                    gameViews.FirstOrDefault();
+            if (gameView == null)
+            {
+                return MCPResponse.Error("Paused Game View capture requires an open Game View window.",
+                    "paused_game_view_unavailable", false, new Dictionary<string, object>
+                    {
+                        { "path", path },
+                        { "paused", true },
+                    });
+            }
+
+            FieldInfo renderTextureField = gameViewType.GetField("m_RenderTexture", GameViewMemberFlags);
+            var renderTexture = renderTextureField?.GetValue(gameView) as RenderTexture;
+            if (renderTexture == null || renderTexture.IsCreated() == false)
+            {
+                return MCPResponse.Error("The paused Game View does not have a completed render texture yet.",
+                    "paused_game_view_texture_unavailable", true, new Dictionary<string, object>
+                    {
+                        { "path", path },
+                        { "paused", true },
+                        { "gameViewType", gameViewType.FullName },
+                    });
+            }
+
+            try
+            {
+                Dictionary<string, object> result = WriteRenderTexturePng(renderTexture, fullPath, superSize,
+                    SystemInfo.graphicsUVStartsAtTop);
+                result["path"] = path;
+                result["fullPath"] = fullPath.Replace('\\', '/');
+                result["superSize"] = superSize;
+                result["waitFrames"] = 0;
+                result["stableFrames"] = 0;
+                result["elapsedMs"] = Math.Round((EditorApplication.timeSinceStartup - startedAt) * 1000d, 2);
+                result["fileReady"] = true;
+                result["paused"] = true;
+                result["captureMethod"] = "game_view_render_texture";
+                return result;
+            }
+            catch (Exception ex)
+            {
+                return MCPResponse.Error($"Could not capture the paused Game View: {ex.Message}",
+                    "paused_game_view_capture_failed", false, new Dictionary<string, object>
+                    {
+                        { "path", path },
+                        { "fullPath", fullPath.Replace('\\', '/') },
+                        { "paused", true },
+                    });
+            }
+        }
+
+        internal static Dictionary<string, object> WriteRenderTexturePng(RenderTexture source, string fullPath,
+            int superSize, bool flipVertically)
+        {
+            if (source == null || source.IsCreated() == false)
+                throw new InvalidOperationException("The source render texture is unavailable.");
+
+            superSize = Math.Max(1, superSize);
+            long requestedWidth = (long)source.width * superSize;
+            long requestedHeight = (long)source.height * superSize;
+            int maxTextureSize = SystemInfo.maxTextureSize > 0 ? SystemInfo.maxTextureSize : 8192;
+            if (requestedWidth > maxTextureSize || requestedHeight > maxTextureSize)
+            {
+                throw new InvalidOperationException(
+                    $"Requested screenshot size {requestedWidth}x{requestedHeight} exceeds the GPU texture limit {maxTextureSize}.");
+            }
+
+            int width = (int)requestedWidth;
+            int height = (int)requestedHeight;
+            RenderTexture scaledTexture = null;
+            RenderTexture readTexture = source;
+            RenderTexture previousActive = RenderTexture.active;
+            Texture2D image = null;
+            try
+            {
+                if (superSize > 1)
+                {
+                    scaledTexture = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+                    scaledTexture.filterMode = FilterMode.Bilinear;
+                    Graphics.Blit(source, scaledTexture);
+                    readTexture = scaledTexture;
+                }
+
+                RenderTexture.active = readTexture;
+                image = new Texture2D(width, height, TextureFormat.RGBA32, false);
+                image.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+                image.Apply(false, false);
+
+                if (flipVertically)
+                {
+                    Color32[] pixels = image.GetPixels32();
+                    FlipPixelsVertically(pixels, width, height);
+                    image.SetPixels32(pixels);
+                    image.Apply(false, false);
+                }
+
+                byte[] png = image.EncodeToPNG();
+                if (png == null || png.Length == 0)
+                    throw new InvalidOperationException("PNG encoding returned no data.");
+
+                string directory = Path.GetDirectoryName(fullPath);
+                if (string.IsNullOrEmpty(directory) == false)
+                    Directory.CreateDirectory(directory);
+                File.WriteAllBytes(fullPath, png);
+
+                if (TryReadPngInfo(fullPath, out int decodedWidth, out int decodedHeight, out string decodeError) == false)
+                    throw new InvalidOperationException($"Written PNG could not be decoded: {decodeError}");
+
+                return new Dictionary<string, object>
+                {
+                    { "success", true },
+                    { "width", decodedWidth },
+                    { "height", decodedHeight },
+                    { "sizeBytes", png.Length },
+                };
+            }
+            finally
+            {
+                RenderTexture.active = previousActive;
+                if (image != null)
+                    UnityEngine.Object.DestroyImmediate(image);
+                if (scaledTexture != null)
+                    RenderTexture.ReleaseTemporary(scaledTexture);
+            }
+        }
+
+        internal static void FlipPixelsVertically(Color32[] pixels, int width, int height)
+        {
+            if (pixels == null)
+                throw new ArgumentNullException(nameof(pixels));
+            if (width <= 0 || height <= 0 || pixels.Length != width * height)
+                throw new ArgumentException("Pixel buffer dimensions do not match its length.", nameof(pixels));
+
+            var row = new Color32[width];
+            for (int y = 0; y < height / 2; y++)
+            {
+                int oppositeY = height - 1 - y;
+                Array.Copy(pixels, y * width, row, 0, width);
+                Array.Copy(pixels, oppositeY * width, pixels, y * width, width);
+                Array.Copy(row, 0, pixels, oppositeY * width, width);
+            }
         }
 
         // ─── Capture Scene View ───

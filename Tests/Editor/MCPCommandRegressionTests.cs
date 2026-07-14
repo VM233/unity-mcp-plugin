@@ -988,6 +988,66 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void GameViewScreenshot_RenderTextureWriterScalesAndWritesDecodablePng()
+        {
+            const string screenshotPath = TEST_FOLDER + "/Paused Game View.png";
+            string fullPath = GetAbsolutePath(screenshotPath);
+            var renderTexture = new RenderTexture(8, 6, 0, RenderTextureFormat.ARGB32);
+            Texture2D decoded = null;
+            RenderTexture previousActive = RenderTexture.active;
+            try
+            {
+                renderTexture.Create();
+                RenderTexture.active = renderTexture;
+                GL.Clear(true, true, Color.magenta);
+                RenderTexture.active = previousActive;
+
+                MethodInfo writer = typeof(MCPScreenshotCommands).GetMethod("WriteRenderTexturePng",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+                Assert.That(writer, Is.Not.Null);
+                var result = RequireDictionary(writer.Invoke(null,
+                    new object[] { renderTexture, fullPath, 2, false }));
+
+                Assert.That(result["success"], Is.EqualTo(true));
+                Assert.That(result["width"], Is.EqualTo(16));
+                Assert.That(result["height"], Is.EqualTo(12));
+                Assert.That(File.Exists(fullPath), Is.True);
+
+                decoded = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                Assert.That(decoded.LoadImage(File.ReadAllBytes(fullPath)), Is.True);
+                Color sample = decoded.GetPixel(decoded.width / 2, decoded.height / 2);
+                Assert.That(sample.r, Is.GreaterThan(0.9f));
+                Assert.That(sample.g, Is.LessThan(0.1f));
+                Assert.That(sample.b, Is.GreaterThan(0.9f));
+            }
+            finally
+            {
+                RenderTexture.active = previousActive;
+                if (decoded != null)
+                    Object.DestroyImmediate(decoded);
+                renderTexture.Release();
+                Object.DestroyImmediate(renderTexture);
+            }
+        }
+
+        [Test]
+        public void GameViewScreenshot_VerticalFlipSwapsPixelRows()
+        {
+            var bottomLeft = new Color32(255, 0, 0, 255);
+            var bottomRight = new Color32(0, 255, 0, 255);
+            var topLeft = new Color32(0, 0, 255, 255);
+            var topRight = new Color32(255, 255, 255, 255);
+            var pixels = new[] { bottomLeft, bottomRight, topLeft, topRight };
+
+            MethodInfo flip = typeof(MCPScreenshotCommands).GetMethod("FlipPixelsVertically",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(flip, Is.Not.Null);
+            flip.Invoke(null, new object[] { pixels, 2, 2 });
+
+            Assert.That(pixels, Is.EqualTo(new[] { topLeft, topRight, bottomLeft, bottomRight }));
+        }
+
+        [Test]
         public void ProjectToolNamesStayReadableAndBelowClientLimit()
         {
             var method = typeof(MCPToolMetadata).GetMethod("ProjectToolNameToToolName",

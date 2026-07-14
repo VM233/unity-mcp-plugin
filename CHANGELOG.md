@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.1.21] - 2026-07-14
+
+- Made `screenshot/game` capture the Game View's completed render texture directly while Play Mode is paused, without advancing simulation ticks or waiting for a new rendered frame.
+- Added paused-frame vertical orientation correction, supersized output support, PNG readback validation, and regression coverage for render-texture capture.
+
 ## [3.1.20] - 2026-07-14
 
 - Made `wait/editor-idle` tickets reload-resumable with the original ticket ID, remaining deadline, persisted terminal result, and explicit resume diagnostics.
