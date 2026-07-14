@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.2.8] - 2026-07-15
+
+- Updated the first-class schema regression suite to treat `expectedProjectPath` as part of every mutating tool contract.
+
 ## [3.2.7] - 2026-07-15
 
 - Added `expectedProjectPath` to every mutating route schema so first-class tools can bind multi-instance requests without falling back to `advanced/execute`.
