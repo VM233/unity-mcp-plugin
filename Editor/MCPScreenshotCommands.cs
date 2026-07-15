@@ -990,6 +990,23 @@ namespace UnityMCP.Editor
 #endif
         }
 
+        private static RectInt MapPanelRectToHostClientCapture(Rect panelRect, Rect hostRect,
+            RectInt clientRectInCapture)
+        {
+            if (panelRect.width <= 0 || panelRect.height <= 0 ||
+                hostRect.width <= 0 || hostRect.height <= 0 ||
+                clientRectInCapture.width <= 0 || clientRectInCapture.height <= 0)
+                return new RectInt();
+
+            float scaleX = clientRectInCapture.width / hostRect.width;
+            float scaleY = clientRectInCapture.height / hostRect.height;
+            return new RectInt(
+                clientRectInCapture.x + Mathf.RoundToInt((panelRect.x - hostRect.x) * scaleX),
+                clientRectInCapture.y + Mathf.RoundToInt((panelRect.y - hostRect.y) * scaleY),
+                Mathf.Max(1, Mathf.RoundToInt(panelRect.width * scaleX)),
+                Mathf.Max(1, Mathf.RoundToInt(panelRect.height * scaleY)));
+        }
+
 #if UNITY_EDITOR_WIN
         static Dictionary<string, object> Err(string msg, int win32 = 0)
         {
@@ -1014,11 +1031,34 @@ namespace UnityMCP.Editor
             if (wholeWindow) { cropX = 0; cropY = 0; cropW = winW; cropH = winH; }
             else
             {
-                var candidates = new List<CropCandidate>
+                var candidates = new List<CropCandidate>();
+                if (IsFloating(win) == false &&
+                    TryGetHostContainerPosition(win, out Rect hostPosition) &&
+                    GetClientRect(hwnd, out RECT hostClientRect))
                 {
-                    new CropCandidate(panelX - wr.left, panelY - wr.top, panelW, panelH, "screen-pixels"),
-                    new CropCandidate(panelX, panelY, panelW, panelH, "window-local-pixels"),
-                };
+                    var hostClientOrigin = new POINT
+                    {
+                        x = hostClientRect.left,
+                        y = hostClientRect.top,
+                    };
+                    if (ClientToScreen(hwnd, ref hostClientOrigin))
+                    {
+                        var clientRectInCapture = new RectInt(
+                            hostClientOrigin.x - wr.left,
+                            hostClientOrigin.y - wr.top,
+                            hostClientRect.right - hostClientRect.left,
+                            hostClientRect.bottom - hostClientRect.top);
+                        RectInt mapped = MapPanelRectToHostClientCapture(win.position, hostPosition,
+                            clientRectInCapture);
+                        candidates.Add(new CropCandidate(mapped.x, mapped.y, mapped.width, mapped.height,
+                            "host-client-relative"));
+                    }
+                }
+
+                candidates.Add(new CropCandidate(panelX - wr.left, panelY - wr.top, panelW, panelH,
+                    "screen-pixels"));
+                candidates.Add(new CropCandidate(panelX, panelY, panelW, panelH,
+                    "window-local-pixels"));
                 if (Math.Abs(pixelsPerPoint - 1f) > 0.01f)
                 {
                     int scaledX = (int)Math.Round(panelX * pixelsPerPoint);
@@ -1040,7 +1080,7 @@ namespace UnityMCP.Editor
                 cropW = selected.Width;
                 cropH = selected.Height;
                 coordinateMode = selected.Mode;
-                if (coordinateMode != "screen-pixels")
+                if (coordinateMode != "screen-pixels" && coordinateMode != "host-client-relative")
                     cropWarning = "EditorWindow crop used " + coordinateMode + " coordinate fallback.";
 
                 if (cropX + cropW > winW) cropW = winW - cropX;
@@ -1208,6 +1248,40 @@ namespace UnityMCP.Editor
             public bool HasValidOrigin(int windowWidth, int windowHeight)
             {
                 return Width > 0 && Height > 0 && X >= 0 && Y >= 0 && X < windowWidth && Y < windowHeight;
+            }
+        }
+
+        private static bool TryGetHostContainerPosition(EditorWindow win, out Rect position)
+        {
+            position = default;
+            if (win == null)
+                return false;
+
+            try
+            {
+                const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+                var parentField = typeof(EditorWindow).GetField("m_Parent", flags);
+                object parent = parentField?.GetValue(win);
+                if (parent == null)
+                    return false;
+
+                Type parentType = parent.GetType();
+                object container = parentType.GetProperty("window", flags)?.GetValue(parent, null) ??
+                                   parentType.GetField("window", flags)?.GetValue(parent) ??
+                                   parentType.GetField("m_Window", flags)?.GetValue(parent);
+                if (container == null)
+                    return false;
+
+                object value = container.GetType().GetProperty("position", flags)?.GetValue(container, null);
+                if (value is not Rect rect || rect.width <= 0 || rect.height <= 0)
+                    return false;
+
+                position = rect;
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
 

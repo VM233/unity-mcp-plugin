@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.1] - 2026-07-15
+
+- Mapped docked EditorWindow captures through their host client area, fixing UI Toolkit element capture on mixed-DPI and negative-origin multi-monitor layouts.
+
 ## [3.3.0] - 2026-07-15
 
 - Added first-class `unity_prefab_asset_configure_component` / `prefab-asset/configure-component` for atomic ensure-and-configure edits, including serialized properties and asset or same-prefab ObjectReferences.

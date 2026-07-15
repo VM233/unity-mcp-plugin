@@ -1326,6 +1326,38 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void EditorWindowCapture_MapsPanelFromVirtualizedMultiMonitorCoordinates()
+        {
+            MethodInfo map = typeof(MCPScreenshotCommands).GetMethod("MapPanelRectToHostClientCapture",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(map, Is.Not.Null);
+
+            var panelRect = new Rect(2126.6665f, 79f, 929f, 555f);
+            var hostRect = new Rect(1706.6666f, 43f, 1920f, 989f);
+            var clientRect = new RectInt(8, 51, 1920, 989);
+
+            var mapped = (RectInt)map.Invoke(null, new object[] { panelRect, hostRect, clientRect });
+
+            Assert.That(mapped, Is.EqualTo(new RectInt(428, 87, 929, 555)));
+        }
+
+        [Test]
+        public void EditorWindowCapture_ScalesHostLocalCoordinatesForHighDpiClient()
+        {
+            MethodInfo map = typeof(MCPScreenshotCommands).GetMethod("MapPanelRectToHostClientCapture",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(map, Is.Not.Null);
+
+            var panelRect = new Rect(-1180f, 50f, 600f, 400f);
+            var hostRect = new Rect(-1280f, 0f, 1280f, 720f);
+            var clientRect = new RectInt(8, 31, 1920, 1080);
+
+            var mapped = (RectInt)map.Invoke(null, new object[] { panelRect, hostRect, clientRect });
+
+            Assert.That(mapped, Is.EqualTo(new RectInt(158, 106, 900, 600)));
+        }
+
+        [Test]
         public void ProjectToolNamesStayReadableAndBelowClientLimit()
         {
             var method = typeof(MCPToolMetadata).GetMethod("ProjectToolNameToToolName",
