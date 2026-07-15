@@ -1120,7 +1120,7 @@ namespace UnityMCP.Editor.Tests
 
             Assert.That(analysis["visualValid"], Is.EqualTo(true));
             Assert.That(analysis["hasOutOfPaletteEvidence"], Is.EqualTo(true));
-            Assert.That(analysis["reason"], Is.EqualTo("document_differs_from_canvas_background"));
+            Assert.That(analysis["reason"], Is.EqualTo("document_contains_visual_content"));
         }
 
         [Test]
@@ -1140,6 +1140,43 @@ namespace UnityMCP.Editor.Tests
             Assert.That(analysis["visualValid"], Is.EqualTo(true));
             Assert.That(analysis["hasOutOfPaletteEvidence"], Is.EqualTo(false));
             Assert.That(analysis["hasDistributionEvidence"], Is.EqualTo(true));
+        }
+
+        [Test]
+        public void UIBuilderPreviewVisualAnalysis_RejectsCheckerboardWhenCanvasEqualsDocument()
+        {
+            const int width = 128;
+            const int height = 128;
+            var documentAndCanvasRect = new RectInt(8, 8, 112, 112);
+            var pixels = CreateTopLeftCheckerboard(width, height, documentAndCanvasRect,
+                new Color32(130, 130, 130, 255), new Color32(146, 146, 146, 255));
+
+            var analysis = InvokeUIBuilderPixelAnalysis(pixels, width, height, documentAndCanvasRect,
+                documentAndCanvasRect);
+
+            Assert.That(analysis["conclusive"], Is.EqualTo(true));
+            Assert.That(analysis["backgroundComparable"], Is.EqualTo(false));
+            Assert.That(analysis["visualValid"], Is.EqualTo(false));
+            Assert.That(analysis["reason"], Is.EqualTo("document_matches_checkerboard_or_blank_shell"));
+        }
+
+        [Test]
+        public void UIBuilderPreviewVisualAnalysis_AcceptsColoredContentWhenCanvasEqualsDocument()
+        {
+            const int width = 128;
+            const int height = 128;
+            var documentAndCanvasRect = new RectInt(8, 8, 112, 112);
+            var pixels = CreateTopLeftCheckerboard(width, height, documentAndCanvasRect,
+                new Color32(130, 130, 130, 255), new Color32(146, 146, 146, 255));
+            FillTopLeftRect(pixels, width, height, new RectInt(24, 24, 80, 80),
+                new Color32(132, 74, 39, 255));
+
+            var analysis = InvokeUIBuilderPixelAnalysis(pixels, width, height, documentAndCanvasRect,
+                documentAndCanvasRect);
+
+            Assert.That(analysis["visualValid"], Is.EqualTo(true));
+            Assert.That(analysis["hasTargetColorEvidence"], Is.EqualTo(true));
+            Assert.That(analysis["reason"], Is.EqualTo("document_contains_visual_content"));
         }
 
         [Test]

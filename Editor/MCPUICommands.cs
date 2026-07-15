@@ -1382,8 +1382,10 @@ namespace UnityMCP.Editor
                         result["error"] = screenshotSucceeded == false
                             ? "UI Builder screenshot capture failed."
                             : string.Equals(visualReason, "document_matches_canvas_background",
-                                StringComparison.Ordinal)
-                                ? "UI Builder document preview is visually indistinguishable from the canvas background; preview evidence is invalid."
+                                  StringComparison.Ordinal) ||
+                              string.Equals(visualReason, "document_matches_checkerboard_or_blank_shell",
+                                  StringComparison.Ordinal)
+                                ? "UI Builder document preview is visually indistinguishable from a checkerboard or blank canvas; preview evidence is invalid."
                                 : $"UI Builder preview visual analysis was inconclusive ({visualReason}); preview evidence is invalid.";
                     }
                 }
@@ -2248,8 +2250,10 @@ namespace UnityMCP.Editor
             public float CanvasHeight;
             public Rect DocumentRootWorldBound;
             public Rect CanvasWorldBound;
+            public Rect ViewportWorldBound;
             public UnityEngine.UIElements.VisualElement DocumentRoot;
             public UnityEngine.UIElements.VisualElement Canvas;
+            public UnityEngine.UIElements.VisualElement Viewport;
             public string Error = "";
 
             public Dictionary<string, object> ToDictionary()
@@ -2275,6 +2279,7 @@ namespace UnityMCP.Editor
                     },
                     { "documentRootWorldBound", RectToDictionary(DocumentRootWorldBound) },
                     { "canvasWorldBound", RectToDictionary(CanvasWorldBound) },
+                    { "viewportWorldBound", RectToDictionary(ViewportWorldBound) },
                     { "error", Error },
                 };
             }
@@ -2313,6 +2318,14 @@ namespace UnityMCP.Editor
 
                 state.DocumentRoot = documentRoot;
                 state.Canvas = canvas;
+                var viewport = canvas;
+                while (viewport != null &&
+                       viewport.GetType().Name.IndexOf("BuilderViewport", StringComparison.Ordinal) < 0 &&
+                       viewport.ClassListContains("unity-builder-viewport") == false)
+                {
+                    viewport = viewport.parent;
+                }
+                state.Viewport = viewport;
 
                 state.DocumentRootChildCount = documentRoot?.childCount ?? -1;
                 state.CanvasChildCount = canvas?.childCount ?? -1;
@@ -2329,6 +2342,9 @@ namespace UnityMCP.Editor
                     state.CanvasHeight = canvas.layout.height;
                     state.CanvasWorldBound = canvas.worldBound;
                 }
+
+                if (viewport != null)
+                    state.ViewportWorldBound = viewport.worldBound;
 
                 state.Ready = state.DocumentPathMatches && state.DocumentRootChildCount > 0 &&
                               state.CanvasChildCount > 0 && IsPositiveFinite(state.DocumentRootWidth) &&
@@ -2397,6 +2413,12 @@ namespace UnityMCP.Editor
                 Rect rootWorldBound = window.rootVisualElement.worldBound;
                 RectInt canvasRect = MapWorldRectToCapture(previewState.CanvasWorldBound, rootWorldBound,
                     contentRect, width, height);
+                if (previewState.Viewport != null)
+                {
+                    RectInt viewportRect = MapWorldRectToCapture(previewState.ViewportWorldBound, rootWorldBound,
+                        contentRect, width, height);
+                    canvasRect = IntersectRects(canvasRect, viewportRect);
+                }
                 RectInt documentRect = MapWorldRectToCapture(previewState.DocumentRootWorldBound, rootWorldBound,
                     contentRect, width, height);
                 documentRect = IntersectRects(documentRect, canvasRect);
@@ -2408,6 +2430,7 @@ namespace UnityMCP.Editor
                     contentRect.width, contentRect.height));
                 analysis["documentWorldBound"] = RectToDictionary(previewState.DocumentRootWorldBound);
                 analysis["canvasWorldBound"] = RectToDictionary(previewState.CanvasWorldBound);
+                analysis["viewportWorldBound"] = RectToDictionary(previewState.ViewportWorldBound);
                 return analysis;
             }
             catch (Exception ex)
@@ -2450,27 +2473,62 @@ namespace UnityMCP.Editor
             var backgroundPalette = new HashSet<int>(backgroundHistogram.Keys);
 
             int outOfPaletteSamples = 0;
+            int backgroundOverlapSamples = 0;
+            int neutralTargetSamples = 0;
+            int dominantTargetBucketSamples = 0;
             foreach (var pair in targetHistogram)
             {
-                if (backgroundPalette.Contains(pair.Key) == false)
+                if (backgroundPalette.Contains(pair.Key))
+                    backgroundOverlapSamples += pair.Value;
+                else
                     outOfPaletteSamples += pair.Value;
+
+                int red = pair.Key >> 8 & 0xF;
+                int green = pair.Key >> 4 & 0xF;
+                int blue = pair.Key & 0xF;
+                if (Math.Max(red, Math.Max(green, blue)) - Math.Min(red, Math.Min(green, blue)) <= 1)
+                    neutralTargetSamples += pair.Value;
+
+                dominantTargetBucketSamples = Math.Max(dominantTargetBucketSamples, pair.Value);
             }
 
             double outOfPaletteRatio = targetSamples > 0
                 ? outOfPaletteSamples / (double)targetSamples
                 : 0d;
+            double backgroundOverlapRatio = targetSamples > 0
+                ? backgroundOverlapSamples / (double)targetSamples
+                : 0d;
+            double neutralTargetRatio = targetSamples > 0
+                ? neutralTargetSamples / (double)targetSamples
+                : 0d;
+            double dominantTargetBucketRatio = targetSamples > 0
+                ? dominantTargetBucketSamples / (double)targetSamples
+                : 0d;
             double histogramDistance = CalculateHistogramDistance(targetHistogram, targetSamples,
                 backgroundHistogram, backgroundSamples);
             int minimumOutOfPaletteSamples = Math.Max(8, Mathf.CeilToInt(targetSamples * 0.001f));
-            bool conclusive = targetSamples >= 64 && backgroundSamples >= 64;
+            bool targetSampled = targetSamples >= 64;
+            bool backgroundComparable = backgroundSamples >= 64 && backgroundOverlapRatio >= 0.9d;
             bool hasOutOfPaletteEvidence = outOfPaletteSamples >= minimumOutOfPaletteSamples;
             bool hasDistributionEvidence = histogramDistance >= 0.12d;
-            bool visualValid = conclusive && (hasOutOfPaletteEvidence || hasDistributionEvidence);
-            string reason = conclusive == false
-                ? "insufficient_document_or_background_samples"
-                : visualValid
-                    ? "document_differs_from_canvas_background"
-                    : "document_matches_canvas_background";
+            bool hasTargetColorEvidence = targetSamples - neutralTargetSamples >= minimumOutOfPaletteSamples;
+            bool hasTargetComplexityEvidence = targetHistogram.Count >= 12 && dominantTargetBucketRatio <= 0.98d;
+            bool visualValid = targetSampled && (backgroundComparable
+                ? hasOutOfPaletteEvidence || hasDistributionEvidence
+                : hasTargetColorEvidence || hasTargetComplexityEvidence);
+            bool conclusive = targetSampled && (backgroundComparable || visualValid ||
+                neutralTargetRatio >= 0.999d && targetHistogram.Count <= 8);
+            string reason = targetSampled == false
+                ? "insufficient_document_samples"
+                : backgroundComparable
+                    ? visualValid
+                        ? "document_differs_from_canvas_background"
+                        : "document_matches_canvas_background"
+                    : visualValid
+                        ? "document_contains_visual_content"
+                        : conclusive
+                            ? "document_matches_checkerboard_or_blank_shell"
+                            : "visual_content_could_not_be_proven";
 
             return new Dictionary<string, object>
             {
@@ -2490,12 +2548,20 @@ namespace UnityMCP.Editor
                 { "documentDistinctColorBuckets", targetHistogram.Count },
                 { "backgroundDistinctColorBuckets", backgroundHistogram.Count },
                 { "backgroundPaletteBucketCount", backgroundPalette.Count },
+                { "backgroundComparable", backgroundComparable },
+                { "backgroundOverlapSamples", backgroundOverlapSamples },
+                { "backgroundOverlapRatio", Math.Round(backgroundOverlapRatio, 6) },
                 { "outOfBackgroundPaletteSamples", outOfPaletteSamples },
                 { "minimumOutOfPaletteSamples", minimumOutOfPaletteSamples },
                 { "outOfBackgroundPaletteRatio", Math.Round(outOfPaletteRatio, 6) },
                 { "histogramDistance", Math.Round(histogramDistance, 6) },
                 { "hasOutOfPaletteEvidence", hasOutOfPaletteEvidence },
                 { "hasDistributionEvidence", hasDistributionEvidence },
+                { "neutralDocumentSamples", neutralTargetSamples },
+                { "neutralDocumentRatio", Math.Round(neutralTargetRatio, 6) },
+                { "dominantDocumentBucketRatio", Math.Round(dominantTargetBucketRatio, 6) },
+                { "hasTargetColorEvidence", hasTargetColorEvidence },
+                { "hasTargetComplexityEvidence", hasTargetComplexityEvidence },
             };
         }
 

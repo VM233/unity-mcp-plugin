@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.2.10] - 2026-07-15
+
+- Clipped UI Builder document analysis to the visible viewport and added document-only checkerboard/shell detection for Unity versions where the reflected canvas and document bounds are identical.
+- Kept valid colored and sufficiently complex previews verifiable even when no comparable canvas-background ring is available.
+
 ## [3.2.9] - 2026-07-15
 
 - Made UI Builder preview validation compare the mapped document pixels with the surrounding canvas background, so editor chrome, blank shells, and checkerboard-only captures no longer count as valid visual evidence.
