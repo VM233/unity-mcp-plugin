@@ -1076,6 +1076,73 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void UIBuilderPreviewVisualAnalysis_RejectsShellAndCheckerboardOnly()
+        {
+            const int width = 128;
+            const int height = 128;
+            var canvasRect = new RectInt(8, 8, 112, 112);
+            var documentRect = new RectInt(32, 32, 64, 64);
+            var pixels = CreateTopLeftCheckerboard(width, height, canvasRect,
+                new Color32(82, 82, 82, 255), new Color32(98, 98, 98, 255));
+
+            for (int y = 0; y < height; y++)
+            {
+                for (int x = 0; x < width; x++)
+                {
+                    if (x < canvasRect.xMin || x >= canvasRect.xMax ||
+                        y < canvasRect.yMin || y >= canvasRect.yMax)
+                    {
+                        SetTopLeftPixel(pixels, width, height, x, y, new Color32(180, 40, 40, 255));
+                    }
+                }
+            }
+
+            var analysis = InvokeUIBuilderPixelAnalysis(pixels, width, height, documentRect, canvasRect);
+
+            Assert.That(analysis["conclusive"], Is.EqualTo(true));
+            Assert.That(analysis["visualValid"], Is.EqualTo(false));
+            Assert.That(analysis["documentVisuallyBlank"], Is.EqualTo(true));
+            Assert.That(analysis["reason"], Is.EqualTo("document_matches_canvas_background"));
+        }
+
+        [Test]
+        public void UIBuilderPreviewVisualAnalysis_AcceptsDocumentColorsOutsideCanvasPalette()
+        {
+            const int width = 128;
+            const int height = 128;
+            var canvasRect = new RectInt(8, 8, 112, 112);
+            var documentRect = new RectInt(32, 32, 64, 64);
+            var pixels = CreateTopLeftCheckerboard(width, height, canvasRect,
+                new Color32(82, 82, 82, 255), new Color32(98, 98, 98, 255));
+            FillTopLeftRect(pixels, width, height, documentRect, new Color32(132, 74, 39, 255));
+
+            var analysis = InvokeUIBuilderPixelAnalysis(pixels, width, height, documentRect, canvasRect);
+
+            Assert.That(analysis["visualValid"], Is.EqualTo(true));
+            Assert.That(analysis["hasOutOfPaletteEvidence"], Is.EqualTo(true));
+            Assert.That(analysis["reason"], Is.EqualTo("document_differs_from_canvas_background"));
+        }
+
+        [Test]
+        public void UIBuilderPreviewVisualAnalysis_AcceptsSolidDocumentUsingCheckerboardColor()
+        {
+            const int width = 128;
+            const int height = 128;
+            var canvasRect = new RectInt(8, 8, 112, 112);
+            var documentRect = new RectInt(32, 32, 64, 64);
+            var firstCheckerColor = new Color32(82, 82, 82, 255);
+            var pixels = CreateTopLeftCheckerboard(width, height, canvasRect, firstCheckerColor,
+                new Color32(98, 98, 98, 255));
+            FillTopLeftRect(pixels, width, height, documentRect, firstCheckerColor);
+
+            var analysis = InvokeUIBuilderPixelAnalysis(pixels, width, height, documentRect, canvasRect);
+
+            Assert.That(analysis["visualValid"], Is.EqualTo(true));
+            Assert.That(analysis["hasOutOfPaletteEvidence"], Is.EqualTo(false));
+            Assert.That(analysis["hasDistributionEvidence"], Is.EqualTo(true));
+        }
+
+        [Test]
         public void GameViewScreenshot_RejectsEditModeImmediately()
         {
             const string screenshotPath = TEST_FOLDER + "/Game View.png";
@@ -2700,6 +2767,46 @@ namespace UnityMCP.Editor.Tests
         {
             Assert.That(value, Is.TypeOf<Dictionary<string, object>>());
             return (Dictionary<string, object>)value;
+        }
+
+        private static Dictionary<string, object> InvokeUIBuilderPixelAnalysis(Color32[] pixels, int width,
+            int height, RectInt documentRect, RectInt canvasRect)
+        {
+            MethodInfo analyzer = typeof(MCPUICommands).GetMethod("AnalyzeUIBuilderPixels",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(analyzer, Is.Not.Null);
+            return RequireDictionary(analyzer.Invoke(null,
+                new object[] { pixels, width, height, documentRect, canvasRect }));
+        }
+
+        private static Color32[] CreateTopLeftCheckerboard(int width, int height, RectInt rect,
+            Color32 first, Color32 second)
+        {
+            var pixels = Enumerable.Repeat(new Color32(26, 26, 26, 255), width * height).ToArray();
+            for (int y = rect.yMin; y < rect.yMax; y++)
+            {
+                for (int x = rect.xMin; x < rect.xMax; x++)
+                {
+                    Color32 color = ((x / 8 + y / 8) & 1) == 0 ? first : second;
+                    SetTopLeftPixel(pixels, width, height, x, y, color);
+                }
+            }
+
+            return pixels;
+        }
+
+        private static void FillTopLeftRect(Color32[] pixels, int width, int height, RectInt rect, Color32 color)
+        {
+            for (int y = rect.yMin; y < rect.yMax; y++)
+            {
+                for (int x = rect.xMin; x < rect.xMax; x++)
+                    SetTopLeftPixel(pixels, width, height, x, y, color);
+            }
+        }
+
+        private static void SetTopLeftPixel(Color32[] pixels, int width, int height, int x, int y, Color32 color)
+        {
+            pixels[(height - 1 - y) * width + x] = color;
         }
 
         private static void ReverseYamlObjectBlocks(string assetPath)

@@ -1048,6 +1048,45 @@ namespace UnityMCP.Editor
                 if (cropW <= 0 || cropH <= 0) return Err("Bad crop " + cropW + "x" + cropH);
             }
 
+            int contentX = 0;
+            int contentY = 0;
+            int contentW = cropW;
+            int contentH = cropH;
+            if (wholeWindow)
+            {
+                if (GetClientRect(hwnd, out RECT clientRect))
+                {
+                    var clientOrigin = new POINT { x = clientRect.left, y = clientRect.top };
+                    if (ClientToScreen(hwnd, ref clientOrigin))
+                    {
+                        contentX = Math.Max(0, clientOrigin.x - wr.left - cropX);
+                        contentY = Math.Max(0, clientOrigin.y - wr.top - cropY);
+                        contentW = Math.Min(clientRect.right - clientRect.left, cropW - contentX);
+                        contentH = Math.Min(clientRect.bottom - clientRect.top, cropH - contentY);
+                    }
+                    else
+                    {
+                        cropWarning = AppendWarning(cropWarning,
+                            "Could not map the floating window client area; contentRect falls back to the full capture.");
+                    }
+                }
+                else
+                {
+                    cropWarning = AppendWarning(cropWarning,
+                        "Could not read the floating window client area; contentRect falls back to the full capture.");
+                }
+            }
+
+            if (contentW <= 0 || contentH <= 0)
+            {
+                contentX = 0;
+                contentY = 0;
+                contentW = cropW;
+                contentH = cropH;
+                cropWarning = AppendWarning(cropWarning,
+                    "The mapped client area was empty; contentRect falls back to the full capture.");
+            }
+
             // Bound dimensions before allocating: int-overflow guard (long math) + GPU limit.
             int maxTex = SystemInfo.maxTextureSize; if (maxTex <= 0) maxTex = 8192;
             int cap = Math.Min(maxDimension > 0 ? maxDimension : int.MaxValue, maxTex);
@@ -1123,6 +1162,14 @@ namespace UnityMCP.Editor
                     { "window", win.GetType().FullName },
                     { "floating", floating },
                     { "coordinateMode", coordinateMode },
+                    { "contentRect", new Dictionary<string, object>
+                        {
+                            { "x", contentX },
+                            { "y", contentY },
+                            { "width", contentW },
+                            { "height", contentH },
+                        }
+                    },
                     { "centerColorRange", centerColorRange },
                     { "centerDistinctColorBuckets", centerDistinctColorBuckets },
                     { "centerVisuallyBlank", centerVisuallyBlank },
@@ -1162,6 +1209,11 @@ namespace UnityMCP.Editor
             {
                 return Width > 0 && Height > 0 && X >= 0 && Y >= 0 && X < windowWidth && Y < windowHeight;
             }
+        }
+
+        private static string AppendWarning(string existing, string warning)
+        {
+            return string.IsNullOrEmpty(existing) ? warning : existing + " " + warning;
         }
 
         private static void AnalyzeCenterPixels(byte[] bgra, int width, int height, out int colorRange,
@@ -1279,6 +1331,8 @@ namespace UnityMCP.Editor
         // ── Win32 P/Invoke + GDI types (Windows editor only) ──
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
+        [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool GetClientRect(IntPtr hWnd, out RECT r);
+        [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool EnumWindows(EnumWindowsProc cb, IntPtr l);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool IsWindowVisible(IntPtr hWnd);
@@ -1301,6 +1355,7 @@ namespace UnityMCP.Editor
         const uint PW_RENDERFULLCONTENT = 0x00000002; // Windows 8.1+
         const uint DIB_RGB_COLORS = 0;
         [StructLayout(LayoutKind.Sequential)] struct RECT { public int left, top, right, bottom; }
+        [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
         [StructLayout(LayoutKind.Sequential)]
         struct BITMAPINFOHEADER
         {

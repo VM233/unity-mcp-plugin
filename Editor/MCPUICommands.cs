@@ -914,18 +914,18 @@ namespace UnityMCP.Editor
 
             int captureWidth = GetInt(capture, "width", 0);
             int captureHeight = GetInt(capture, "height", 0);
+            RectInt contentRect = ReadCaptureContentRect(capture, captureWidth, captureHeight);
             RectInt cropRect;
             string cropMode;
             if (captureWidth > 0 && captureHeight > 0 && rootRect.width > 0 && rootRect.height > 0)
             {
-                float scaleX = captureWidth / rootRect.width;
-                float scaleY = captureHeight / rootRect.height;
-                cropRect = new RectInt(
-                    Mathf.Max(0, Mathf.FloorToInt((rect.x - rootRect.x) * scaleX) - padding),
-                    Mathf.Max(0, Mathf.FloorToInt((rect.y - rootRect.y) * scaleY) - padding),
-                    Mathf.Max(1, Mathf.CeilToInt(rect.width * scaleX) + padding * 2),
-                    Mathf.Max(1, Mathf.CeilToInt(rect.height * scaleY) + padding * 2));
-                cropMode = "root-relative";
+                cropRect = MapWorldRectToCapture(rect, rootRect, contentRect, captureWidth, captureHeight);
+                cropRect = ClampRectToImage(new RectInt(
+                    cropRect.x - padding,
+                    cropRect.y - padding,
+                    cropRect.width + padding * 2,
+                    cropRect.height + padding * 2), captureWidth, captureHeight);
+                cropMode = "root-relative-content";
             }
             else
             {
@@ -1362,16 +1362,29 @@ namespace UnityMCP.Editor
                     var screenshotResult = screenshot as Dictionary<string, object>;
                     bool screenshotSucceeded = screenshotResult != null &&
                                                GetBool(screenshotResult, "success", false);
-                    bool centerVisuallyBlank = screenshotResult != null &&
-                                               GetBool(screenshotResult, "centerVisuallyBlank", false);
-                    bool visualValid = screenshotSucceeded && centerVisuallyBlank == false;
+                    var visualAnalysis = screenshotSucceeded && window != null
+                        ? AnalyzeUIBuilderScreenshot(screenshotResult, window, previewState)
+                        : new Dictionary<string, object>
+                        {
+                            { "visualValid", false },
+                            { "documentVisuallyBlank", true },
+                            { "conclusive", false },
+                            { "reason", screenshotSucceeded ? "ui_builder_window_unavailable" : "screenshot_capture_failed" },
+                        };
+                    result["visualAnalysis"] = visualAnalysis;
+
+                    bool visualValid = screenshotSucceeded && GetBool(visualAnalysis, "visualValid", false);
                     result["visualValid"] = visualValid;
                     if (visualValid == false)
                     {
                         result["success"] = false;
-                        result["error"] = screenshotSucceeded
-                            ? "UI Builder screenshot center is visually blank; preview evidence is invalid."
-                            : "UI Builder screenshot capture failed.";
+                        string visualReason = GetString(visualAnalysis, "reason");
+                        result["error"] = screenshotSucceeded == false
+                            ? "UI Builder screenshot capture failed."
+                            : string.Equals(visualReason, "document_matches_canvas_background",
+                                StringComparison.Ordinal)
+                                ? "UI Builder document preview is visually indistinguishable from the canvas background; preview evidence is invalid."
+                                : $"UI Builder preview visual analysis was inconclusive ({visualReason}); preview evidence is invalid.";
                     }
                 }
 
@@ -2233,6 +2246,10 @@ namespace UnityMCP.Editor
             public float DocumentRootHeight;
             public float CanvasWidth;
             public float CanvasHeight;
+            public Rect DocumentRootWorldBound;
+            public Rect CanvasWorldBound;
+            public UnityEngine.UIElements.VisualElement DocumentRoot;
+            public UnityEngine.UIElements.VisualElement Canvas;
             public string Error = "";
 
             public Dictionary<string, object> ToDictionary()
@@ -2256,6 +2273,8 @@ namespace UnityMCP.Editor
                             { "height", CanvasHeight },
                         }
                     },
+                    { "documentRootWorldBound", RectToDictionary(DocumentRootWorldBound) },
+                    { "canvasWorldBound", RectToDictionary(CanvasWorldBound) },
                     { "error", Error },
                 };
             }
@@ -2292,18 +2311,23 @@ namespace UnityMCP.Editor
                 var canvas = windowType.GetProperty("canvas", flags)?.GetValue(window)
                     as UnityEngine.UIElements.VisualElement;
 
+                state.DocumentRoot = documentRoot;
+                state.Canvas = canvas;
+
                 state.DocumentRootChildCount = documentRoot?.childCount ?? -1;
                 state.CanvasChildCount = canvas?.childCount ?? -1;
                 if (documentRoot != null)
                 {
                     state.DocumentRootWidth = documentRoot.layout.width;
                     state.DocumentRootHeight = documentRoot.layout.height;
+                    state.DocumentRootWorldBound = documentRoot.worldBound;
                 }
 
                 if (canvas != null)
                 {
                     state.CanvasWidth = canvas.layout.width;
                     state.CanvasHeight = canvas.layout.height;
+                    state.CanvasWorldBound = canvas.worldBound;
                 }
 
                 state.Ready = state.DocumentPathMatches && state.DocumentRootChildCount > 0 &&
@@ -2319,6 +2343,286 @@ namespace UnityMCP.Editor
             }
 
             return state;
+        }
+
+        private static Dictionary<string, object> AnalyzeUIBuilderScreenshot(
+            Dictionary<string, object> screenshot, EditorWindow window, UIBuilderPreviewState previewState)
+        {
+            string screenshotPath = GetString(screenshot, "path");
+            string absolutePath = GetAbsoluteAssetPath(screenshotPath);
+            if (string.IsNullOrEmpty(absolutePath) || File.Exists(absolutePath) == false)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "visualValid", false },
+                    { "documentVisuallyBlank", true },
+                    { "conclusive", false },
+                    { "reason", "screenshot_file_missing" },
+                    { "error", $"Screenshot file was not found at '{screenshotPath}'." },
+                };
+            }
+
+            if (previewState.DocumentRoot == null || previewState.Canvas == null ||
+                window.rootVisualElement == null)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "visualValid", false },
+                    { "documentVisuallyBlank", true },
+                    { "conclusive", false },
+                    { "reason", "preview_elements_unavailable" },
+                    { "error", "UI Builder document root or canvas is unavailable." },
+                };
+            }
+
+            Texture2D texture = null;
+            try
+            {
+                texture = new Texture2D(2, 2, TextureFormat.RGBA32, false);
+                if (texture.LoadImage(File.ReadAllBytes(absolutePath)) == false)
+                {
+                    return new Dictionary<string, object>
+                    {
+                        { "visualValid", false },
+                        { "documentVisuallyBlank", true },
+                        { "conclusive", false },
+                        { "reason", "screenshot_decode_failed" },
+                        { "error", "UI Builder screenshot PNG could not be decoded." },
+                    };
+                }
+
+                int width = texture.width;
+                int height = texture.height;
+                RectInt contentRect = ReadCaptureContentRect(screenshot, width, height);
+                Rect rootWorldBound = window.rootVisualElement.worldBound;
+                RectInt canvasRect = MapWorldRectToCapture(previewState.CanvasWorldBound, rootWorldBound,
+                    contentRect, width, height);
+                RectInt documentRect = MapWorldRectToCapture(previewState.DocumentRootWorldBound, rootWorldBound,
+                    contentRect, width, height);
+                documentRect = IntersectRects(documentRect, canvasRect);
+
+                var analysis = AnalyzeUIBuilderPixels(texture.GetPixels32(), width, height, documentRect,
+                    canvasRect);
+                analysis["mappingMode"] = "root-relative-content";
+                analysis["contentRect"] = RectToDictionary(new Rect(contentRect.x, contentRect.y,
+                    contentRect.width, contentRect.height));
+                analysis["documentWorldBound"] = RectToDictionary(previewState.DocumentRootWorldBound);
+                analysis["canvasWorldBound"] = RectToDictionary(previewState.CanvasWorldBound);
+                return analysis;
+            }
+            catch (Exception ex)
+            {
+                return new Dictionary<string, object>
+                {
+                    { "visualValid", false },
+                    { "documentVisuallyBlank", true },
+                    { "conclusive", false },
+                    { "reason", "visual_analysis_failed" },
+                    { "error", ex.Message },
+                };
+            }
+            finally
+            {
+                if (texture != null)
+                    UnityEngine.Object.DestroyImmediate(texture);
+            }
+        }
+
+        private static Dictionary<string, object> AnalyzeUIBuilderPixels(Color32[] pixels, int width, int height,
+            RectInt documentRect, RectInt canvasRect)
+        {
+            canvasRect = ClampRectToImage(canvasRect, width, height);
+            documentRect = IntersectRects(ClampRectToImage(documentRect, width, height), canvasRect);
+            int inset = Math.Min(4, Math.Max(0, (Math.Min(documentRect.width, documentRect.height) - 1) / 4));
+            RectInt sampledDocumentRect = InsetRect(documentRect, inset);
+            RectInt excludedBackgroundRect = ExpandRect(documentRect, 4, canvasRect);
+
+            long canvasArea = Math.Max(1L, (long)canvasRect.width * canvasRect.height);
+            int sampleStep = Math.Max(1, Mathf.CeilToInt(Mathf.Sqrt(canvasArea / 65536f)));
+            if (sampleStep > 1 && sampleStep % 2 == 0)
+                sampleStep++;
+
+            var targetHistogram = SampleColorBuckets(pixels, width, height, sampledDocumentRect,
+                default, false, sampleStep, out int targetSamples);
+            var backgroundHistogram = SampleColorBuckets(pixels, width, height, canvasRect,
+                excludedBackgroundRect, true, sampleStep, out int backgroundSamples);
+
+            var backgroundPalette = new HashSet<int>(backgroundHistogram.Keys);
+
+            int outOfPaletteSamples = 0;
+            foreach (var pair in targetHistogram)
+            {
+                if (backgroundPalette.Contains(pair.Key) == false)
+                    outOfPaletteSamples += pair.Value;
+            }
+
+            double outOfPaletteRatio = targetSamples > 0
+                ? outOfPaletteSamples / (double)targetSamples
+                : 0d;
+            double histogramDistance = CalculateHistogramDistance(targetHistogram, targetSamples,
+                backgroundHistogram, backgroundSamples);
+            int minimumOutOfPaletteSamples = Math.Max(8, Mathf.CeilToInt(targetSamples * 0.001f));
+            bool conclusive = targetSamples >= 64 && backgroundSamples >= 64;
+            bool hasOutOfPaletteEvidence = outOfPaletteSamples >= minimumOutOfPaletteSamples;
+            bool hasDistributionEvidence = histogramDistance >= 0.12d;
+            bool visualValid = conclusive && (hasOutOfPaletteEvidence || hasDistributionEvidence);
+            string reason = conclusive == false
+                ? "insufficient_document_or_background_samples"
+                : visualValid
+                    ? "document_differs_from_canvas_background"
+                    : "document_matches_canvas_background";
+
+            return new Dictionary<string, object>
+            {
+                { "visualValid", visualValid },
+                { "documentVisuallyBlank", visualValid == false },
+                { "conclusive", conclusive },
+                { "reason", reason },
+                { "documentRect", RectToDictionary(new Rect(documentRect.x, documentRect.y,
+                    documentRect.width, documentRect.height)) },
+                { "sampledDocumentRect", RectToDictionary(new Rect(sampledDocumentRect.x,
+                    sampledDocumentRect.y, sampledDocumentRect.width, sampledDocumentRect.height)) },
+                { "canvasRect", RectToDictionary(new Rect(canvasRect.x, canvasRect.y,
+                    canvasRect.width, canvasRect.height)) },
+                { "sampleStep", sampleStep },
+                { "documentSamples", targetSamples },
+                { "backgroundSamples", backgroundSamples },
+                { "documentDistinctColorBuckets", targetHistogram.Count },
+                { "backgroundDistinctColorBuckets", backgroundHistogram.Count },
+                { "backgroundPaletteBucketCount", backgroundPalette.Count },
+                { "outOfBackgroundPaletteSamples", outOfPaletteSamples },
+                { "minimumOutOfPaletteSamples", minimumOutOfPaletteSamples },
+                { "outOfBackgroundPaletteRatio", Math.Round(outOfPaletteRatio, 6) },
+                { "histogramDistance", Math.Round(histogramDistance, 6) },
+                { "hasOutOfPaletteEvidence", hasOutOfPaletteEvidence },
+                { "hasDistributionEvidence", hasDistributionEvidence },
+            };
+        }
+
+        private static Dictionary<int, int> SampleColorBuckets(Color32[] pixels, int width, int height,
+            RectInt region, RectInt excluded, bool useExclusion, int step, out int sampleCount)
+        {
+            var histogram = new Dictionary<int, int>();
+            sampleCount = 0;
+            if (pixels == null || pixels.Length < width * height || region.width <= 0 || region.height <= 0)
+                return histogram;
+
+            int startX = AlignSampleCoordinate(region.xMin, step);
+            int startY = AlignSampleCoordinate(region.yMin, step);
+            for (int y = startY; y < region.yMax; y += step)
+            {
+                for (int x = startX; x < region.xMax; x += step)
+                {
+                    if (useExclusion && x >= excluded.xMin && x < excluded.xMax &&
+                        y >= excluded.yMin && y < excluded.yMax)
+                    {
+                        continue;
+                    }
+
+                    Color32 color = pixels[(height - 1 - y) * width + x];
+                    int bucket = (color.r >> 4) << 8 | (color.g >> 4) << 4 | (color.b >> 4);
+                    histogram.TryGetValue(bucket, out int count);
+                    histogram[bucket] = count + 1;
+                    sampleCount++;
+                }
+            }
+
+            return histogram;
+        }
+
+        private static int AlignSampleCoordinate(int value, int step)
+        {
+            if (step <= 1)
+                return value;
+
+            int remainder = value % step;
+            if (remainder < 0)
+                remainder += step;
+            return remainder == 0 ? value : value + step - remainder;
+        }
+
+        private static double CalculateHistogramDistance(Dictionary<int, int> first, int firstSamples,
+            Dictionary<int, int> second, int secondSamples)
+        {
+            if (firstSamples <= 0 || secondSamples <= 0)
+                return 0d;
+
+            var buckets = new HashSet<int>(first.Keys);
+            buckets.UnionWith(second.Keys);
+            double distance = 0d;
+            foreach (int bucket in buckets)
+            {
+                first.TryGetValue(bucket, out int firstCount);
+                second.TryGetValue(bucket, out int secondCount);
+                distance += Math.Abs(firstCount / (double)firstSamples - secondCount / (double)secondSamples);
+            }
+
+            return distance * 0.5d;
+        }
+
+        private static RectInt ReadCaptureContentRect(Dictionary<string, object> capture, int width, int height)
+        {
+            var content = capture != null && capture.TryGetValue("contentRect", out object rawContent)
+                ? AsDictionary(rawContent)
+                : new Dictionary<string, object>();
+            var rect = new RectInt(
+                GetInt(content, "x", 0),
+                GetInt(content, "y", 0),
+                GetInt(content, "width", width),
+                GetInt(content, "height", height));
+            rect = ClampRectToImage(rect, width, height);
+            return rect.width > 0 && rect.height > 0 ? rect : new RectInt(0, 0, width, height);
+        }
+
+        private static RectInt MapWorldRectToCapture(Rect worldRect, Rect rootWorldRect, RectInt contentRect,
+            int width, int height)
+        {
+            if (rootWorldRect.width <= 0 || rootWorldRect.height <= 0 ||
+                contentRect.width <= 0 || contentRect.height <= 0)
+            {
+                return new RectInt();
+            }
+
+            float scaleX = contentRect.width / rootWorldRect.width;
+            float scaleY = contentRect.height / rootWorldRect.height;
+            var mapped = new RectInt(
+                Mathf.FloorToInt(contentRect.x + (worldRect.x - rootWorldRect.x) * scaleX),
+                Mathf.FloorToInt(contentRect.y + (worldRect.y - rootWorldRect.y) * scaleY),
+                Mathf.Max(1, Mathf.CeilToInt(worldRect.width * scaleX)),
+                Mathf.Max(1, Mathf.CeilToInt(worldRect.height * scaleY)));
+            return ClampRectToImage(mapped, width, height);
+        }
+
+        private static RectInt ClampRectToImage(RectInt rect, int width, int height)
+        {
+            int xMin = Mathf.Clamp(rect.xMin, 0, Math.Max(0, width));
+            int yMin = Mathf.Clamp(rect.yMin, 0, Math.Max(0, height));
+            int xMax = Mathf.Clamp(rect.xMax, xMin, Math.Max(0, width));
+            int yMax = Mathf.Clamp(rect.yMax, yMin, Math.Max(0, height));
+            return new RectInt(xMin, yMin, xMax - xMin, yMax - yMin);
+        }
+
+        private static RectInt IntersectRects(RectInt first, RectInt second)
+        {
+            int xMin = Math.Max(first.xMin, second.xMin);
+            int yMin = Math.Max(first.yMin, second.yMin);
+            int xMax = Math.Min(first.xMax, second.xMax);
+            int yMax = Math.Min(first.yMax, second.yMax);
+            return new RectInt(xMin, yMin, Math.Max(0, xMax - xMin), Math.Max(0, yMax - yMin));
+        }
+
+        private static RectInt InsetRect(RectInt rect, int inset)
+        {
+            int clampedInset = Math.Max(0, Math.Min(inset, Math.Min(rect.width, rect.height) / 2));
+            return new RectInt(rect.x + clampedInset, rect.y + clampedInset,
+                Math.Max(0, rect.width - clampedInset * 2), Math.Max(0, rect.height - clampedInset * 2));
+        }
+
+        private static RectInt ExpandRect(RectInt rect, int amount, RectInt bounds)
+        {
+            var expanded = new RectInt(rect.x - amount, rect.y - amount,
+                rect.width + amount * 2, rect.height + amount * 2);
+            return IntersectRects(expanded, bounds);
         }
 
         private static bool IsPositiveFinite(float value)

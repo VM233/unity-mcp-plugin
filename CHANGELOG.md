@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.2.9] - 2026-07-15
+
+- Made UI Builder preview validation compare the mapped document pixels with the surrounding canvas background, so editor chrome, blank shells, and checkerboard-only captures no longer count as valid visual evidence.
+- Added client-area coordinates to editor-window captures and used them for UI Toolkit element mapping, avoiding floating-window title-bar offsets in crops and preview analysis.
+
 ## [3.2.8] - 2026-07-15
 
 - Updated the first-class schema regression suite to treat `expectedProjectPath` as part of every mutating tool contract.
