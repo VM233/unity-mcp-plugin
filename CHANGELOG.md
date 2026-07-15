@@ -6,6 +6,7 @@ All notable changes to this package will be documented in this file.
 
 - Added first-class `unity_prefab_asset_configure_component` / `prefab-asset/configure-component` for atomic ensure-and-configure edits, including serialized properties and asset or same-prefab ObjectReferences.
 - Added `configureComponent` to prefab transactions, including nested reference-type waiting, indexed referenced components, YAML diff roots, and add-versus-update summaries.
+- Preserve and apply `references` after wrapping the public configure request as an internal transaction operation.
 
 ## [3.2.10] - 2026-07-15
 

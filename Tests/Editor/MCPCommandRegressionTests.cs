@@ -416,6 +416,7 @@ namespace UnityMCP.Editor.Tests
             var summaries = (List<Dictionary<string, object>>)result["operationSummaries"];
             Assert.That(summaries.Single()["type"], Is.EqualTo("configureComponent"));
             Assert.That(summaries.Single()["added"], Is.EqualTo(true));
+            Assert.That((List<Dictionary<string, object>>)summaries.Single()["references"], Has.Count.EqualTo(1));
 
             var updateResult = RequireDictionary(MCPPrefabAssetCommands.ConfigureComponent(
                 new Dictionary<string, object>

@@ -1849,7 +1849,7 @@ namespace UnityMCP.Editor
 
             var references = GetDictionaryList(args, "references");
             if (references.Count > 0)
-                operation["references"] = references;
+                operation["references"] = references.Cast<object>().ToList();
 
             transactionArgs["operations"] = new List<object> { operation };
             return transactionArgs;
