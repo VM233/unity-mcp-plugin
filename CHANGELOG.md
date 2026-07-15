@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.0] - 2026-07-15
+
+- Added first-class `unity_prefab_asset_configure_component` / `prefab-asset/configure-component` for atomic ensure-and-configure edits, including serialized properties and asset or same-prefab ObjectReferences.
+- Added `configureComponent` to prefab transactions, including nested reference-type waiting, indexed referenced components, YAML diff roots, and add-versus-update summaries.
+
 ## [3.2.10] - 2026-07-15
 
 - Clipped UI Builder document analysis to the visible viewport and added document-only checkerboard/shell detection for Unity versions where the reflected canvas and document bounds are identical.

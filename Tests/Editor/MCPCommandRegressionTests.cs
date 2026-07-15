@@ -380,6 +380,69 @@ namespace UnityMCP.Editor.Tests
             Assert.That(refreshScheduledField.GetValue(null), Is.EqualTo(false));
         }
 
+        [UnityTest]
+        public IEnumerator ConfigureComponentDeferred_AddsConfiguresReferencesAndThenUpdatesInPlace()
+        {
+            CreateTestPrefab();
+            var renderTexture = new RenderTexture(16, 16, 0);
+            string renderTexturePath = TEST_FOLDER + "/Configured Camera Target.asset";
+            AssetDatabase.CreateAsset(renderTexture, renderTexturePath);
+
+            object completedResult = null;
+            MCPPrefabAssetCommands.ConfigureComponentDeferred(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "prefabPath", "Target" },
+                { "componentType", typeof(Camera).FullName },
+                { "typeResolveStableMs", 0 },
+                { "properties", new Dictionary<string, object> { { "m_Depth", 7f } } },
+                { "references", new List<object>
+                {
+                    new Dictionary<string, object>
+                    {
+                        { "propertyName", "m_TargetTexture" },
+                        { "referenceAssetPath", renderTexturePath },
+                    },
+                } },
+            }, result => completedResult = result, _ => { });
+
+            double timeoutAt = EditorApplication.timeSinceStartup + 5d;
+            while (completedResult == null && EditorApplication.timeSinceStartup < timeoutAt)
+                yield return null;
+
+            Assert.That(completedResult, Is.Not.Null);
+            var result = RequireDictionary(completedResult);
+            Assert.That(result["success"], Is.EqualTo(true));
+            var summaries = (List<Dictionary<string, object>>)result["operationSummaries"];
+            Assert.That(summaries.Single()["type"], Is.EqualTo("configureComponent"));
+            Assert.That(summaries.Single()["added"], Is.EqualTo(true));
+
+            var updateResult = RequireDictionary(MCPPrefabAssetCommands.ConfigureComponent(
+                new Dictionary<string, object>
+                {
+                    { "assetPath", PREFAB_PATH },
+                    { "prefabPath", "Target" },
+                    { "componentType", typeof(Camera).FullName },
+                    { "properties", new Dictionary<string, object> { { "m_Depth", 9f } } },
+                }));
+            Assert.That(updateResult["success"], Is.EqualTo(true));
+            var updateSummaries = (List<Dictionary<string, object>>)updateResult["operationSummaries"];
+            Assert.That(updateSummaries.Single()["added"], Is.EqualTo(false));
+
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                var cameras = root.transform.Find("Target").GetComponents<Camera>();
+                Assert.That(cameras, Has.Length.EqualTo(1));
+                Assert.That(cameras[0].depth, Is.EqualTo(9f));
+                Assert.That(cameras[0].targetTexture, Is.EqualTo(renderTexture));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
         [Test]
         public void UnifiedExecutionRoutes_AreDeferredAndLegacyBatchRoutesAreRemoved()
         {
@@ -387,6 +450,7 @@ namespace UnityMCP.Editor.Tests
                 BindingFlags.Static | BindingFlags.NonPublic);
             Assert.That(routesProperty, Is.Not.Null);
             var routes = (IEnumerable<string>)routesProperty.GetValue(null);
+            Assert.That(routes, Does.Contain("prefab-asset/configure-component"));
             Assert.That(routes, Does.Contain("prefab-asset/transaction-edit"));
             Assert.That(routes, Does.Contain("asset/import"));
             Assert.That(routes, Does.Contain("asset/move"));
@@ -2598,6 +2662,26 @@ namespace UnityMCP.Editor.Tests
                 Assert.That(annotations.ContainsKey("title"), Is.False);
                 Assert.That(annotations.Values.OfType<bool>().All(value => value), Is.True);
             }
+        }
+
+        [Test]
+        public void ToolMetadata_ExposesPrefabConfigureComponentAsFirstClass()
+        {
+            var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: true, includeSchema: true, limit: 200));
+            var tools = (List<Dictionary<string, object>>)result["tools"];
+            var tool = tools.Single(item =>
+                item["route"].ToString() == "prefab-asset/configure-component");
+
+            Assert.That(tool["toolName"], Is.EqualTo("unity_prefab_asset_configure_component"));
+            Assert.That(tool["firstClass"], Is.EqualTo(true));
+            var schema = RequireDictionary(tool["inputSchema"]);
+            CollectionAssert.AreEquivalent(new[] { "assetPath", "componentType" },
+                (List<string>)schema["required"]);
+            var properties = RequireDictionary(schema["properties"]);
+            Assert.That(properties.Keys, Does.Contain("properties"));
+            Assert.That(properties.Keys, Does.Contain("references"));
+            Assert.That(properties.Keys, Does.Contain("expectedProjectPath"));
         }
 
         [Test]

@@ -159,6 +159,7 @@ namespace UnityMCP.Editor
                 "serialized-object/set",
                 "prefab-asset/add-component",
                 "prefab-asset/add-gameobject",
+                "prefab-asset/configure-component",
                 "prefab-asset/instantiate-prefab",
                 "prefab-asset/move-component",
                 "prefab-asset/move-gameobject",
@@ -759,6 +760,8 @@ namespace UnityMCP.Editor
                     return "Instantiate a prefab asset into the currently open scene.";
                 case "prefab-asset/add-component":
                     return "Add a component to a prefab asset after waiting for a newly compiled script type to become available.";
+                case "prefab-asset/configure-component":
+                    return "Ensure and configure one component on a prefab asset GameObject, including serialized properties and ObjectReferences, in one atomic save.";
                 case "prefab-asset/add-gameobject":
                     return "Create a child GameObject inside a prefab asset.";
                 case "prefab-asset/instantiate-prefab":
@@ -1380,6 +1383,8 @@ namespace UnityMCP.Editor
                         Prop("prefabFileDiffIgnoreContains", "array", "Optional substrings used to hide noisy diff lines."),
                         Prop("prefabFileDiffIgnoreYamlProperties", "array", "Optional YAML property names used to hide noisy diff lines.")
                     ), "assetPath", "componentType");
+                case "prefab-asset/configure-component":
+                    return PrefabAssetConfigureComponentSchema();
                 case "prefab-asset/remove-component":
                     return Schema(Props(
                         Prop("assetPath", "string", "Prefab asset path to edit."),
@@ -2087,6 +2092,37 @@ namespace UnityMCP.Editor
             return Schema(properties, "references");
         }
 
+        private static Dictionary<string, object> PrefabAssetConfigureComponentSchema()
+        {
+            var referenceProperties = Props(
+                Prop("propertyName", "string", "ObjectReference serialized property name or path."),
+                Prop("referenceAssetPath", "string", "Project asset path to assign."),
+                Prop("referencePrefabPath", "string", "Path of a GameObject inside the same prefab to assign."),
+                Prop("referenceComponentType", "string", "When using referencePrefabPath, assign this component instead of the GameObject."),
+                Prop("referenceComponentIndex", "number", "Component index on referencePrefabPath when multiple components of the same type exist. Defaults to 0."),
+                Prop("clear", "boolean", "Clear the ObjectReference."));
+            var properties = Props(
+                Prop("assetPath", "string", "Prefab asset path to edit."),
+                Prop("prefabPath", "string", "Path of the GameObject inside the prefab. Empty means root."),
+                Prop("componentType", "string", "Component type name or full name."),
+                Prop("componentIndex", "number", "Component index when multiple components of the same type exist. Defaults to 0."),
+                Prop("addIfMissing", "boolean", "Add the component when componentIndex equals the current component count. Defaults to true."),
+                Prop("properties", "object", "Serialized property names/paths mapped to JSON values."),
+                Prop("waitForTypes", "boolean", "Wait for referenced component types before editing. Defaults to true."),
+                Prop("typeResolveTimeoutMs", "number", "Maximum type wait time in milliseconds. Defaults to 30000."),
+                Prop("typeResolveStableMs", "number", "Continuous idle time after type resolution before editing. Defaults to 500."),
+                Prop("refreshAssets", "boolean", "Schedule AssetDatabase.Refresh only when a referenced component type is missing. Defaults to true."),
+                Prop("includePrefabFileDiff", "boolean", "Return before/after prefab YAML diff. Defaults to true."),
+                Prop("prefabFileDiffMode", "string", "Diff return mode: summary, minimal, or full. Defaults to summary."));
+            properties["references"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "ObjectReference assignments applied to the configured component." },
+                { "items", Schema(referenceProperties, "propertyName") },
+            };
+            return Schema(properties, "assetPath", "componentType");
+        }
+
         private static Dictionary<string, object> PrefabAssetTransactionEditSchema()
         {
             var properties = Props(
@@ -2118,7 +2154,7 @@ namespace UnityMCP.Editor
                                         { "type", "string" },
                                         { "enum", new List<object>
                                             {
-                                                "addComponent", "setProperty", "setReference", "addGameObject",
+                                                "addComponent", "configureComponent", "setProperty", "setReference", "addGameObject",
                                                 "instantiatePrefab", "removeComponent", "removeGameObject", "moveGameObject",
                                                 "arrayInsert", "arrayRemove", "arraySet", "arrayClear"
                                             }

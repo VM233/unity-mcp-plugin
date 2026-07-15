@@ -1818,6 +1818,43 @@ namespace UnityMCP.Editor
             return result;
         }
 
+        public static object ConfigureComponent(Dictionary<string, object> args)
+        {
+            return TransactionEdit(BuildConfigureComponentTransactionArguments(args));
+        }
+
+        public static void ConfigureComponentDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
+        {
+            TransactionEditDeferred(BuildConfigureComponentTransactionArguments(args), resolve, progress);
+        }
+
+        private static Dictionary<string, object> BuildConfigureComponentTransactionArguments(
+            Dictionary<string, object> args)
+        {
+            args = args ?? new Dictionary<string, object>();
+            var transactionArgs = new Dictionary<string, object>(args);
+            var operation = new Dictionary<string, object>
+            {
+                { "type", "configureComponent" },
+                { "prefabPath", GetString(args, "prefabPath") },
+                { "componentType", GetString(args, "componentType") },
+                { "componentIndex", GetInt(args, "componentIndex", 0) },
+                { "addIfMissing", GetBool(args, "addIfMissing", true) },
+            };
+
+            var properties = GetDictionary(args, "properties");
+            if (properties != null)
+                operation["properties"] = properties;
+
+            var references = GetDictionaryList(args, "references");
+            if (references.Count > 0)
+                operation["references"] = references;
+
+            transactionArgs["operations"] = new List<object> { operation };
+            return transactionArgs;
+        }
+
         public static void TransactionEditDeferred(Dictionary<string, object> args, Action<object> resolve,
             Action<object> progress)
         {
@@ -2616,7 +2653,8 @@ namespace UnityMCP.Editor
             foreach (var operation in operations)
             {
                 string operationType = GetOperationType(operation);
-                if (operationType != "setproperty" && operationType != "setreference")
+                if (operationType != "setproperty" && operationType != "setreference" &&
+                    operationType != "configurecomponent")
                     continue;
 
                 var properties = GetDictionary(operation, "properties");
@@ -2625,9 +2663,15 @@ namespace UnityMCP.Editor
                     foreach (string propertyName in properties.Keys)
                         roots.UnionWith(BuildExplicitYamlPropertyRoots(propertyName));
                 }
-                else
+                else if (operationType != "configurecomponent")
                 {
                     roots.UnionWith(BuildExplicitYamlPropertyRoots(GetString(operation, "propertyName")));
+                }
+
+                if (operationType == "configurecomponent")
+                {
+                    foreach (var reference in GetDictionaryList(operation, "references"))
+                        roots.UnionWith(BuildExplicitYamlPropertyRoots(GetString(reference, "propertyName")));
                 }
             }
 
@@ -2870,6 +2914,8 @@ namespace UnityMCP.Editor
             {
                 case "addcomponent":
                     return TryBatchAddComponent(root, operation, operationIndex, out summary, out error);
+                case "configurecomponent":
+                    return TryBatchConfigureComponent(root, operation, operationIndex, out summary, out error);
                 case "setproperty":
                     return TryBatchSetProperty(root, operation, operationIndex, out summary, out error);
                 case "setreference":
@@ -2936,6 +2982,117 @@ namespace UnityMCP.Editor
             summary = BuildBatchSummary(operationIndex, "addComponent", go, component);
             summary["prefabPath"] = GetPrefabPath(root, go);
             summary["properties"] = changedProperties;
+            return true;
+        }
+
+        private static bool TryBatchConfigureComponent(GameObject root, Dictionary<string, object> operation,
+            int operationIndex, out Dictionary<string, object> summary, out string error)
+        {
+            summary = null;
+            error = "";
+            string prefabPath = GetString(operation, "prefabPath");
+            string componentType = GetString(operation, "componentType");
+            if (string.IsNullOrEmpty(componentType))
+            {
+                error = $"Operation {operationIndex}: componentType is required";
+                return false;
+            }
+
+            var go = FindInPrefab(root, prefabPath);
+            if (go == null)
+            {
+                error = $"Operation {operationIndex}: GameObject '{prefabPath}' not found in prefab";
+                return false;
+            }
+
+            Type type = MCPComponentCommands.FindType(componentType);
+            if (type == null)
+            {
+                error = $"Operation {operationIndex}: Type '{componentType}' not found";
+                return false;
+            }
+
+            int componentIndex = GetInt(operation, "componentIndex", 0);
+            if (componentIndex < 0)
+            {
+                error = $"Operation {operationIndex}: componentIndex must be zero or greater";
+                return false;
+            }
+
+            var components = go.GetComponents(type);
+            bool added = false;
+            Component component;
+            if (componentIndex < components.Length)
+            {
+                component = components[componentIndex];
+            }
+            else if (GetBool(operation, "addIfMissing", true) && componentIndex == components.Length)
+            {
+                component = go.AddComponent(type);
+                added = true;
+            }
+            else
+            {
+                error = $"Operation {operationIndex}: Component '{componentType}' at index {componentIndex} " +
+                        $"was not found on '{go.name}'";
+                return false;
+            }
+
+            var changedProperties = new List<string>();
+            var properties = GetDictionary(operation, "properties");
+            if (properties != null &&
+                !TryApplySerializedProperties(component, properties, changedProperties, out error))
+            {
+                error = $"Operation {operationIndex}: {error}";
+                return false;
+            }
+
+            var changedReferences = new List<Dictionary<string, object>>();
+            foreach (var reference in GetDictionaryList(operation, "references"))
+            {
+                string propertyName = GetString(reference, "propertyName");
+                if (string.IsNullOrEmpty(propertyName))
+                {
+                    error = $"Operation {operationIndex}: references[].propertyName is required";
+                    return false;
+                }
+
+                var serialized = new SerializedObject(component);
+                var property = serialized.FindProperty(propertyName);
+                if (property == null)
+                {
+                    error = $"Operation {operationIndex}: Property '{propertyName}' not found on " +
+                            $"'{component.GetType().Name}'";
+                    return false;
+                }
+                if (property.propertyType != SerializedPropertyType.ObjectReference)
+                {
+                    error = $"Operation {operationIndex}: Property '{propertyName}' is not an ObjectReference";
+                    return false;
+                }
+
+                if (!TryResolveBatchReference(root, property, reference, out UnityEngine.Object targetReference,
+                        out string referenceDescription, out error))
+                {
+                    error = $"Operation {operationIndex}: {error}";
+                    return false;
+                }
+
+                property.objectReferenceValue = targetReference;
+                serialized.ApplyModifiedProperties();
+                changedReferences.Add(new Dictionary<string, object>
+                {
+                    { "propertyName", propertyName },
+                    { "reference", referenceDescription },
+                });
+            }
+
+            summary = BuildBatchSummary(operationIndex, "configureComponent", go, component);
+            summary["prefabPath"] = GetPrefabPath(root, go);
+            summary["componentIndex"] = componentIndex;
+            summary["added"] = added;
+            summary["properties"] = changedProperties;
+            summary["references"] = changedReferences;
             return true;
         }
 
@@ -3473,12 +3630,15 @@ namespace UnityMCP.Editor
                         return false;
                     }
 
-                    targetRef = refGo.GetComponent(refType);
-                    if (targetRef == null)
+                    int referenceComponentIndex = GetInt(operation, "referenceComponentIndex", 0);
+                    var referenceComponents = refGo.GetComponents(refType);
+                    if (referenceComponentIndex < 0 || referenceComponentIndex >= referenceComponents.Length)
                     {
-                        error = $"Component '{referenceComponentType}' not found on '{refGo.name}'";
+                        error = $"Component '{referenceComponentType}' at index {referenceComponentIndex} " +
+                                $"not found on '{refGo.name}'";
                         return false;
                     }
+                    targetRef = referenceComponents[referenceComponentIndex];
                 }
                 else
                 {
@@ -3559,6 +3719,8 @@ namespace UnityMCP.Editor
             {
                 AddComponentType(types, GetString(operation, "componentType"));
                 AddComponentType(types, GetString(operation, "referenceComponentType"));
+                foreach (var reference in GetDictionaryList(operation, "references"))
+                    AddComponentType(types, GetString(reference, "referenceComponentType"));
             }
 
             return types.OrderBy(type => type, StringComparer.OrdinalIgnoreCase).ToList();

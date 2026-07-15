@@ -48,6 +48,7 @@ http://127.0.0.1:7890/api/ping
 | Multi-editor safety | `unity_instance_resolve` | `instance/resolve` | Resolve exactly one Editor MCP instance by project path, project name, or port. |
 | Multi-editor safety | `unity_instance_assert_project` | `instance/assert-project` | Verify that a request reached the expected Unity project. |
 | Prefab asset editing | `unity_prefab_asset_add_component` | `prefab-asset/add-component` | Add a component after waiting for a newly compiled script type to become available; returns prefab YAML diff by default. |
+| Prefab asset editing | `unity_prefab_asset_configure_component` | `prefab-asset/configure-component` | Ensure one component exists and atomically configure serialized properties and ObjectReferences in one prefab save. |
 | Prefab asset editing | `unity_prefab_asset_add_gameobject` | `prefab-asset/add-gameobject` | Create a child GameObject inside a prefab asset. |
 | Prefab asset editing | `unity_prefab_asset_transaction_edit` | `prefab-asset/transaction-edit` | Apply ordered prefab edits in one load/save transaction with `execution.mode` controlling immediate or frame-batched execution. |
 | Prefab asset editing | `unity_prefab_asset_instantiate_prefab` | `prefab-asset/instantiate-prefab` | Instantiate one prefab asset inside another prefab asset under a selected child path. |

@@ -56,6 +56,7 @@ namespace UnityMCP.Editor
             { "packages/remove", (args, resolve, _) => MCPPackageManagerCommands.RemovePackageDeferred(args, resolve) },
             { "packages/search", (args, resolve, _) => MCPPackageManagerCommands.SearchPackageDeferred(args, resolve) },
             { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },
+            { "prefab-asset/configure-component", MCPPrefabAssetCommands.ConfigureComponentDeferred },
             { "prefab-asset/transaction-edit", MCPPrefabAssetCommands.TransactionEditDeferred },
             { "asset/import", MCPAssetCommands.ImportDeferred },
             { "asset/move", MCPAssetCommands.MoveDeferred },
@@ -1095,6 +1096,8 @@ namespace UnityMCP.Editor
                     return MCPPrefabAssetCommands.SetComponentProperty(ParseJson(body));
                 case "prefab-asset/add-component":
                     return MCPPrefabAssetCommands.AddComponent(ParseJson(body));
+                case "prefab-asset/configure-component":
+                    return MCPPrefabAssetCommands.ConfigureComponent(ParseJson(body));
                 case "prefab-asset/remove-component":
                     return MCPPrefabAssetCommands.RemoveComponent(ParseJson(body));
                 case "prefab-asset/move-component":

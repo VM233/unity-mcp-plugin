@@ -233,6 +233,7 @@ namespace UnityMCP.Editor
             "prefab-asset/apply-variant-override",
             "prefab-asset/cleanup-missing-overrides",
             "prefab-asset/compare-variant",
+            "prefab-asset/configure-component",
             "prefab-asset/find",
             "prefab-asset/get-properties",
             "prefab-asset/hierarchy",
@@ -462,4 +463,3 @@ namespace UnityMCP.Editor
         }
     }
 }
-
