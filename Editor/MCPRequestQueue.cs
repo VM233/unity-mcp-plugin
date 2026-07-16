@@ -112,9 +112,10 @@ namespace UnityMCP.Editor
         // Single lock for all mutable state
         private static readonly object _queueLock = new object();
 
-        // Cleanup cadence
-        private static int _frameTick;
-        private const int CleanupEveryNFrames        = 100;
+        // Cleanup cadence. Ticket lifetimes are time-based, so cleanup must not scale with
+        // Editor frame rate or perform periodic disk I/O during gameplay.
+        private static double _nextCleanupAt;
+        private const double CleanupIntervalSeconds   = 30.0;
         private const int CompletedCacheLifetimeSec   = 600;
         private const int TimedOutCacheLifetimeSec    = 300;
         private const int StaleExecutingLifetimeSec   = 120;
@@ -471,9 +472,10 @@ namespace UnityMCP.Editor
             EnsurePersistentSnapshotsLoaded();
 
             // --- Cleanup cadence ---
-            if (++_frameTick >= CleanupEveryNFrames)
+            double now = UnityEditor.EditorApplication.timeSinceStartup;
+            if (now >= _nextCleanupAt)
             {
-                _frameTick = 0;
+                _nextCleanupAt = now + CleanupIntervalSeconds;
                 RunCleanup();
             }
 
@@ -1011,7 +1013,7 @@ namespace UnityMCP.Editor
             return session;
         }
 
-        private static void RunCleanup()
+        private static bool RunCleanup()
         {
             lock (_queueLock)
             {
@@ -1051,7 +1053,11 @@ namespace UnityMCP.Editor
                     SignalWaitersLocked(ticket.TicketId);
                 }
 
+                if (kill.Count == 0 && staleExecuting.Count == 0)
+                    return false;
+
                 PersistTicketSnapshotsLocked();
+                return true;
             }
         }
 

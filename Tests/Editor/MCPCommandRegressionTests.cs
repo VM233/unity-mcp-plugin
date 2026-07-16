@@ -490,6 +490,61 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void RequestQueue_CleanupIsTimeBasedAndSkipsUnchangedSnapshotWrites()
+        {
+            var cleanupIntervalField = typeof(MCPRequestQueue).GetField("CleanupIntervalSeconds",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var nextCleanupField = typeof(MCPRequestQueue).GetField("_nextCleanupAt",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var cleanupMethod = typeof(MCPRequestQueue).GetMethod("RunCleanup",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var completedField = typeof(MCPRequestQueue).GetField("_completedTickets",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            var queueLockField = typeof(MCPRequestQueue).GetField("_queueLock",
+                BindingFlags.Static | BindingFlags.NonPublic);
+
+            Assert.That(cleanupIntervalField, Is.Not.Null);
+            Assert.That((double)cleanupIntervalField.GetRawConstantValue(), Is.GreaterThanOrEqualTo(5d));
+            Assert.That(nextCleanupField, Is.Not.Null);
+            Assert.That(typeof(MCPRequestQueue).GetField("_frameTick",
+                BindingFlags.Static | BindingFlags.NonPublic), Is.Null,
+                "Ticket cleanup must not scale with Editor frame rate.");
+            Assert.That(cleanupMethod, Is.Not.Null);
+            Assert.That(completedField, Is.Not.Null);
+            Assert.That(queueLockField, Is.Not.Null);
+
+            long ticketId = DateTime.UtcNow.Ticks;
+            var completed = (Dictionary<long, MCPRequestQueue.RequestTicket>)completedField.GetValue(null);
+            object queueLock = queueLockField.GetValue(null);
+            lock (queueLock)
+            {
+                completed[ticketId] = new MCPRequestQueue.RequestTicket
+                {
+                    TicketId = ticketId,
+                    AgentId = "cleanup-regression",
+                    ActionName = "editor/ping",
+                    Status = MCPRequestQueue.RequestStatus.Completed,
+                    SubmittedAt = DateTime.UtcNow.AddMinutes(-20),
+                    CompletedAt = DateTime.UtcNow.AddMinutes(-20),
+                };
+            }
+
+            try
+            {
+                Assert.That(cleanupMethod.Invoke(null, null), Is.EqualTo(true));
+                lock (queueLock)
+                    Assert.That(completed.ContainsKey(ticketId), Is.False);
+                Assert.That(cleanupMethod.Invoke(null, null), Is.EqualTo(false),
+                    "A cleanup pass with no newly expired tickets must not rewrite the persistent snapshot.");
+            }
+            finally
+            {
+                lock (queueLock)
+                    completed.Remove(ticketId);
+            }
+        }
+
+        [Test]
         public void EditorIdleWait_IsClassifiedAsReadOperation()
         {
             var method = typeof(MCPRequestQueue).GetMethod("IsReadOperation",

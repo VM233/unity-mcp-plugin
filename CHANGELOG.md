@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.2] - 2026-07-16
+
+- Replaced frame-count-based request-queue cleanup with a low-frequency time cadence and skipped persistent ticket snapshot rewrites when no ticket expired, eliminating periodic Editor main-thread stalls during Play Mode.
+
 ## [3.3.1] - 2026-07-15
 
 - Mapped docked EditorWindow captures through their host client area, fixing UI Toolkit element capture on mixed-DPI and negative-origin multi-monitor layouts.
