@@ -1737,7 +1737,7 @@ namespace UnityMCP.Editor.Tests
                 null, false, false, null
             };
             Assert.That(method.Invoke(null, invalid), Is.EqualTo(false));
-            Assert.That(invalid[4], Does.Contain("play, pause, resume, or stop"));
+            Assert.That(invalid[4], Does.Contain("'resume'"));
         }
 
         [Test]
