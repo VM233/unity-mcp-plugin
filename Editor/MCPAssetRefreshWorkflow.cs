@@ -250,10 +250,12 @@ namespace UnityMCP.Editor
         private static Dictionary<string, object> BuildRecoveredResult(Dictionary<string, object> args)
         {
             var paths = GetStringList(args, "assetPaths");
+            bool forceUpdate = GetBool(args, "forceUpdate", false);
             return new Dictionary<string, object>
             {
                 { "success", true },
-                { "forceUpdate", GetBool(args, "forceUpdate", true) },
+                { "forceUpdate", forceUpdate },
+                { "forceUpdateSkippedPaths", MCPAssetCommands.GetTargetedForceUpdateSkippedPaths(paths, forceUpdate) },
                 { "saveAssets", GetBool(args, "saveAssets", false) },
                 { "importedPaths", paths },
                 { "refreshMode", paths.Count > 0 ? "targeted" : "full" },

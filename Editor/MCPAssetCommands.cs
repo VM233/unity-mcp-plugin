@@ -853,24 +853,27 @@ namespace UnityMCP.Editor
 
         internal static object ExecuteRefreshImmediate(Dictionary<string, object> args)
         {
-            bool forceUpdate = GetBool(args, "forceUpdate", true);
+            bool forceUpdate = GetBool(args, "forceUpdate", false);
             bool saveAssets = GetBool(args, "saveAssets", false);
             var assetPaths = GetStringList(args, "assetPaths");
 
-            var options = forceUpdate ? ImportAssetOptions.ForceUpdate : ImportAssetOptions.Default;
             var importedPaths = new List<string>();
+            var forceUpdateSkippedPaths = new List<string>();
 
             if (assetPaths.Count > 0)
             {
                 foreach (string path in OrderTargetedImportPaths(assetPaths))
                 {
-                    AssetDatabase.ImportAsset(path,
-                        options | ImportAssetOptions.ForceSynchronousImport);
+                    ImportAssetOptions options = GetTargetedImportOptions(path, forceUpdate);
+                    if (forceUpdate && (options & ImportAssetOptions.ForceUpdate) == 0)
+                        forceUpdateSkippedPaths.Add(path);
+                    AssetDatabase.ImportAsset(path, options);
                     importedPaths.Add(path);
                 }
             }
             else
             {
+                var options = forceUpdate ? ImportAssetOptions.ForceUpdate : ImportAssetOptions.Default;
                 AssetDatabase.Refresh(options | ImportAssetOptions.ForceSynchronousImport);
             }
 
@@ -881,6 +884,7 @@ namespace UnityMCP.Editor
             {
                 { "success", true },
                 { "forceUpdate", forceUpdate },
+                { "forceUpdateSkippedPaths", forceUpdateSkippedPaths },
                 { "saveAssets", saveAssets },
                 { "importedPaths", importedPaths },
                 { "refreshMode", assetPaths.Count > 0 ? "targeted" : "full" },
@@ -888,6 +892,36 @@ namespace UnityMCP.Editor
                 { "isUpdating", EditorApplication.isUpdating },
                 { "isCompiling", EditorApplication.isCompiling },
             };
+        }
+
+        internal static ImportAssetOptions GetTargetedImportOptions(string path, bool forceUpdate)
+        {
+            var options = ImportAssetOptions.ForceSynchronousImport;
+            if (forceUpdate && !IsCompilationAssetPath(path))
+                options |= ImportAssetOptions.ForceUpdate;
+            return options;
+        }
+
+        internal static List<string> GetTargetedForceUpdateSkippedPaths(IEnumerable<string> paths,
+            bool forceUpdate)
+        {
+            if (!forceUpdate)
+                return new List<string>();
+            return OrderTargetedImportPaths(paths).Where(IsCompilationAssetPath).ToList();
+        }
+
+        private static bool IsCompilationAssetPath(string path)
+        {
+            switch (Path.GetExtension(path)?.ToLowerInvariant())
+            {
+                case ".cs":
+                case ".asmdef":
+                case ".asmref":
+                case ".rsp":
+                    return true;
+                default:
+                    return false;
+            }
         }
 
         internal static List<string> OrderTargetedImportPaths(IEnumerable<string> rawPaths)

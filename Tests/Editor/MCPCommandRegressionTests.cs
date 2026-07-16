@@ -1048,6 +1048,31 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void AssetRefresh_TargetedCompilationAssetsDoNotUseForceUpdate()
+        {
+            ImportAssetOptions scriptOptions = MCPAssetCommands.GetTargetedImportOptions(
+                "Assets/Scripts/Changed.cs", forceUpdate: true);
+            ImportAssetOptions assemblyOptions = MCPAssetCommands.GetTargetedImportOptions(
+                "Assets/Scripts/Game.asmdef", forceUpdate: true);
+            ImportAssetOptions styleOptions = MCPAssetCommands.GetTargetedImportOptions(
+                "Assets/UI/Changed.uss", forceUpdate: true);
+
+            Assert.That(scriptOptions.HasFlag(ImportAssetOptions.ForceSynchronousImport), Is.True);
+            Assert.That(scriptOptions.HasFlag(ImportAssetOptions.ForceUpdate), Is.False);
+            Assert.That(assemblyOptions.HasFlag(ImportAssetOptions.ForceUpdate), Is.False);
+            Assert.That(styleOptions.HasFlag(ImportAssetOptions.ForceUpdate), Is.True);
+
+            CollectionAssert.AreEqual(
+                new[] { "Assets/Scripts/Changed.cs", "Assets/Scripts/Game.asmdef" },
+                MCPAssetCommands.GetTargetedForceUpdateSkippedPaths(new[]
+                {
+                    "Assets/Scripts/Changed.cs",
+                    "Assets/UI/Changed.uss",
+                    "Assets/Scripts/Game.asmdef",
+                }, forceUpdate: true));
+        }
+
+        [Test]
         public void AssetRefresh_TargetedImportsOrderDependenciesBeforeDependents()
         {
             const string ussPath = TEST_FOLDER + "/Refresh Dependency.uss";
@@ -1119,6 +1144,11 @@ namespace UnityMCP.Editor.Tests
             Assert.That(refreshProperties.ContainsKey("assetPaths"), Is.True);
             Assert.That(refreshProperties.ContainsKey("reconcileExternalChanges"), Is.False);
             Assert.That(refreshProperties.ContainsKey("expectedProjectPath"), Is.True);
+
+            var refreshJobTool = tools.Single(item => item["route"].ToString() == "asset/get-refresh-job");
+            var refreshJobSchema = RequireDictionary(refreshJobTool["inputSchema"]);
+            var refreshJobProperties = RequireDictionary(refreshJobSchema["properties"]);
+            Assert.That(refreshJobProperties.ContainsKey("timeoutMs"), Is.True);
 
             foreach (var tool in tools.Where(item => !(bool)item["readOnly"]))
             {

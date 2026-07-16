@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.6] - 2026-07-16
+
+- Defaulted refresh jobs to non-forced imports and suppress `ImportAssetOptions.ForceUpdate` for targeted compilation assets, preventing a single script refresh from forcing broad dependency reimports while still compiling timestamp-changed sources.
+- Report compilation paths whose requested ForceUpdate was intentionally skipped, including after reload recovery.
+
 ## [3.3.5] - 2026-07-16
 
 - Preserved explicit prefab transaction array edits during YAML stabilization, preventing successful saves from silently restoring the pre-edit serialized list.

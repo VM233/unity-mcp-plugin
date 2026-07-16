@@ -1561,7 +1561,7 @@ namespace UnityMCP.Editor
                 case "asset/refresh":
                     return Schema(Props(
                         Prop("assetPaths", "array", "Optional Unity asset paths to import. When supplied, only these paths are imported, with known dependencies before dependents. Omit to run a full synchronous AssetDatabase refresh and reconcile all external changes."),
-                        Prop("forceUpdate", "boolean", "Use ImportAssetOptions.ForceUpdate. Defaults to true."),
+                        Prop("forceUpdate", "boolean", "Use ImportAssetOptions.ForceUpdate for full refreshes and non-compilation targeted assets. Compilation assets are always imported without ForceUpdate to avoid broad dependency reimports. Defaults to false."),
                         Prop("saveAssets", "boolean", "Call AssetDatabase.SaveAssets after refresh/import. Defaults to false."),
                         Prop("clearStuck", "boolean", "Replace a non-terminal refresh job left behind by an interrupted editor session. Defaults to false.")
                     ));
@@ -1569,7 +1569,8 @@ namespace UnityMCP.Editor
                     return Schema(Props(
                         Prop("jobId", "string", "Optional refresh job ID. Defaults to the current or latest job."),
                         Prop("refreshRequestId", "string", "Optional original asset/refresh request ID used to recover the matching persistent job after a transport timeout or domain reload."),
-                        Prop("clear", "boolean", "Clear the persisted job after a terminal result is read. Defaults to false.")
+                        Prop("clear", "boolean", "Clear the persisted job after a terminal result is read. Defaults to false."),
+                        Prop("timeoutMs", "number", "Maximum reload reconnection wait consumed by the MCP transport. Defaults to 300000ms.")
                     ));
                 case "asset/move":
                     return AssetMoveSchema();
