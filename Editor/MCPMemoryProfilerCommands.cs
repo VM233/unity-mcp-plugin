@@ -298,107 +298,158 @@ namespace UnityMCP.Editor
         /// Returns error if the package is not installed.
         /// Uses reflection to avoid compile-time dependency.
         /// </summary>
-        public static object TakeMemorySnapshot(Dictionary<string, object> args)
+        public static void TakeMemorySnapshot(Dictionary<string, object> args, Action<object> resolve)
         {
             if (!IsMemoryProfilerPackageInstalled())
             {
-                return new Dictionary<string, object>
-                {
-                    { "error", "com.unity.memoryprofiler package is not installed. Install it via Package Manager to use memory snapshots." },
-                    { "alternatives", new string[] {
+                resolve(MCPResponse.Error(
+                    "com.unity.memoryprofiler package is not installed. Install it via Package Manager to use memory snapshots.",
+                    "memory_profiler_package_missing", false, new Dictionary<string, object>
+                    {
+                        { "alternatives", new string[] {
                         "profiler/memory-breakdown - Get per-asset-type memory breakdown (built-in, always available)",
                         "profiler/memory-top-assets - Get top N memory consumers (built-in, always available)",
                         "profiler/memory - Get basic memory stats (built-in, always available)",
-                    }},
-                };
+                        } },
+                    }));
+                return;
             }
 
             try
             {
-                // Use reflection to call the experimental MemoryProfiler API
-                // UnityEditor.Profiling.Memory.Experimental.MemoryProfiler.TakeSnapshot(path, callback, captureFlags)
+                // Unity exposes this API from UnityEngine.CoreModule. Keep the older Editor
+                // namespace fallbacks for Unity versions/packages that surfaced it there.
                 var memProfilerType = Type.GetType(
-                    "UnityEditor.Profiling.Memory.Experimental.MemoryProfiler, UnityEditor.CoreModule")
+                    "UnityEngine.Profiling.Memory.Experimental.MemoryProfiler, UnityEngine.CoreModule")
                     ?? Type.GetType(
-                    "UnityEditor.Profiling.Memory.Experimental.MemoryProfiler, UnityEditor");
+                        "UnityEngine.Profiling.Memory.Experimental.MemoryProfiler, UnityEngine")
+                    ?? Type.GetType(
+                        "UnityEditor.Profiling.Memory.Experimental.MemoryProfiler, UnityEditor.CoreModule")
+                    ?? Type.GetType(
+                        "UnityEditor.Profiling.Memory.Experimental.MemoryProfiler, UnityEditor");
 
                 if (memProfilerType == null)
                 {
-                    return new Dictionary<string, object>
-                    {
-                        { "error", "MemoryProfiler experimental API not found in this Unity version." },
-                    };
+                    resolve(MCPResponse.Error(
+                        "MemoryProfiler experimental API not found in this Unity version.",
+                        "memory_profiler_api_missing"));
+                    return;
                 }
 
-                string snapshotDir = args.ContainsKey("path")
-                    ? args["path"].ToString()
+                string snapshotDir = args != null && args.TryGetValue("path", out object pathValue) &&
+                                     pathValue != null && !string.IsNullOrWhiteSpace(pathValue.ToString())
+                    ? pathValue.ToString()
                     : Path.Combine(Application.temporaryCachePath, "MemorySnapshots");
+                snapshotDir = Path.GetFullPath(snapshotDir);
 
                 if (!Directory.Exists(snapshotDir))
                     Directory.CreateDirectory(snapshotDir);
 
-                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
-                string snapshotPath = Path.Combine(snapshotDir, $"snapshot_{timestamp}.snap");
+                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                string snapshotPath = Path.Combine(snapshotDir,
+                    $"snapshot_{timestamp}_{Guid.NewGuid():N}".Substring(0, 39) + ".snap");
 
-                // Find the TakeSnapshot method
                 var takeSnapshot = memProfilerType.GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .FirstOrDefault(m => m.Name == "TakeSnapshot" && m.GetParameters().Length >= 2);
+                    .Where(method => method.Name == "TakeSnapshot")
+                    .Select(method => new { Method = method, Parameters = method.GetParameters() })
+                    .Where(candidate => candidate.Parameters.Length >= 2 &&
+                                        candidate.Parameters.Length <= 3 &&
+                                        candidate.Parameters[0].ParameterType == typeof(string) &&
+                                        typeof(Delegate).IsAssignableFrom(candidate.Parameters[1].ParameterType))
+                    .OrderBy(candidate => candidate.Parameters.Length)
+                    .FirstOrDefault();
 
                 if (takeSnapshot == null)
                 {
-                    return new Dictionary<string, object>
-                    {
-                        { "error", "TakeSnapshot method not found on MemoryProfiler type." },
-                    };
+                    resolve(MCPResponse.Error(
+                        "A supported TakeSnapshot overload was not found on MemoryProfiler.",
+                        "memory_snapshot_api_mismatch"));
+                    return;
                 }
 
-                // Call TakeSnapshot - the callback is complex, so we do a fire-and-forget approach
-                // and report the path where the snapshot will be saved
-                var captureFlags = 0x1F; // CaptureFlags.ManagedObjects | NativeObjects | NativeAllocations | NativeAllocationSites | NativeStackTraces
-                var captureFlagsType = Type.GetType(
-                    "UnityEditor.Profiling.Memory.Experimental.CaptureFlags, UnityEditor.CoreModule")
-                    ?? Type.GetType(
-                    "UnityEditor.Profiling.Memory.Experimental.CaptureFlags, UnityEditor");
+                int timeoutMs = Math.Max(1000, GetInt(args, "timeoutMs", 120000));
+                double startedAt = EditorApplication.timeSinceStartup;
+                bool completed = false;
 
-                if (captureFlagsType != null)
-                    captureFlags = Convert.ToInt32(Enum.ToObject(captureFlagsType, 0x1F));
-
-                // Use the simple overload: TakeSnapshot(string path, Action<string, bool> finishCallback)
-                var simpleOverload = memProfilerType.GetMethods(BindingFlags.Public | BindingFlags.Static)
-                    .Where(m => m.Name == "TakeSnapshot")
-                    .OrderBy(m => m.GetParameters().Length)
-                    .FirstOrDefault();
-
-                if (simpleOverload != null)
+                void Complete(object result)
                 {
-                    Action<string, bool> callback = (path, success) =>
+                    if (completed)
+                        return;
+                    completed = true;
+                    EditorApplication.update -= CheckTimeout;
+                    resolve(result);
+                }
+
+                void CheckTimeout()
+                {
+                    if ((EditorApplication.timeSinceStartup - startedAt) * 1000d < timeoutMs)
+                        return;
+                    Complete(MCPResponse.Error(
+                        $"Memory snapshot did not complete within {timeoutMs} ms.",
+                        "memory_snapshot_timeout", true, new Dictionary<string, object>
+                        {
+                            { "snapshotPath", snapshotPath },
+                            { "captureMayStillComplete", true },
+                        }));
+                }
+
+                Action<string, bool> callback = (completedPath, success) =>
+                {
+                    EditorApplication.delayCall += () =>
                     {
                         if (success)
-                            Debug.Log($"[AB-UMCP] Memory snapshot saved to: {path}");
+                        {
+                            string finalPath = string.IsNullOrEmpty(completedPath)
+                                ? snapshotPath
+                                : completedPath;
+                            var fileInfo = new FileInfo(finalPath);
+                            Complete(new Dictionary<string, object>
+                            {
+                                { "success", true },
+                                { "snapshotPath", finalPath },
+                                { "fileExists", fileInfo.Exists },
+                                { "fileSizeBytes", fileInfo.Exists ? fileInfo.Length : 0L },
+                                { "elapsedMs", Math.Round(
+                                    (EditorApplication.timeSinceStartup - startedAt) * 1000d, 1) },
+                            });
+                        }
                         else
-                            Debug.LogWarning($"[AB-UMCP] Memory snapshot failed: {path}");
+                        {
+                            Complete(MCPResponse.Error(
+                                "Memory Profiler reported that snapshot capture failed.",
+                                "memory_snapshot_failed", false,
+                                new Dictionary<string, object>
+                                {
+                                    { "snapshotPath", completedPath ?? snapshotPath },
+                                }));
+                        }
                     };
+                };
 
-                    var parameters = simpleOverload.GetParameters();
-                    if (parameters.Length == 2)
-                        simpleOverload.Invoke(null, new object[] { snapshotPath, callback });
-                    else if (parameters.Length == 3)
-                        simpleOverload.Invoke(null, new object[] { snapshotPath, callback, Enum.ToObject(captureFlagsType, 0x1F) });
+                Delegate callbackDelegate = callback;
+                Type callbackType = takeSnapshot.Parameters[1].ParameterType;
+                if (!callbackType.IsInstanceOfType(callback))
+                    callbackDelegate = Delegate.CreateDelegate(callbackType, callback.Target, callback.Method);
+
+                var invokeArgs = new List<object> { snapshotPath, callbackDelegate };
+                if (takeSnapshot.Parameters.Length == 3)
+                {
+                    Type flagsType = takeSnapshot.Parameters[2].ParameterType;
+                    object flags = takeSnapshot.Parameters[2].HasDefaultValue
+                        ? takeSnapshot.Parameters[2].DefaultValue
+                        : flagsType.IsEnum ? Enum.ToObject(flagsType, 0x1F) : Activator.CreateInstance(flagsType);
+                    invokeArgs.Add(flags);
                 }
 
-                return new Dictionary<string, object>
-                {
-                    { "success", true },
-                    { "snapshotPath", snapshotPath },
-                    { "note", "Snapshot capture initiated. It may take a few seconds to complete. Open the Memory Profiler window to inspect it." },
-                };
+                takeSnapshot.Method.Invoke(null, invokeArgs.ToArray());
+                if (!completed)
+                    EditorApplication.update += CheckTimeout;
             }
             catch (Exception ex)
             {
-                return new Dictionary<string, object>
-                {
-                    { "error", "Failed to take memory snapshot: " + ex.Message },
-                };
+                resolve(MCPResponse.Error(
+                    "Failed to start memory snapshot: " + ex.GetBaseException().Message,
+                    "memory_snapshot_start_failed"));
             }
         }
 
@@ -411,6 +462,13 @@ namespace UnityMCP.Editor
             if (val is bool b) return b;
             if (val is string s) return s.ToLowerInvariant() == "true";
             return defaultValue;
+        }
+
+        private static int GetInt(Dictionary<string, object> args, string key, int defaultValue)
+        {
+            if (args == null || !args.TryGetValue(key, out object value) || value == null)
+                return defaultValue;
+            return int.TryParse(value.ToString(), out int parsed) ? parsed : defaultValue;
         }
     }
 }

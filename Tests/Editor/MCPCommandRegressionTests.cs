@@ -458,6 +458,7 @@ namespace UnityMCP.Editor.Tests
             Assert.That(routes, Does.Contain("component/set-reference"));
             Assert.That(routes, Does.Contain("localization/upsert-entry"));
             Assert.That(routes, Does.Contain("editor/play-mode"));
+            Assert.That(routes, Does.Contain("profiler/memory-snapshot"));
 
             var registered = RequireDictionary(MCPToolMetadata.GetRegisteredRoutes());
             var registeredRoutes = (List<string>)registered["routes"];
@@ -1089,6 +1090,7 @@ namespace UnityMCP.Editor.Tests
                 "profiler/memory-status",
                 "profiler/memory-breakdown",
                 "profiler/memory-top-assets",
+                "profiler/memory-snapshot",
             };
 
             foreach (string route in expectedRoutes)

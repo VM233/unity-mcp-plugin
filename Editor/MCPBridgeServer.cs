@@ -56,6 +56,8 @@ namespace UnityMCP.Editor
             { "packages/add", (args, resolve, _) => MCPPackageManagerCommands.AddPackageDeferred(args, resolve) },
             { "packages/remove", (args, resolve, _) => MCPPackageManagerCommands.RemovePackageDeferred(args, resolve) },
             { "packages/search", (args, resolve, _) => MCPPackageManagerCommands.SearchPackageDeferred(args, resolve) },
+            { "profiler/memory-snapshot", (args, resolve, _) =>
+                MCPMemoryProfilerCommands.TakeMemorySnapshot(args, resolve) },
             { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },
             { "prefab-asset/configure-component", MCPPrefabAssetCommands.ConfigureComponentDeferred },
             { "prefab-asset/transaction-edit", MCPPrefabAssetCommands.TransactionEditDeferred },
@@ -1255,7 +1257,9 @@ namespace UnityMCP.Editor
                 case "profiler/memory-top-assets":
                     return MCPMemoryProfilerCommands.GetTopMemoryConsumers(ParseJson(body));
                 case "profiler/memory-snapshot":
-                    return MCPMemoryProfilerCommands.TakeMemorySnapshot(ParseJson(body));
+                    return MCPResponse.Error(
+                        "profiler/memory-snapshot must be executed through the deferred route.",
+                        "deferred_route_required");
 
                 // ─── Shader Graph ───
                 case "shadergraph/status":

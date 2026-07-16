@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.4] - 2026-07-16
+
+- Exposed `profiler/memory-snapshot` as a first-class deferred tool and wait for the Memory Profiler completion callback or an explicit timeout instead of returning fire-and-forget success.
+- Resolved the built-in `UnityEngine.Profiling.Memory.Experimental` API before older Editor namespace fallbacks and return stable missing-package, API, capture, and timeout error codes.
+
 ## [3.3.3] - 2026-07-16
 
 - Allowed an exact AssetDatabase refresh `jobId` or original request ID to recover a persistent job after the polling agent identity changes across a script reload, while retaining owner-only implicit lookup and clearing.
