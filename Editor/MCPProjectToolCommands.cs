@@ -49,6 +49,16 @@ namespace UnityMCP.Editor
     {
         public const string DirectRoutePrefix = "project-tools/call/";
 
+        private static readonly string[] ProjectBindingArgumentNames =
+        {
+            "expectedProjectPath",
+            "expectedProjectName",
+            "targetProjectPath",
+            "targetProjectName",
+            "unityProjectPath",
+            "unityProjectName",
+        };
+
         public static object List(Dictionary<string, object> args)
         {
             var allTools = GetToolDictionaries(false);
@@ -141,10 +151,7 @@ namespace UnityMCP.Editor
                 ?? GetDictionary(args, "arguments")
                 ?? GetDictionary(args, "parameters")
                 ?? new Dictionary<string, object>();
-            foreach (string contextKey in new[]
-                     {
-                         "_agentId", "_requestId", "expectedProjectPath", "expectedProjectName"
-                     })
+            foreach (string contextKey in new[] { "_agentId", "_requestId" })
             {
                 if (!toolArgs.ContainsKey(contextKey) && args.TryGetValue(contextKey, out object contextValue))
                     toolArgs[contextKey] = contextValue;
@@ -155,6 +162,8 @@ namespace UnityMCP.Editor
 
         private static object ExecuteTool(string toolName, Dictionary<string, object> toolArgs)
         {
+            toolArgs = RemoveProjectBindingArguments(toolArgs);
+
             var matches = DiscoverTools()
                 .Where(tool => string.Equals(tool.ToolName, toolName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
@@ -215,6 +224,19 @@ namespace UnityMCP.Editor
                         { "toolName", descriptor.ToolName }
                     });
             }
+        }
+
+        private static Dictionary<string, object> RemoveProjectBindingArguments(
+            Dictionary<string, object> toolArgs)
+        {
+            var businessArguments = toolArgs != null
+                ? new Dictionary<string, object>(toolArgs)
+                : new Dictionary<string, object>();
+
+            foreach (string argumentName in ProjectBindingArgumentNames)
+                businessArguments.Remove(argumentName);
+
+            return businessArguments;
         }
 
         private static ProjectToolDescriptor FindTool(string toolName)

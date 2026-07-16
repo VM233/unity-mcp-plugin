@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.8] - 2026-07-17
+
+- Kept project binding metadata out of project-tool business arguments, preventing `project-tools/execute` and direct project-tool routes from failing strict schemas with unknown `expectedProjectPath` or `expectedProjectName` arguments.
+
 ## [3.3.7] - 2026-07-16
 
 - Wait for a package test assembly's emitted DLL before starting Test Runner, so an asmdef that only exists in Unity's compilation graph cannot produce a false `No tests matched` result or strand manifest restoration.

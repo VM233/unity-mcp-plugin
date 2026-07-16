@@ -40,22 +40,30 @@ namespace UnityMCP.Editor.Tests
 
         [MCPProjectTool(RUNTIME_MUTATION_TOOL_NAME,
             Description = "Regression fixture for explicit runtime mutation metadata.",
-            InputSchemaJson = "{\"type\":\"object\",\"properties\":{}}",
+            InputSchemaJson = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
             MutatesRuntime = true,
             RequiresPlayMode = true,
             FirstClass = true)]
         private static object SetRuntimeStateFixture(Dictionary<string, object> args)
         {
-            return new Dictionary<string, object> { { "success", true } };
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "receivedKeys", args.Keys.OrderBy(key => key).ToArray() }
+            };
         }
 
         [MCPProjectTool(LAZY_READ_TOOL_NAME,
             Description = "Regression fixture for an explicitly lazy project tool.",
-            InputSchemaJson = "{\"type\":\"object\",\"properties\":{}}",
+            InputSchemaJson = "{\"type\":\"object\",\"properties\":{},\"additionalProperties\":false}",
             ReadOnly = true)]
         private static object ReadLazyStateFixture(Dictionary<string, object> args)
         {
-            return new Dictionary<string, object> { { "success", true } };
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "receivedKeys", args.Keys.OrderBy(key => key).ToArray() }
+            };
         }
 
         [SetUp]
@@ -1598,6 +1606,50 @@ namespace UnityMCP.Editor.Tests
             var tools = (List<Dictionary<string, object>>)toolsResult["tools"];
             Assert.That(tools.Any(item =>
                 item["route"].ToString() == "project-tools/call/" + LAZY_READ_TOOL_NAME), Is.False);
+        }
+
+        [Test]
+        public void ProjectToolExecute_StripsProjectBindingArgumentsBeforeStrictSchemaValidation()
+        {
+            var response = RequireDictionary(MCPProjectToolCommands.Execute(new Dictionary<string, object>
+            {
+                { "toolName", LAZY_READ_TOOL_NAME },
+                { "args", new Dictionary<string, object>
+                    {
+                        { "expectedProjectPath", "D:/UnityProjects/BattleIdle" },
+                        { "expectedProjectName", "BattleIdle" },
+                        { "targetProjectPath", "D:/UnityProjects/BattleIdle" },
+                        { "targetProjectName", "BattleIdle" },
+                        { "unityProjectPath", "D:/UnityProjects/BattleIdle" },
+                        { "unityProjectName", "BattleIdle" },
+                    }
+                },
+                { "expectedProjectPath", "D:/UnityProjects/BattleIdle" },
+                { "expectedProjectName", "BattleIdle" },
+            }));
+
+            Assert.That(response["success"], Is.EqualTo(true));
+            var result = RequireDictionary(response["result"]);
+            CollectionAssert.IsEmpty((string[])result["receivedKeys"]);
+        }
+
+        [Test]
+        public void ProjectToolDirectRoute_StripsProjectBindingArgumentsBeforeStrictSchemaValidation()
+        {
+            bool handled = MCPProjectToolCommands.TryExecuteDirectRoute(
+                MCPProjectToolCommands.GetDirectRoute(RUNTIME_MUTATION_TOOL_NAME),
+                new Dictionary<string, object>
+                {
+                    { "expectedProjectPath", "D:/UnityProjects/BattleIdle" },
+                    { "expectedProjectName", "BattleIdle" },
+                },
+                out object rawResponse);
+
+            Assert.That(handled, Is.True);
+            var response = RequireDictionary(rawResponse);
+            Assert.That(response["success"], Is.EqualTo(true));
+            var result = RequireDictionary(response["result"]);
+            CollectionAssert.IsEmpty((string[])result["receivedKeys"]);
         }
 
         [Test]
