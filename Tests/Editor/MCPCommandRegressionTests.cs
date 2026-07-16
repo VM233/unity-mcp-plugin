@@ -457,6 +457,7 @@ namespace UnityMCP.Editor.Tests
             Assert.That(routes, Does.Contain("asset/move"));
             Assert.That(routes, Does.Contain("component/set-reference"));
             Assert.That(routes, Does.Contain("localization/upsert-entry"));
+            Assert.That(routes, Does.Contain("editor/play-mode"));
 
             var registered = RequireDictionary(MCPToolMetadata.GetRegisteredRoutes());
             var registeredRoutes = (List<string>)registered["routes"];
@@ -1072,6 +1073,42 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void ToolMetadata_ExposesPlayModeAndProfilerRoutesAsFirstClass()
+        {
+            var toolsResult = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: false, includeSchema: true, limit: 500));
+            var tools = (List<Dictionary<string, object>>)toolsResult["tools"];
+            string[] expectedRoutes =
+            {
+                "editor/play-mode",
+                "profiler/enable",
+                "profiler/stats",
+                "profiler/memory",
+                "profiler/frame-data",
+                "profiler/analyze",
+                "profiler/memory-status",
+                "profiler/memory-breakdown",
+                "profiler/memory-top-assets",
+            };
+
+            foreach (string route in expectedRoutes)
+            {
+                var tool = tools.Single(item => item["route"].ToString() == route);
+                Assert.That(tool["firstClass"], Is.EqualTo(true), route);
+                Assert.That(tool["inputSchema"], Is.InstanceOf<Dictionary<string, object>>(), route);
+                Assert.That(tool["toolName"], Is.EqualTo("unity_" + route.Replace('/', '_').Replace('-', '_')),
+                    route);
+            }
+
+            var playModeTool = tools.Single(item => item["route"].ToString() == "editor/play-mode");
+            var playModeSchema = RequireDictionary(playModeTool["inputSchema"]);
+            var playModeProperties = RequireDictionary(playModeSchema["properties"]);
+            Assert.That(playModeProperties.Keys, Does.Contain("action"));
+            Assert.That(playModeProperties.Keys, Does.Contain("timeoutMs"));
+            Assert.That(playModeProperties.Keys, Does.Contain("expectedProjectPath"));
+        }
+
+        [Test]
         public void ExecuteCode_ResultBudgetTruncatesLargeCollections()
         {
             var response = RequireDictionary(MCPEditorCommands.ExecuteCode(new Dictionary<string, object>
@@ -1660,6 +1697,47 @@ namespace UnityMCP.Editor.Tests
             var refresh = (MCPRequestQueue.RequestTicket)refreshArguments[1];
             Assert.That(refresh.Status, Is.EqualTo(MCPRequestQueue.RequestStatus.Queued));
             Assert.That(refresh.ResumeCount, Is.EqualTo(1));
+
+            var playModeArguments = new object[] { Snapshot("editor/play-mode", false), null };
+            Assert.That(restore.Invoke(null, playModeArguments), Is.EqualTo(true));
+            var playMode = (MCPRequestQueue.RequestTicket)playModeArguments[1];
+            Assert.That(playMode.Status, Is.EqualTo(MCPRequestQueue.RequestStatus.Queued));
+            Assert.That(playMode.ResumeCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void PlayModeActionsResolveToExplicitIdempotentTargetStates()
+        {
+            MethodInfo method = typeof(MCPEditorCommands).GetMethod("TryResolvePlayModeTarget",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+
+            object[] pause =
+            {
+                new Dictionary<string, object> { { "action", "pause" } },
+                null, false, false, null
+            };
+            Assert.That(method.Invoke(null, pause), Is.EqualTo(true));
+            Assert.That(pause[1], Is.EqualTo("pause"));
+            Assert.That(pause[2], Is.EqualTo(true));
+            Assert.That(pause[3], Is.EqualTo(true));
+
+            object[] resume =
+            {
+                new Dictionary<string, object> { { "action", "resume" } },
+                null, false, true, null
+            };
+            Assert.That(method.Invoke(null, resume), Is.EqualTo(true));
+            Assert.That(resume[2], Is.EqualTo(true));
+            Assert.That(resume[3], Is.EqualTo(false));
+
+            object[] invalid =
+            {
+                new Dictionary<string, object> { { "action", "toggle" } },
+                null, false, false, null
+            };
+            Assert.That(method.Invoke(null, invalid), Is.EqualTo(false));
+            Assert.That(invalid[4], Does.Contain("play, pause, resume, or stop"));
         }
 
         [Test]
@@ -1705,6 +1783,69 @@ namespace UnityMCP.Editor.Tests
                 Is.EqualTo(true));
             Assert.That(matchesRequestId.Invoke(null, new object[] { existing, "request-2" }),
                 Is.EqualTo(false));
+        }
+
+        [Test]
+        public void AssetRefresh_ExactJobIdentityCanBePolledAcrossReloadOwnerChange()
+        {
+            Type workflow = typeof(MCPToolMetadata).Assembly.GetType(
+                "UnityMCP.Editor.MCPAssetRefreshWorkflow");
+            Assert.That(workflow, Is.Not.Null);
+            FieldInfo jobField = workflow.GetField("_job", BindingFlags.Static | BindingFlags.NonPublic);
+            MethodInfo getMethod = workflow.GetMethod("Get", BindingFlags.Static | BindingFlags.Public);
+            Assert.That(jobField, Is.Not.Null);
+            Assert.That(getMethod, Is.Not.Null);
+
+            object original = jobField.GetValue(null);
+            object job = Activator.CreateInstance(jobField.FieldType, true);
+            jobField.FieldType.GetField("JobId")?.SetValue(job, "refresh-job-1");
+            jobField.FieldType.GetField("Status")?.SetValue(job, "succeeded");
+            jobField.FieldType.GetField("Arguments")?.SetValue(job,
+                new Dictionary<string, object>
+                {
+                    { "_agentId", "agent-before-reload" },
+                    { "_requestId", "request-before-reload" },
+                });
+            jobField.FieldType.GetField("StartedAt")?.SetValue(job, DateTime.UtcNow);
+            jobField.FieldType.GetField("UpdatedAt")?.SetValue(job, DateTime.UtcNow);
+
+            try
+            {
+                jobField.SetValue(null, job);
+
+                var recovered = RequireDictionary(getMethod.Invoke(null, new object[]
+                {
+                    new Dictionary<string, object>
+                    {
+                        { "_agentId", "agent-after-reload" },
+                        { "jobId", "refresh-job-1" },
+                    }
+                }));
+                Assert.That(recovered["success"], Is.EqualTo(true));
+                Assert.That(recovered["recoveredAcrossOwner"], Is.EqualTo(true));
+                Assert.That(recovered["recoveryMatchedBy"], Is.EqualTo("jobId"));
+
+                var implicitLookup = RequireDictionary(getMethod.Invoke(null, new object[]
+                {
+                    new Dictionary<string, object> { { "_agentId", "agent-after-reload" } }
+                }));
+                Assert.That(implicitLookup["errorCode"], Is.EqualTo("job_owner_mismatch"));
+
+                var crossOwnerClear = RequireDictionary(getMethod.Invoke(null, new object[]
+                {
+                    new Dictionary<string, object>
+                    {
+                        { "_agentId", "agent-after-reload" },
+                        { "refreshRequestId", "request-before-reload" },
+                        { "clear", true },
+                    }
+                }));
+                Assert.That(crossOwnerClear["errorCode"], Is.EqualTo("job_owner_mismatch"));
+            }
+            finally
+            {
+                jobField.SetValue(null, original);
+            }
         }
 
         [Test]

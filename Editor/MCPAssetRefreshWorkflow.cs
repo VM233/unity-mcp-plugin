@@ -98,13 +98,6 @@ namespace UnityMCP.Editor
                 _job = LoadJob();
             if (_job == null)
                 return new { error = "No AssetDatabase refresh job was found." };
-            string owner = _job.Arguments != null && _job.Arguments.TryGetValue("_agentId", out object ownerValue)
-                ? ownerValue?.ToString()
-                : "anonymous";
-            string requester = GetString(args, "_agentId");
-            if (string.IsNullOrEmpty(requester)) requester = "anonymous";
-            if (!string.Equals(owner, requester, StringComparison.Ordinal))
-                return MCPResponse.Error("Asset refresh job belongs to another agent.", "job_owner_mismatch");
 
             string refreshRequestId = GetString(args, "refreshRequestId");
             if (!string.IsNullOrEmpty(refreshRequestId) &&
@@ -119,7 +112,33 @@ namespace UnityMCP.Editor
             if (!string.IsNullOrEmpty(jobId) && jobId != _job.JobId)
                 return new { error = $"AssetDatabase refresh job '{jobId}' was not found." };
 
+            string owner = _job.Arguments != null && _job.Arguments.TryGetValue("_agentId", out object ownerValue)
+                ? ownerValue?.ToString()
+                : "anonymous";
+            string requester = GetString(args, "_agentId");
+            if (string.IsNullOrEmpty(owner)) owner = "anonymous";
+            if (string.IsNullOrEmpty(requester)) requester = "anonymous";
+            bool ownerMatches = string.Equals(owner, requester, StringComparison.Ordinal);
+            bool hasExactRecoveryIdentity = !string.IsNullOrEmpty(jobId) ||
+                                            !string.IsNullOrEmpty(refreshRequestId);
+            if (!ownerMatches && !hasExactRecoveryIdentity)
+                return MCPResponse.Error("Asset refresh job belongs to another agent.",
+                    "job_owner_mismatch");
+            if (!ownerMatches && GetBool(args, "clear", false))
+            {
+                return MCPResponse.Error(
+                    "Only the owning agent can clear an AssetDatabase refresh job.",
+                    "job_owner_mismatch");
+            }
+
             var response = BuildResponse(_job);
+            if (!ownerMatches)
+            {
+                response["recoveredAcrossOwner"] = true;
+                response["recoveryMatchedBy"] = !string.IsNullOrEmpty(jobId)
+                    ? "jobId"
+                    : "refreshRequestId";
+            }
             if (_job.IsTerminal && GetBool(args, "clear", false))
             {
                 DeleteJobFile();

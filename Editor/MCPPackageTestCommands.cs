@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using UnityEditor;
+using UnityEditor.Compilation;
 using UnityEditor.PackageManager;
 using UnityEngine;
 
@@ -208,7 +209,7 @@ namespace UnityMCP.Editor
                         }
                         break;
                     case "waiting-for-assembly":
-                        if (AreAssembliesLoaded(_workflow.Assemblies))
+                        if (AreAssembliesAvailable(_workflow.Assemblies))
                         {
                             StartTestRun();
                         }
@@ -328,7 +329,7 @@ namespace UnityMCP.Editor
                 return;
             }
 
-            if (AreAssembliesLoaded(_workflow.Assemblies))
+            if (AreAssembliesAvailable(_workflow.Assemblies))
                 return;
 
             CompleteWorkflow();
@@ -429,13 +430,44 @@ namespace UnityMCP.Editor
                    testables.Any(value => value?.ToString() == packageName);
         }
 
-        private static bool AreAssembliesLoaded(IEnumerable<string> assemblyNames)
+        private static bool AreAssembliesAvailable(IEnumerable<string> assemblyNames)
         {
-            var requested = new HashSet<string>(assemblyNames ?? Array.Empty<string>());
+            var loadedAssemblyNames = AppDomain.CurrentDomain.GetAssemblies()
+                .Select(assembly => assembly.GetName().Name);
+            return AreRequestedAssembliesAvailable(assemblyNames, loadedAssemblyNames,
+                GetCompiledAssemblyNames());
+        }
+
+        private static IEnumerable<string> GetCompiledAssemblyNames()
+        {
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            try
+            {
+                foreach (var assembly in CompilationPipeline.GetAssemblies(AssembliesType.Editor))
+                    names.Add(assembly.name);
+                foreach (var assembly in CompilationPipeline.GetAssemblies(AssembliesType.Player))
+                    names.Add(assembly.name);
+            }
+            catch
+            {
+                // The compilation graph can be unavailable for a frame while Unity rebuilds it.
+                // The persistent workflow will retry on the next Editor update.
+            }
+
+            return names;
+        }
+
+        private static bool AreRequestedAssembliesAvailable(IEnumerable<string> requestedAssemblyNames,
+            IEnumerable<string> loadedAssemblyNames, IEnumerable<string> compiledAssemblyNames)
+        {
+            var requested = new HashSet<string>(requestedAssemblyNames ?? Array.Empty<string>(),
+                StringComparer.Ordinal);
             if (requested.Count == 0)
                 return true;
-            foreach (var assembly in AppDomain.CurrentDomain.GetAssemblies())
-                requested.Remove(assembly.GetName().Name);
+            foreach (string assemblyName in loadedAssemblyNames ?? Array.Empty<string>())
+                requested.Remove(assemblyName);
+            foreach (string assemblyName in compiledAssemblyNames ?? Array.Empty<string>())
+                requested.Remove(assemblyName);
             return requested.Count == 0;
         }
 

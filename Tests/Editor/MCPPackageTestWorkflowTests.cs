@@ -65,6 +65,41 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void CompiledTestAssembly_IsReadyWithoutLoadingIntoDefaultAppDomain()
+        {
+            MethodInfo method = typeof(MCPPackageTestCommands).GetMethod(
+                "AreRequestedAssembliesAvailable", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+
+            bool available = (bool)method.Invoke(null, new object[]
+            {
+                new[] { "Example.Package.Editor.Tests" },
+                Array.Empty<string>(),
+                new[] { "Example.Package.Editor.Tests" },
+            });
+
+            Assert.That(available, Is.True,
+                "Unity Test Runner assemblies may be compiled but intentionally skipped by the default AppDomain.");
+        }
+
+        [Test]
+        public void MissingRequestedTestAssembly_RemainsUnavailable()
+        {
+            MethodInfo method = typeof(MCPPackageTestCommands).GetMethod(
+                "AreRequestedAssembliesAvailable", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+
+            bool available = (bool)method.Invoke(null, new object[]
+            {
+                new[] { "Missing.Package.Tests" },
+                new[] { "Unrelated.Loaded" },
+                new[] { "Unrelated.Compiled" },
+            });
+
+            Assert.That(available, Is.False);
+        }
+
+        [Test]
         public void ActiveWorkflow_BlocksConcurrentManifestMutation()
         {
             FieldInfo workflowField = typeof(MCPPackageTestCommands).GetField("_workflow",

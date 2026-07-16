@@ -139,13 +139,20 @@ namespace UnityMCP.Editor
                 "jobs/get",
                 "testing/get-job",
                 "testing/get-package-job",
+                "profiler/stats",
+                "profiler/memory",
+                "profiler/memory-status",
                 "project-tools/list");
 
             AddProfile(profiles, ToolProfile.FirstClass(readOnly: true, longRunning: true),
                 "wait/editor-idle",
                 "testing/list-tests",
                 "uitoolkit/wait-refresh",
-                "uitoolkit/builder-preview");
+                "uitoolkit/builder-preview",
+                "profiler/frame-data",
+                "profiler/analyze",
+                "profiler/memory-breakdown",
+                "profiler/memory-top-assets");
 
             AddProfile(profiles, ToolProfile.FirstClass(readOnly: true, longRunning: true,
                     requiresPlayMode: true),
@@ -201,7 +208,12 @@ namespace UnityMCP.Editor
             AddProfile(profiles, ToolProfile.FirstClass(mutatesRuntime: true),
                 "localization/set-selected-locale",
                 "component/set-property",
-                "component/set-reference");
+                "component/set-reference",
+                "profiler/enable");
+
+            AddProfile(profiles, ToolProfile.FirstClass(mutatesRuntime: true, longRunning: true,
+                    mayReloadDomain: true),
+                "editor/play-mode");
 
             AddProfile(profiles, ToolProfile.FirstClass(),
                 "queue/cancel");
@@ -731,6 +743,8 @@ namespace UnityMCP.Editor
                     return "Lint a Unity package root for missing .meta files.";
                 case "wait/editor-idle":
                     return "Wait until the Unity Editor is idle after compilation, domain reload, package refresh, or asset import.";
+                case "editor/play-mode":
+                    return "Enter, pause, resume, or stop Play Mode and return only after Unity confirms the requested state.";
                 case "testing/list-tests":
                     return "List discoverable Unity tests with mode and name filters.";
                 case "testing/run-tests":
@@ -741,6 +755,24 @@ namespace UnityMCP.Editor
                     return "Run tests from a Git package by temporarily enabling package testables, surviving domain reloads, and restoring manifest.json exactly.";
                 case "testing/get-package-job":
                     return "Poll a persistent package test workflow through testable enablement, test execution, and exact manifest restoration.";
+                case "profiler/enable":
+                    return "Enable or disable the Unity Profiler and optional deep profiling.";
+                case "profiler/stats":
+                    return "Read current Unity rendering statistics such as batches, draw calls, triangles, and frame time.";
+                case "profiler/memory":
+                    return "Read current allocated, reserved, managed-heap, graphics-driver, and temporary allocator memory.";
+                case "profiler/frame-data":
+                    return "Read a paginated CPU timing hierarchy from a recorded Unity Profiler frame.";
+                case "profiler/analyze":
+                    return "Analyze current memory, rendering, and recorded Profiler frame data with optimization findings.";
+                case "profiler/memory-status":
+                    return "Read Memory Profiler availability and a quick current memory summary.";
+                case "profiler/memory-breakdown":
+                    return "Scan loaded assets and summarize runtime memory by asset category.";
+                case "profiler/memory-top-assets":
+                    return "List the largest loaded assets by runtime memory usage.";
+                case "profiler/memory-snapshot":
+                    return "Start a Memory Profiler snapshot when com.unity.memoryprofiler is installed.";
                 case "mcp/health":
                     return "Inspect MCP bridge health, queue state, sessions, process memory, and recent slow requests.";
                 case "mcp/set-autostart":
@@ -1237,6 +1269,12 @@ namespace UnityMCP.Editor
                         Prop("overwrite", "boolean", "Replace an existing output file. Defaults to false."),
                         Prop("interactive", "boolean", "Show Unity's export package UI. Defaults to false.")
                     ), "outputPath");
+                case "editor/play-mode":
+                    return Schema(Props(
+                        Prop("action", "string", "Target action: play, pause, resume, or stop. Defaults to play. Pause is idempotent and never toggles."),
+                        Prop("timeoutMs", "number", "Maximum time to wait for the confirmed target state. Defaults to 10000."),
+                        Prop("stableFrames", "number", "Consecutive Editor updates that must confirm the target state. Defaults to 2.")
+                    ));
                 case "editor/execute-code":
                     return Schema(Props(
                         Prop("code", "string", "C# method body to execute. Return a value to serialize it."),
@@ -1245,6 +1283,37 @@ namespace UnityMCP.Editor
                         Prop("maxResultDepth", "number", "Maximum serialized result depth. Defaults to 8; capped at 16."),
                         Prop("maxResultStringLength", "number", "Maximum characters per returned string. Defaults to 20000; capped at 200000.")
                     ), "code");
+                case "profiler/enable":
+                    return Schema(Props(
+                        Prop("enabled", "boolean", "Enable or disable Profiler recording. Defaults to true."),
+                        Prop("deepProfiling", "boolean", "Optional deep profiling state.")
+                    ));
+                case "profiler/stats":
+                case "profiler/memory":
+                case "profiler/analyze":
+                case "profiler/memory-status":
+                    return Schema(Props());
+                case "profiler/frame-data":
+                    return Schema(Props(
+                        Prop("frameIndex", "number", "Recorded Profiler frame index. Defaults to the latest frame."),
+                        Prop("threadIndex", "number", "Profiler thread index. Defaults to 0 for Main Thread."),
+                        Prop("maxItems", "number", "Maximum timing entries. Defaults to 30."),
+                        Prop("minTimeMs", "number", "Exclude nested timing entries below this total time.")
+                    ));
+                case "profiler/memory-breakdown":
+                    return Schema(Props(
+                        Prop("includeDetails", "boolean", "Include the largest assets in each category."),
+                        Prop("maxPerCategory", "number", "Maximum detailed assets per category. Defaults to 5.")
+                    ));
+                case "profiler/memory-top-assets":
+                    return Schema(Props(
+                        Prop("count", "number", "Maximum assets to return. Defaults to 20."),
+                        Prop("type", "string", "Optional asset type filter such as texture, mesh, audio, material, shader, animation, or font.")
+                    ));
+                case "profiler/memory-snapshot":
+                    return Schema(Props(
+                        Prop("path", "string", "Optional output directory. Defaults to Unity's temporary cache MemorySnapshots folder.")
+                    ));
                 case "scene/hierarchy":
                     return Schema(Props(
                         Prop("maxDepth", "number", "Maximum hierarchy depth to return. Defaults to 10."),

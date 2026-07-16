@@ -119,23 +119,140 @@ namespace UnityMCP.Editor
             return $"wait/editor-idle|{normalized["timeoutMs"]}|{normalized["stableFrames"]}|{normalized["stableMs"]}";
         }
 
-        public static object SetPlayMode(Dictionary<string, object> args)
+        public static void SetPlayMode(Dictionary<string, object> args, Action<object> resolve)
         {
-            string action = args.ContainsKey("action") ? args["action"].ToString() : "play";
+            if (!TryResolvePlayModeTarget(args, out string action, out bool targetPlaying,
+                    out bool targetPaused, out string validationError))
+            {
+                resolve(MCPResponse.Error(validationError, "invalid_play_mode_action"));
+                return;
+            }
 
-            switch (action.ToLower())
+            bool initiallyPlaying = EditorApplication.isPlaying;
+            bool initiallyPaused = EditorApplication.isPaused;
+            if ((action == "pause" || action == "resume") &&
+                !EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                resolve(MCPResponse.Error($"Cannot {action} because Unity is not in Play Mode.",
+                    "play_mode_required"));
+                return;
+            }
+
+            int timeoutMs = Math.Max(100, GetInt(args, "timeoutMs", 10000));
+            int stableFrames = Math.Max(1, GetInt(args, "stableFrames", 2));
+            double startedAt = EditorApplication.timeSinceStartup;
+            int confirmedFrames = 0;
+            bool resolved = false;
+
+            void ApplyTarget()
+            {
+                if (!targetPlaying)
+                {
+                    if (EditorApplication.isPlaying || EditorApplication.isPlayingOrWillChangePlaymode)
+                        EditorApplication.isPlaying = false;
+                    return;
+                }
+
+                if (!EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode)
+                    EditorApplication.isPlaying = true;
+                if (EditorApplication.isPlaying && EditorApplication.isPaused != targetPaused)
+                    EditorApplication.isPaused = targetPaused;
+            }
+
+            bool TargetReached()
+            {
+                bool isChangingPlayMode = EditorApplication.isPlayingOrWillChangePlaymode !=
+                                          EditorApplication.isPlaying;
+                return targetPlaying
+                    ? EditorApplication.isPlaying && !isChangingPlayMode &&
+                      EditorApplication.isPaused == targetPaused
+                    : !EditorApplication.isPlaying && !EditorApplication.isPlayingOrWillChangePlaymode;
+            }
+
+            void Complete(object result)
+            {
+                if (resolved)
+                    return;
+                resolved = true;
+                resolve(result);
+            }
+
+            void Tick()
+            {
+                ApplyTarget();
+                if (TargetReached())
+                    confirmedFrames++;
+                else
+                    confirmedFrames = 0;
+
+                double elapsedMs = (EditorApplication.timeSinceStartup - startedAt) * 1000d;
+                if (confirmedFrames >= stableFrames)
+                {
+                    EditorApplication.update -= Tick;
+                    Complete(new Dictionary<string, object>
+                    {
+                        { "success", true },
+                        { "action", action },
+                        { "stateConfirmed", true },
+                        { "isPlaying", EditorApplication.isPlaying },
+                        { "isPaused", EditorApplication.isPaused },
+                        { "changed", initiallyPlaying != EditorApplication.isPlaying ||
+                                     initiallyPaused != EditorApplication.isPaused },
+                        { "stableFrames", confirmedFrames },
+                        { "elapsedMs", Math.Round(elapsedMs, 1) },
+                    });
+                    return;
+                }
+
+                if (elapsedMs < timeoutMs)
+                    return;
+
+                EditorApplication.update -= Tick;
+                Complete(MCPResponse.Error(
+                    $"Unity did not reach the requested Play Mode state for '{action}' within {timeoutMs} ms.",
+                    "play_mode_state_timeout", true, new Dictionary<string, object>
+                    {
+                        { "action", action },
+                        { "targetPlaying", targetPlaying },
+                        { "targetPaused", targetPaused },
+                        { "isPlaying", EditorApplication.isPlaying },
+                        { "isPaused", EditorApplication.isPaused },
+                        { "isPlayingOrWillChangePlaymode", EditorApplication.isPlayingOrWillChangePlaymode },
+                    }));
+            }
+
+            Tick();
+            if (!resolved)
+                EditorApplication.update += Tick;
+        }
+
+        internal static bool TryResolvePlayModeTarget(Dictionary<string, object> args,
+            out string action, out bool targetPlaying, out bool targetPaused, out string error)
+        {
+            action = args != null && args.TryGetValue("action", out object rawAction) && rawAction != null
+                ? rawAction.ToString().Trim().ToLowerInvariant()
+                : "play";
+            error = null;
+            switch (action)
             {
                 case "play":
-                    EditorApplication.isPlaying = true;
-                    return new { success = true, action = "play" };
+                case "resume":
+                    targetPlaying = true;
+                    targetPaused = false;
+                    return true;
                 case "pause":
-                    EditorApplication.isPaused = !EditorApplication.isPaused;
-                    return new { success = true, action = "pause", isPaused = EditorApplication.isPaused };
+                    targetPlaying = true;
+                    targetPaused = true;
+                    return true;
                 case "stop":
-                    EditorApplication.isPlaying = false;
-                    return new { success = true, action = "stop" };
+                    targetPlaying = false;
+                    targetPaused = false;
+                    return true;
                 default:
-                    return new { error = $"Unknown action: {action}. Use 'play', 'pause', or 'stop'." };
+                    targetPlaying = false;
+                    targetPaused = false;
+                    error = $"Unknown action: {action}. Use 'play', 'pause', 'resume', or 'stop'.";
+                    return false;
             }
         }
 

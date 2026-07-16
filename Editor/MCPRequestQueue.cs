@@ -1278,7 +1278,9 @@ namespace UnityMCP.Editor
         {
             // Asset refresh persists its own job before entering AssetDatabase.Refresh,
             // and MCPAssetRefreshWorkflow.Start reuses that job for the same request ID.
-            return actionName == "asset/refresh";
+            // Play Mode transitions are explicit target states (never toggles), so replaying
+            // the persisted deferred request after a domain reload is also idempotent.
+            return actionName == "asset/refresh" || actionName == "editor/play-mode";
         }
 
         private static void EnqueueRestoredTicketLocked(RequestTicket ticket)

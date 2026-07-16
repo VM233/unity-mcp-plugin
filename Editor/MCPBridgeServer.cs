@@ -47,6 +47,7 @@ namespace UnityMCP.Editor
             { "testing/list-tests", (args, resolve, _) => MCPTestRunnerCommands.ListTests(args, resolve) },
             { "advanced/execute", (args, resolve, _) => ExecuteAdvancedRouteDeferred(args, resolve) },
             { "wait/editor-idle", (args, resolve, _) => MCPEditorCommands.WaitForIdle(args, resolve) },
+            { "editor/play-mode", (args, resolve, _) => MCPEditorCommands.SetPlayMode(args, resolve) },
             { "uitoolkit/wait-refresh", (args, resolve, _) => MCPUICommands.WaitForUIToolkitRefresh(args, resolve) },
             { "uitoolkit/builder-preview", (args, resolve, _) => MCPUICommands.OpenUIBuilderPreview(args, resolve) },
             { "screenshot/game", (args, resolve, _) => MCPScreenshotCommands.CaptureGameView(args, resolve) },
@@ -863,7 +864,9 @@ namespace UnityMCP.Editor
                 case "uitoolkit/wait-refresh":
                     return new { error = "uitoolkit/wait-refresh must be executed through the deferred route." };
                 case "editor/play-mode":
-                    return MCPEditorCommands.SetPlayMode(ParseJson(body));
+                    return MCPResponse.Error(
+                        "editor/play-mode must be executed through the deferred route.",
+                        "deferred_route_required");
                 case "editor/execute-menu-item":
                     return MCPEditorCommands.ExecuteMenuItem(ParseJson(body));
                 case "editor/execute-code":

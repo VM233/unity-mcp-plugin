@@ -2,6 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.3] - 2026-07-16
+
+- Allowed an exact AssetDatabase refresh `jobId` or original request ID to recover a persistent job after the polling agent identity changes across a script reload, while retaining owner-only implicit lookup and clearing.
+- Recognized compiled Unity Test Runner assemblies through `CompilationPipeline` instead of requiring them to load into the default AppDomain, preventing package-test workflows from stalling in `waiting-for-assembly`.
+- Made Play Mode actions explicit, idempotent, reload-resumable target states and wait for confirmed state changes before returning success; added a dedicated `resume` action.
+- Exposed Profiler control, rendering, frame, analysis, and memory routes as typed first-class MCP tools.
+
 ## [3.3.2] - 2026-07-16
 
 - Replaced frame-count-based request-queue cleanup with a low-frequency time cadence and skipped persistent ticket snapshot rewrites when no ticket expired, eliminating periodic Editor main-thread stalls during Play Mode.
