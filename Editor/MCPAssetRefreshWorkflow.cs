@@ -131,6 +131,11 @@ namespace UnityMCP.Editor
                     "job_owner_mismatch");
             }
 
+            if (_job.Status == "waiting-for-editor")
+                ReconcileWaitingJob();
+            if (_job != null && !_job.IsTerminal)
+                EnsureUpdateRegistered();
+
             var response = BuildResponse(_job);
             if (!ownerMatches)
             {
@@ -170,35 +175,7 @@ namespace UnityMCP.Editor
 
             if (_job.Status == "waiting-for-editor")
             {
-                if (EditorApplication.isCompiling || EditorApplication.isUpdating)
-                {
-                    if (_job.IdleSince != default)
-                    {
-                        _job.IdleSince = default;
-                        TouchAndSave();
-                    }
-                    return;
-                }
-
-                if (_job.IdleSince == default)
-                {
-                    _job.IdleSince = DateTime.UtcNow;
-                    TouchAndSave();
-                    return;
-                }
-
-                if (DateTime.UtcNow - _job.IdleSince < StableIdleDuration)
-                    return;
-
-                if (GetBool(_job.Arguments, "saveAssets", false))
-                    AssetDatabase.SaveAssets();
-                _job.Result ??= BuildRecoveredResult(_job.Arguments);
-                _job.Result["isUpdating"] = false;
-                _job.Result["isCompiling"] = false;
-                _job.Result["settledAfterRefresh"] = true;
-                _job.Status = "succeeded";
-                TouchAndSave();
-                UnregisterUpdate();
+                ReconcileWaitingJob();
                 return;
             }
 
@@ -228,6 +205,46 @@ namespace UnityMCP.Editor
                 if (_job.Status != "waiting-for-editor")
                     UnregisterUpdate();
             }
+        }
+
+        private static void ReconcileWaitingJob()
+        {
+            if (_job == null || _job.Status != "waiting-for-editor")
+                return;
+
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+            {
+                if (_job.IdleSince != default)
+                {
+                    _job.IdleSince = default;
+                    TouchAndSave();
+                }
+                return;
+            }
+
+            if (_job.IdleSince == default)
+            {
+                _job.IdleSince = DateTime.UtcNow;
+                TouchAndSave();
+                return;
+            }
+
+            if (DateTime.UtcNow - _job.IdleSince < StableIdleDuration)
+                return;
+
+            if (GetBool(_job.Arguments, "saveAssets", false))
+                AssetDatabase.SaveAssets();
+
+            var settledResult = _job.Result != null
+                ? new Dictionary<string, object>(_job.Result)
+                : BuildRecoveredResult(_job.Arguments);
+            settledResult["isUpdating"] = false;
+            settledResult["isCompiling"] = false;
+            settledResult["settledAfterRefresh"] = true;
+            _job.Result = settledResult;
+            _job.Status = "succeeded";
+            TouchAndSave();
+            UnregisterUpdate();
         }
 
         private static Dictionary<string, object> BuildRecoveredResult(Dictionary<string, object> args)
@@ -262,7 +279,7 @@ namespace UnityMCP.Editor
             if (!string.IsNullOrEmpty(job.Error))
                 response["error"] = job.Error;
             if (job.Result != null)
-                response["result"] = job.Result;
+                response["result"] = new Dictionary<string, object>(job.Result);
             return response;
         }
 

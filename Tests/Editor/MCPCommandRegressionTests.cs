@@ -31,6 +31,11 @@ namespace UnityMCP.Editor.Tests
         public ScalarEnvelopeTestConfig config = new ScalarEnvelopeTestConfig();
     }
 
+    public sealed class PrefabTransactionListTestComponent : MonoBehaviour
+    {
+        public List<string> values = new List<string>();
+    }
+
     public sealed class MCPCommandRegressionTests
     {
         private const string TEST_FOLDER = "Assets/__UnityMCPTests";
@@ -324,6 +329,57 @@ namespace UnityMCP.Editor.Tests
                 Assert.That(root.transform.Find("Source").GetComponent<MeshRenderer>().sharedMaterials.Length,
                     Is.EqualTo(1));
                 Assert.That(root.transform.Find("Source").GetComponent<MeshRenderer>().sharedMaterials[0], Is.Null);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [Test]
+        public void TransactionEdit_ArrayInsert_PersistsPureYamlAddition()
+        {
+            CreateTestPrefab();
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                var component = root.transform.Find("Source").gameObject
+                    .AddComponent<PrefabTransactionListTestComponent>();
+                component.values.Add("first");
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(root, PREFAB_PATH), Is.Not.Null);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.TransactionEdit(
+                new Dictionary<string, object>
+                {
+                    { "assetPath", PREFAB_PATH },
+                    { "operations", new List<object>
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "type", "arrayInsert" },
+                                { "prefabPath", "Source" },
+                                { "componentType", typeof(PrefabTransactionListTestComponent).FullName },
+                                { "propertyName", "values" },
+                                { "index", 1 },
+                                { "value", "second" },
+                            },
+                        }
+                    },
+                }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                var values = root.transform.Find("Source")
+                    .GetComponent<PrefabTransactionListTestComponent>().values;
+                CollectionAssert.AreEqual(new[] { "first", "second" }, values,
+                    "The transaction must not report success if YAML stabilization discards the array insertion.");
             }
             finally
             {
@@ -1847,6 +1903,83 @@ namespace UnityMCP.Editor.Tests
             finally
             {
                 jobField.SetValue(null, original);
+            }
+        }
+
+        [Test]
+        public void AssetRefresh_PollSettlesIdleWaitingJobWithoutReconnect()
+        {
+            Type workflow = typeof(MCPToolMetadata).Assembly.GetType(
+                "UnityMCP.Editor.MCPAssetRefreshWorkflow");
+            Assert.That(workflow, Is.Not.Null);
+            FieldInfo jobField = workflow.GetField("_job", BindingFlags.Static | BindingFlags.NonPublic);
+            MethodInfo getMethod = workflow.GetMethod("Get", BindingFlags.Static | BindingFlags.Public);
+            MethodInfo getJobPath = workflow.GetMethod("GetJobPath",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            MethodInfo ensureUpdateRegistered = workflow.GetMethod("EnsureUpdateRegistered",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(jobField, Is.Not.Null);
+            Assert.That(getMethod, Is.Not.Null);
+            Assert.That(getJobPath, Is.Not.Null);
+            Assert.That(ensureUpdateRegistered, Is.Not.Null);
+
+            object original = jobField.GetValue(null);
+            string jobPath = (string)getJobPath.Invoke(null, null);
+            byte[] originalJobFile = File.Exists(jobPath) ? File.ReadAllBytes(jobPath) : null;
+            object job = Activator.CreateInstance(jobField.FieldType, true);
+            jobField.FieldType.GetField("JobId")?.SetValue(job, "refresh-job-idle");
+            jobField.FieldType.GetField("Status")?.SetValue(job, "waiting-for-editor");
+            jobField.FieldType.GetField("Arguments")?.SetValue(job,
+                new Dictionary<string, object>
+                {
+                    { "_agentId", "refresh-agent" },
+                    { "_requestId", "refresh-request" },
+                    { "saveAssets", false },
+                });
+            jobField.FieldType.GetField("Result")?.SetValue(job,
+                new Dictionary<string, object> { { "success", true } });
+            jobField.FieldType.GetField("IdleSince")?.SetValue(job,
+                DateTime.UtcNow - TimeSpan.FromSeconds(2));
+            jobField.FieldType.GetField("StartedAt")?.SetValue(job, DateTime.UtcNow - TimeSpan.FromSeconds(3));
+            jobField.FieldType.GetField("UpdatedAt")?.SetValue(job, DateTime.UtcNow - TimeSpan.FromSeconds(2));
+
+            try
+            {
+                jobField.SetValue(null, job);
+                var response = RequireDictionary(getMethod.Invoke(null, new object[]
+                {
+                    new Dictionary<string, object>
+                    {
+                        { "_agentId", "refresh-agent" },
+                        { "jobId", "refresh-job-idle" },
+                    }
+                }));
+
+                Assert.That(response["status"], Is.EqualTo("succeeded"));
+                var result = RequireDictionary(response["result"]);
+                Assert.That(result["settledAfterRefresh"], Is.EqualTo(true));
+                Assert.That(result["isUpdating"], Is.EqualTo(false));
+                Assert.That(result["isCompiling"], Is.EqualTo(false));
+            }
+            finally
+            {
+                jobField.SetValue(null, original);
+                if (original != null)
+                {
+                    var isTerminal = jobField.FieldType.GetProperty("IsTerminal",
+                        BindingFlags.Instance | BindingFlags.Public);
+                    if (isTerminal != null && Equals(isTerminal.GetValue(original), false))
+                        ensureUpdateRegistered.Invoke(null, null);
+                }
+                if (originalJobFile == null)
+                {
+                    if (File.Exists(jobPath)) File.Delete(jobPath);
+                }
+                else
+                {
+                    Directory.CreateDirectory(Path.GetDirectoryName(jobPath));
+                    File.WriteAllBytes(jobPath, originalJobFile);
+                }
             }
         }
 

@@ -2654,7 +2654,9 @@ namespace UnityMCP.Editor
             {
                 string operationType = GetOperationType(operation);
                 if (operationType != "setproperty" && operationType != "setreference" &&
-                    operationType != "configurecomponent")
+                    operationType != "configurecomponent" && operationType != "arrayinsert" &&
+                    operationType != "arrayremove" && operationType != "arrayset" &&
+                    operationType != "arrayclear")
                     continue;
 
                 var properties = GetDictionary(operation, "properties");

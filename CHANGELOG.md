@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.5] - 2026-07-16
+
+- Preserved explicit prefab transaction array edits during YAML stabilization, preventing successful saves from silently restoring the pre-edit serialized list.
+- Made `asset/get-refresh-job` actively reconcile an idle `waiting-for-editor` job and re-register its update callback, so polling reaches the terminal result without requiring an MCP reconnect.
+
 ## [3.3.4] - 2026-07-16
 
 - Exposed `profiler/memory-snapshot` as a first-class deferred tool and wait for the Memory Profiler completion callback or an explicit timeout instead of returning fire-and-forget success.
