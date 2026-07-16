@@ -1050,12 +1050,19 @@ namespace UnityMCP.Editor.Tests
         [Test]
         public void AssetRefresh_TargetedCompilationAssetsDoNotUseForceUpdate()
         {
-            ImportAssetOptions scriptOptions = MCPAssetCommands.GetTargetedImportOptions(
-                "Assets/Scripts/Changed.cs", forceUpdate: true);
-            ImportAssetOptions assemblyOptions = MCPAssetCommands.GetTargetedImportOptions(
-                "Assets/Scripts/Game.asmdef", forceUpdate: true);
-            ImportAssetOptions styleOptions = MCPAssetCommands.GetTargetedImportOptions(
-                "Assets/UI/Changed.uss", forceUpdate: true);
+            MethodInfo getImportOptions = typeof(MCPAssetCommands).GetMethod(
+                "GetTargetedImportOptions", BindingFlags.Static | BindingFlags.NonPublic);
+            MethodInfo getSkippedPaths = typeof(MCPAssetCommands).GetMethod(
+                "GetTargetedForceUpdateSkippedPaths", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(getImportOptions, Is.Not.Null);
+            Assert.That(getSkippedPaths, Is.Not.Null);
+
+            ImportAssetOptions scriptOptions = (ImportAssetOptions)getImportOptions.Invoke(null,
+                new object[] { "Assets/Scripts/Changed.cs", true });
+            ImportAssetOptions assemblyOptions = (ImportAssetOptions)getImportOptions.Invoke(null,
+                new object[] { "Assets/Scripts/Game.asmdef", true });
+            ImportAssetOptions styleOptions = (ImportAssetOptions)getImportOptions.Invoke(null,
+                new object[] { "Assets/UI/Changed.uss", true });
 
             Assert.That(scriptOptions.HasFlag(ImportAssetOptions.ForceSynchronousImport), Is.True);
             Assert.That(scriptOptions.HasFlag(ImportAssetOptions.ForceUpdate), Is.False);
@@ -1064,12 +1071,16 @@ namespace UnityMCP.Editor.Tests
 
             CollectionAssert.AreEqual(
                 new[] { "Assets/Scripts/Changed.cs", "Assets/Scripts/Game.asmdef" },
-                MCPAssetCommands.GetTargetedForceUpdateSkippedPaths(new[]
+                (List<string>)getSkippedPaths.Invoke(null, new object[]
                 {
-                    "Assets/Scripts/Changed.cs",
-                    "Assets/UI/Changed.uss",
-                    "Assets/Scripts/Game.asmdef",
-                }, forceUpdate: true));
+                    new[]
+                    {
+                        "Assets/Scripts/Changed.cs",
+                        "Assets/UI/Changed.uss",
+                        "Assets/Scripts/Game.asmdef",
+                    },
+                    true,
+                }));
         }
 
         [Test]
