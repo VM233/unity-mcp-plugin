@@ -31,11 +31,6 @@ namespace UnityMCP.Editor.Tests
         public ScalarEnvelopeTestConfig config = new ScalarEnvelopeTestConfig();
     }
 
-    public sealed class PrefabTransactionListTestComponent : MonoBehaviour
-    {
-        public List<string> values = new List<string>();
-    }
-
     public sealed class MCPCommandRegressionTests
     {
         private const string TEST_FOLDER = "Assets/__UnityMCPTests";
@@ -337,15 +332,19 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
-        public void TransactionEdit_ArrayInsert_PersistsPureYamlAddition()
+        public void TransactionEdit_ArrayInsert_PersistsPureYamlListAddition()
         {
             CreateTestPrefab();
             var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
             try
             {
-                var component = root.transform.Find("Source").gameObject
-                    .AddComponent<PrefabTransactionListTestComponent>();
-                component.values.Add("first");
+                var component = root.transform.Find("Source").gameObject.AddComponent<Animation>();
+                var serialized = new SerializedObject(component);
+                var animations = serialized.FindProperty("m_Animations");
+                Assert.That(animations, Is.Not.Null);
+                animations.arraySize = 1;
+                animations.GetArrayElementAtIndex(0).objectReferenceValue = null;
+                serialized.ApplyModifiedPropertiesWithoutUndo();
                 Assert.That(PrefabUtility.SaveAsPrefabAsset(root, PREFAB_PATH), Is.Not.Null);
             }
             finally
@@ -363,10 +362,10 @@ namespace UnityMCP.Editor.Tests
                             {
                                 { "type", "arrayInsert" },
                                 { "prefabPath", "Source" },
-                                { "componentType", typeof(PrefabTransactionListTestComponent).FullName },
-                                { "propertyName", "values" },
+                                { "componentType", typeof(Animation).FullName },
+                                { "propertyName", "m_Animations" },
                                 { "index", 1 },
-                                { "value", "second" },
+                                { "value", null },
                             },
                         }
                     },
@@ -376,10 +375,11 @@ namespace UnityMCP.Editor.Tests
             root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
             try
             {
-                var values = root.transform.Find("Source")
-                    .GetComponent<PrefabTransactionListTestComponent>().values;
-                CollectionAssert.AreEqual(new[] { "first", "second" }, values,
+                var component = root.transform.Find("Source").GetComponent<Animation>();
+                var animations = new SerializedObject(component).FindProperty("m_Animations");
+                Assert.That(animations.arraySize, Is.EqualTo(2),
                     "The transaction must not report success if YAML stabilization discards the array insertion.");
+                Assert.That(animations.GetArrayElementAtIndex(1).objectReferenceValue, Is.Null);
             }
             finally
             {
