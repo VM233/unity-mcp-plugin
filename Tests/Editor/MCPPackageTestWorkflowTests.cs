@@ -65,7 +65,7 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
-        public void CompiledTestAssembly_IsReadyWithoutLoadingIntoDefaultAppDomain()
+        public void CompiledTestAssemblyArtifact_IsReadyWithoutLoadingIntoDefaultAppDomain()
         {
             MethodInfo method = typeof(MCPPackageTestCommands).GetMethod(
                 "AreRequestedAssembliesAvailable", BindingFlags.Static | BindingFlags.NonPublic);
@@ -79,7 +79,25 @@ namespace UnityMCP.Editor.Tests
             });
 
             Assert.That(available, Is.True,
-                "Unity Test Runner assemblies may be compiled but intentionally skipped by the default AppDomain.");
+                "Unity Test Runner assemblies may have a compiled artifact without loading into the default AppDomain.");
+        }
+
+        [Test]
+        public void MissingCompiledAssemblyArtifact_IsNotReady()
+        {
+            MethodInfo method = typeof(MCPPackageTestCommands).GetMethod(
+                "IsCompiledAssemblyOutputAvailable", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+
+            string missingPath = System.IO.Path.Combine(System.IO.Path.GetTempPath(),
+                $"unity-mcp-missing-{Guid.NewGuid():N}.dll");
+            bool missingAvailable = (bool)method.Invoke(null, new object[] { missingPath });
+            bool loadedTestAssemblyAvailable = (bool)method.Invoke(null,
+                new object[] { typeof(MCPPackageTestWorkflowTests).Assembly.Location });
+
+            Assert.That(missingAvailable, Is.False,
+                "A compilation-graph entry without an emitted DLL must not start Test Runner early.");
+            Assert.That(loadedTestAssemblyAvailable, Is.True);
         }
 
         [Test]

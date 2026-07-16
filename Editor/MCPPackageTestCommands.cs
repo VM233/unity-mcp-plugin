@@ -166,7 +166,6 @@ namespace UnityMCP.Editor
                     new UTF8Encoding(_workflow.OriginalManifestHadUtf8Bom));
                 _workflow.State = "waiting-for-assembly";
                 TouchAndSaveWorkflow();
-                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
                 Client.Resolve();
             }
             catch (Exception ex)
@@ -308,7 +307,6 @@ namespace UnityMCP.Editor
                 byte[] originalBytes = Convert.FromBase64String(_workflow.OriginalManifestBase64);
                 File.WriteAllBytes(_workflow.ManifestPath, originalBytes);
                 TouchAndSaveWorkflow();
-                AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
                 Client.Resolve();
             }
             catch (Exception ex)
@@ -444,9 +442,15 @@ namespace UnityMCP.Editor
             try
             {
                 foreach (var assembly in CompilationPipeline.GetAssemblies(AssembliesType.Editor))
-                    names.Add(assembly.name);
+                {
+                    if (IsCompiledAssemblyOutputAvailable(assembly.outputPath))
+                        names.Add(assembly.name);
+                }
                 foreach (var assembly in CompilationPipeline.GetAssemblies(AssembliesType.Player))
-                    names.Add(assembly.name);
+                {
+                    if (IsCompiledAssemblyOutputAvailable(assembly.outputPath))
+                        names.Add(assembly.name);
+                }
             }
             catch
             {
@@ -455,6 +459,11 @@ namespace UnityMCP.Editor
             }
 
             return names;
+        }
+
+        private static bool IsCompiledAssemblyOutputAvailable(string outputPath)
+        {
+            return !string.IsNullOrWhiteSpace(outputPath) && File.Exists(outputPath);
         }
 
         private static bool AreRequestedAssembliesAvailable(IEnumerable<string> requestedAssemblyNames,

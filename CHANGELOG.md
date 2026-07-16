@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.7] - 2026-07-16
+
+- Wait for a package test assembly's emitted DLL before starting Test Runner, so an asmdef that only exists in Unity's compilation graph cannot produce a false `No tests matched` result or strand manifest restoration.
+- Stop forcing a full `AssetDatabase.Refresh` when enabling or restoring package testables; Package Manager resolution now owns the required package import and compilation.
+
 ## [3.3.6] - 2026-07-16
 
 - Defaulted refresh jobs to non-forced imports and suppress `ImportAssetOptions.ForceUpdate` for targeted compilation assets, preventing a single script refresh from forcing broad dependency reimports while still compiling timestamp-changed sources.
