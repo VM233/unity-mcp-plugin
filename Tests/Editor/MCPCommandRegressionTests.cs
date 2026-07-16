@@ -372,7 +372,7 @@ namespace UnityMCP.Editor.Tests
                     },
                 }));
 
-            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(result["success"], Is.EqualTo(true), MiniJson.Serialize(result));
             root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
             try
             {
