@@ -2380,7 +2380,7 @@ namespace UnityMCP.Editor.Tests
         {
             const string assetPath = TEST_FOLDER + "/Unity Package Payload.txt";
             string packagePath = Path.Combine(Path.GetTempPath(),
-                $"unity-mcp-import-{Guid.NewGuid():N}.unitypackage");
+                $"unity-mcp-import-3.3.10-{Guid.NewGuid():N}.unitypackage");
             try
             {
                 File.WriteAllText(GetAbsolutePath(assetPath), "unitypackage payload");

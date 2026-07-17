@@ -201,8 +201,14 @@ namespace UnityMCP.Editor
             if (string.IsNullOrEmpty(callbackPackageName))
                 return true;
 
-            string expectedWithoutExtension = Path.ChangeExtension(_job.PackagePath, null);
-            string callbackWithoutExtension = Path.ChangeExtension(callbackPackageName, null);
+            string expectedWithoutExtension = Path.Combine(
+                Path.GetDirectoryName(_job.PackagePath) ?? "", _job.PackageName);
+            string callbackWithoutExtension = callbackPackageName.Trim();
+            if (callbackWithoutExtension.EndsWith(".unitypackage", StringComparison.OrdinalIgnoreCase))
+            {
+                callbackWithoutExtension = callbackWithoutExtension.Substring(0,
+                    callbackWithoutExtension.Length - ".unitypackage".Length);
+            }
             try
             {
                 if (Path.IsPathRooted(callbackWithoutExtension))
