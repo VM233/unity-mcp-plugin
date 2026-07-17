@@ -846,7 +846,7 @@ namespace UnityMCP.Editor
                 case "asset/export-unitypackage":
                     return "Export one or more Unity assets to a .unitypackage file using AssetDatabase.ExportPackage.";
                 case "asset/import-unitypackage":
-                    return "Import a .unitypackage non-interactively, confirm the AssetDatabase completion callback, and report newly added asset paths.";
+                    return "Start a reload-safe, non-interactive .unitypackage import. Poll jobs/get with the returned jobId and jobType until the AssetDatabase completion callback is confirmed.";
                 case "asset/create-folder":
                     return "Create or ensure an Assets folder hierarchy through AssetDatabase, with dry-run support.";
                 case "asset/copy":

@@ -2,9 +2,13 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.10] - 2026-07-17
+
+- Added first-class `unity_asset_import_unitypackage` / `asset/import-unitypackage` support for reload-safe non-interactive `.unitypackage` import jobs with callback-confirmed completion, stable failure results, new-asset reporting, and packaged GUID preservation.
+
 ## [3.3.9] - 2026-07-17
 
-- Added first-class `unity_asset_import_unitypackage` / `asset/import-unitypackage` support for deterministic non-interactive `.unitypackage` imports with completion confirmation, stable failure results, new-asset reporting, and packaged GUID preservation.
+- Added the initial first-class `.unitypackage` import route and schema. Superseded by the reload-safe callback job in 3.3.10.
 
 ## [3.3.8] - 2026-07-17
 

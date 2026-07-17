@@ -2375,8 +2375,8 @@ namespace UnityMCP.Editor.Tests
             }
         }
 
-        [Test]
-        public void AssetImportUnityPackage_PreservesGuidAndConfirmsCompletion()
+        [UnityTest]
+        public IEnumerator AssetImportUnityPackage_PreservesGuidAndConfirmsCompletion()
         {
             const string assetPath = TEST_FOLDER + "/Unity Package Payload.txt";
             string packagePath = Path.Combine(Path.GetTempPath(),
@@ -2393,8 +2393,25 @@ namespace UnityMCP.Editor.Tests
                 Assert.That(AssetDatabase.DeleteAsset(assetPath), Is.True);
                 Assert.That(AssetDatabase.LoadMainAssetAtPath(assetPath), Is.Null);
 
-                var result = RequireDictionary(MCPAssetCommands.ImportUnityPackage(
+                var started = RequireDictionary(MCPAssetCommands.ImportUnityPackage(
                     new Dictionary<string, object> { { "packagePath", packagePath } }));
+
+                Assert.That(started["success"], Is.EqualTo(true), MiniJson.Serialize(started));
+                Assert.That(started["jobType"], Is.EqualTo("unitypackage-import"));
+                Assert.That(started["pollRoute"], Is.EqualTo("jobs/get"));
+
+                var result = started;
+                string jobId = started["jobId"].ToString();
+                double timeoutAt = EditorApplication.timeSinceStartup + 10d;
+                while (result["status"].ToString() != "succeeded" &&
+                       result["status"].ToString() != "failed" &&
+                       result["status"].ToString() != "cancelled" &&
+                       EditorApplication.timeSinceStartup < timeoutAt)
+                {
+                    yield return null;
+                    result = RequireDictionary(MCPUnityPackageImportWorkflow.Get(
+                        new Dictionary<string, object> { { "jobId", jobId } }));
+                }
 
                 Assert.That(result["success"], Is.EqualTo(true));
                 Assert.That(result["status"], Is.EqualTo("succeeded"));
@@ -2402,6 +2419,8 @@ namespace UnityMCP.Editor.Tests
                 Assert.That(result["started"], Is.EqualTo(true));
                 Assert.That(result["completed"], Is.EqualTo(true));
                 Assert.That(result["cancelled"], Is.EqualTo(false));
+                Assert.That(result["completionConfirmedBy"],
+                    Is.EqualTo("AssetDatabase.importPackageCompleted"));
                 Assert.That(AssetDatabase.LoadAssetAtPath<TextAsset>(assetPath), Is.Not.Null);
                 Assert.That(AssetDatabase.AssetPathToGUID(assetPath), Is.EqualTo(originalGuid));
                 Assert.That((List<string>)result["newAssetPaths"], Does.Contain(assetPath));
@@ -3249,7 +3268,7 @@ namespace UnityMCP.Editor.Tests
         public void ToolMetadata_ExposesUnityPackageImportAsFirstClass()
         {
             var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
-                firstClassOnly: true, compact: true, includeSchema: true, limit: 300));
+                firstClassOnly: true, compact: false, includeSchema: true, limit: 300));
             var tools = (List<Dictionary<string, object>>)result["tools"];
             var tool = tools.Single(item => item["route"].ToString() == "asset/import-unitypackage");
 
