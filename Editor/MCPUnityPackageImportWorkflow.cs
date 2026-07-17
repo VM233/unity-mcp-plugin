@@ -10,7 +10,7 @@ using UnityEngine;
 namespace UnityMCP.Editor
 {
     [InitializeOnLoad]
-    internal static class MCPUnityPackageImportWorkflow
+    public static class MCPUnityPackageImportWorkflow
     {
         private const string JobType = "unitypackage-import";
         private static readonly TimeSpan ImportTimeout = TimeSpan.FromMinutes(10);
@@ -99,7 +99,7 @@ namespace UnityMCP.Editor
             return BuildResponse(_job);
         }
 
-        internal static object Get(Dictionary<string, object> args)
+        public static object Get(Dictionary<string, object> args)
         {
             if (_job == null)
                 _job = LoadJob();
