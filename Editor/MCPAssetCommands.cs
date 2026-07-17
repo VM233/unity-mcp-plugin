@@ -1003,22 +1003,22 @@ namespace UnityMCP.Editor
             string failure = "";
             double startedAt = EditorApplication.timeSinceStartup;
 
-            Action<string> onStarted = name =>
+            AssetDatabase.ImportPackageCallback onStarted = name =>
             {
                 started = true;
                 callbackPackageName = name ?? "";
             };
-            Action<string> onCompleted = name =>
+            AssetDatabase.ImportPackageCallback onCompleted = name =>
             {
                 completed = true;
                 callbackPackageName = name ?? callbackPackageName;
             };
-            Action<string> onCancelled = name =>
+            AssetDatabase.ImportPackageCallback onCancelled = name =>
             {
                 cancelled = true;
                 callbackPackageName = name ?? callbackPackageName;
             };
-            Action<string, string> onFailed = (name, error) =>
+            AssetDatabase.ImportPackageFailedCallback onFailed = (name, error) =>
             {
                 callbackPackageName = name ?? callbackPackageName;
                 failure = error ?? "Unity package import failed";
