@@ -66,6 +66,7 @@ http://127.0.0.1:7890/api/ping
 | Safe assets | `unity_asset_refresh` | `asset/refresh` | Start a reload-safe AssetDatabase refresh and return a refresh job ID. |
 | Safe assets | `unity_asset_get_refresh_job` | `asset/get-refresh-job` | Poll a reload-safe AssetDatabase refresh through compilation or domain reload. |
 | Safe assets | `unity_asset_import` | `asset/import` | Preflight and import external assets with shared TextureImporter defaults, decoded-pixel/file-byte deduplication, frame-batched execution, per-item results, and rollback. |
+| Safe assets | `unity_asset_import_unitypackage` | `asset/import-unitypackage` | Import a `.unitypackage` non-interactively, confirm completion, preserve packaged `.meta` GUIDs, and report newly added asset paths. |
 | Safe assets | `unity_asset_rename` | `asset/rename` | Rename an asset through `AssetDatabase.RenameAsset`, preserving `.meta`, GUID, and references. |
 | Safe assets | `unity_asset_move` | `asset/move` | Preflight and move one or more assets, preserving `.meta` GUIDs and rolling back completed moves when configured to stop on failure. |
 | Scene references | `unity_component_set_reference` | `component/set-reference` | Assign one or more ObjectReference properties with `execution.mode` and shared target defaults. |

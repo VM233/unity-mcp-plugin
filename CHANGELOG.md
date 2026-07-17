@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.9] - 2026-07-17
+
+- Added first-class `unity_asset_import_unitypackage` / `asset/import-unitypackage` support for deterministic non-interactive `.unitypackage` imports with completion confirmation, stable failure results, new-asset reporting, and packaged GUID preservation.
+
 ## [3.3.8] - 2026-07-17
 
 - Kept project binding metadata out of project-tool business arguments, preventing `project-tools/execute` and direct project-tool routes from failing strict schemas with unknown `expectedProjectPath` or `expectedProjectName` arguments.

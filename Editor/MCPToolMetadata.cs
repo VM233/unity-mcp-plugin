@@ -203,7 +203,8 @@ namespace UnityMCP.Editor
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesAssets: true, longRunning: true,
                     mayReloadDomain: true),
-                "asset/refresh");
+                "asset/refresh",
+                "asset/import-unitypackage");
 
             AddProfile(profiles, ToolProfile.FirstClass(mutatesRuntime: true),
                 "localization/set-selected-locale",
@@ -844,6 +845,8 @@ namespace UnityMCP.Editor
                     return "Preflight and move one or more Unity assets with configurable execution, GUID preservation, and rollback.";
                 case "asset/export-unitypackage":
                     return "Export one or more Unity assets to a .unitypackage file using AssetDatabase.ExportPackage.";
+                case "asset/import-unitypackage":
+                    return "Import a .unitypackage non-interactively, confirm the AssetDatabase completion callback, and report newly added asset paths.";
                 case "asset/create-folder":
                     return "Create or ensure an Assets folder hierarchy through AssetDatabase, with dry-run support.";
                 case "asset/copy":
@@ -1272,6 +1275,10 @@ namespace UnityMCP.Editor
                         Prop("overwrite", "boolean", "Replace an existing output file. Defaults to false."),
                         Prop("interactive", "boolean", "Show Unity's export package UI. Defaults to false.")
                     ), "outputPath");
+                case "asset/import-unitypackage":
+                    return Schema(Props(
+                        Prop("packagePath", "string", "Absolute path or project-root-relative path to a .unitypackage file. Import is always non-interactive.")
+                    ), "packagePath");
                 case "editor/play-mode":
                     return Schema(Props(
                         Prop("action", "string", "Target action: play, pause, resume, or stop. Defaults to play. Pause is idempotent and never toggles."),

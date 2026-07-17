@@ -2376,6 +2376,60 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void AssetImportUnityPackage_PreservesGuidAndConfirmsCompletion()
+        {
+            const string assetPath = TEST_FOLDER + "/Unity Package Payload.txt";
+            string packagePath = Path.Combine(Path.GetTempPath(),
+                $"unity-mcp-import-{Guid.NewGuid():N}.unitypackage");
+            try
+            {
+                File.WriteAllText(GetAbsolutePath(assetPath), "unitypackage payload");
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceSynchronousImport);
+                string originalGuid = AssetDatabase.AssetPathToGUID(assetPath);
+                Assert.That(originalGuid, Is.Not.Empty);
+
+                AssetDatabase.ExportPackage(assetPath, packagePath, ExportPackageOptions.Default);
+                Assert.That(File.Exists(packagePath), Is.True);
+                Assert.That(AssetDatabase.DeleteAsset(assetPath), Is.True);
+                Assert.That(AssetDatabase.LoadMainAssetAtPath(assetPath), Is.Null);
+
+                var result = RequireDictionary(MCPAssetCommands.ImportUnityPackage(
+                    new Dictionary<string, object> { { "packagePath", packagePath } }));
+
+                Assert.That(result["success"], Is.EqualTo(true));
+                Assert.That(result["status"], Is.EqualTo("succeeded"));
+                Assert.That(result["interactive"], Is.EqualTo(false));
+                Assert.That(result["started"], Is.EqualTo(true));
+                Assert.That(result["completed"], Is.EqualTo(true));
+                Assert.That(result["cancelled"], Is.EqualTo(false));
+                Assert.That(AssetDatabase.LoadAssetAtPath<TextAsset>(assetPath), Is.Not.Null);
+                Assert.That(AssetDatabase.AssetPathToGUID(assetPath), Is.EqualTo(originalGuid));
+                Assert.That((List<string>)result["newAssetPaths"], Does.Contain(assetPath));
+            }
+            finally
+            {
+                if (File.Exists(packagePath))
+                    File.Delete(packagePath);
+            }
+        }
+
+        [Test]
+        public void AssetImportUnityPackage_MissingFileReturnsStableFailure()
+        {
+            string packagePath = Path.Combine(Path.GetTempPath(),
+                $"missing-unity-mcp-{Guid.NewGuid():N}.unitypackage");
+
+            var result = RequireDictionary(MCPAssetCommands.ImportUnityPackage(
+                new Dictionary<string, object> { { "packagePath", packagePath } }));
+
+            Assert.That(result["success"], Is.EqualTo(false));
+            Assert.That(result["status"], Is.EqualTo("failed"));
+            Assert.That(result["errorCode"], Is.EqualTo("package_not_found"));
+            Assert.That(result["packagePath"], Is.EqualTo(Path.GetFullPath(packagePath)));
+            Assert.That(result["interactive"], Is.EqualTo(false));
+        }
+
+        [Test]
         public void AssetImport_ConfiguresTextureImporterInOneOperation()
         {
             string externalPath = CreateExternalPng(Color.white);
@@ -3189,6 +3243,28 @@ namespace UnityMCP.Editor.Tests
             Assert.That(defaultProperties.Keys, Does.Contain("dedupeScope"));
             Assert.That(defaultProperties.Keys, Does.Contain("dedupeSearchPath"));
             Assert.That(defaultProperties.Keys, Does.Contain("onDuplicate"));
+        }
+
+        [Test]
+        public void ToolMetadata_ExposesUnityPackageImportAsFirstClass()
+        {
+            var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: true, includeSchema: true, limit: 300));
+            var tools = (List<Dictionary<string, object>>)result["tools"];
+            var tool = tools.Single(item => item["route"].ToString() == "asset/import-unitypackage");
+
+            Assert.That(tool["toolName"], Is.EqualTo("unity_asset_import_unitypackage"));
+            Assert.That(tool["firstClass"], Is.EqualTo(true));
+            Assert.That(tool["mutatesAssets"], Is.EqualTo(true));
+            Assert.That(tool["longRunning"], Is.EqualTo(true));
+            Assert.That(tool["mayReloadDomain"], Is.EqualTo(true));
+
+            var schema = RequireDictionary(tool["inputSchema"]);
+            CollectionAssert.AreEquivalent(new[] { "packagePath" }, (List<string>)schema["required"]);
+            var properties = RequireDictionary(schema["properties"]);
+            Assert.That(properties.Keys, Does.Contain("packagePath"));
+            Assert.That(properties.Keys, Does.Contain("expectedProjectPath"));
+            Assert.That(properties.Keys, Does.Not.Contain("interactive"));
         }
 
         [Test]

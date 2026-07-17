@@ -84,6 +84,7 @@ namespace UnityMCP.Editor
             "asset/export-unitypackage",
             "asset/get-refresh-job",
             "asset/import",
+            "asset/import-unitypackage",
             "asset/instantiate-prefab",
             "asset/list",
             "asset/move",

@@ -965,6 +965,158 @@ namespace UnityMCP.Editor
             orderedPaths.Add(path);
         }
 
+        public static object ImportUnityPackage(Dictionary<string, object> args)
+        {
+            string requestedPath = GetString(args, "packagePath");
+            if (string.IsNullOrWhiteSpace(requestedPath))
+                return BuildUnityPackageImportFailure("package_path_required", "packagePath is required", "", "");
+
+            string fullPackagePath;
+            try
+            {
+                fullPackagePath = NormalizeUnityPackageInputPath(requestedPath);
+            }
+            catch (Exception exception)
+            {
+                return BuildUnityPackageImportFailure("invalid_package_path", exception.Message, requestedPath, "");
+            }
+
+            string packageName = Path.GetFileNameWithoutExtension(fullPackagePath);
+            if (!string.Equals(Path.GetExtension(fullPackagePath), ".unitypackage",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return BuildUnityPackageImportFailure("invalid_package_extension",
+                    "packagePath must point to a .unitypackage file", fullPackagePath, packageName);
+            }
+            if (!File.Exists(fullPackagePath))
+            {
+                return BuildUnityPackageImportFailure("package_not_found",
+                    $"Unity package not found at '{fullPackagePath}'", fullPackagePath, packageName);
+            }
+
+            var pathsBefore = new HashSet<string>(AssetDatabase.GetAllAssetPaths(),
+                StringComparer.OrdinalIgnoreCase);
+            bool started = false;
+            bool completed = false;
+            bool cancelled = false;
+            string callbackPackageName = "";
+            string failure = "";
+            double startedAt = EditorApplication.timeSinceStartup;
+
+            Action<string> onStarted = name =>
+            {
+                started = true;
+                callbackPackageName = name ?? "";
+            };
+            Action<string> onCompleted = name =>
+            {
+                completed = true;
+                callbackPackageName = name ?? callbackPackageName;
+            };
+            Action<string> onCancelled = name =>
+            {
+                cancelled = true;
+                callbackPackageName = name ?? callbackPackageName;
+            };
+            Action<string, string> onFailed = (name, error) =>
+            {
+                callbackPackageName = name ?? callbackPackageName;
+                failure = error ?? "Unity package import failed";
+            };
+
+            AssetDatabase.importPackageStarted += onStarted;
+            AssetDatabase.importPackageCompleted += onCompleted;
+            AssetDatabase.importPackageCancelled += onCancelled;
+            AssetDatabase.importPackageFailed += onFailed;
+            try
+            {
+                AssetDatabase.ImportPackage(fullPackagePath, false);
+            }
+            catch (Exception exception)
+            {
+                failure = exception.Message;
+            }
+            finally
+            {
+                AssetDatabase.importPackageStarted -= onStarted;
+                AssetDatabase.importPackageCompleted -= onCompleted;
+                AssetDatabase.importPackageCancelled -= onCancelled;
+                AssetDatabase.importPackageFailed -= onFailed;
+            }
+
+            int durationMs = Math.Max(0,
+                (int)((EditorApplication.timeSinceStartup - startedAt) * 1000d));
+            if (!string.IsNullOrEmpty(failure))
+            {
+                var failed = BuildUnityPackageImportFailure("import_failed", failure,
+                    fullPackagePath, packageName);
+                failed["started"] = started;
+                failed["completed"] = completed;
+                failed["cancelled"] = cancelled;
+                failed["callbackPackageName"] = callbackPackageName;
+                failed["durationMs"] = durationMs;
+                return failed;
+            }
+            if (cancelled)
+            {
+                var cancelledResult = BuildUnityPackageImportFailure("import_cancelled",
+                    "Unity package import was cancelled", fullPackagePath, packageName);
+                cancelledResult["started"] = started;
+                cancelledResult["completed"] = completed;
+                cancelledResult["cancelled"] = true;
+                cancelledResult["callbackPackageName"] = callbackPackageName;
+                cancelledResult["durationMs"] = durationMs;
+                return cancelledResult;
+            }
+            if (!completed)
+            {
+                var unconfirmed = BuildUnityPackageImportFailure("completion_not_confirmed",
+                    "AssetDatabase.ImportPackage returned without a completion callback",
+                    fullPackagePath, packageName);
+                unconfirmed["started"] = started;
+                unconfirmed["completed"] = false;
+                unconfirmed["cancelled"] = false;
+                unconfirmed["callbackPackageName"] = callbackPackageName;
+                unconfirmed["durationMs"] = durationMs;
+                return unconfirmed;
+            }
+
+            var newAssetPaths = AssetDatabase.GetAllAssetPaths()
+                .Where(path => !pathsBefore.Contains(path))
+                .OrderBy(path => path, StringComparer.Ordinal)
+                .ToList();
+            return new Dictionary<string, object>
+            {
+                { "success", true },
+                { "status", "succeeded" },
+                { "packagePath", fullPackagePath },
+                { "packageName", packageName },
+                { "callbackPackageName", callbackPackageName },
+                { "interactive", false },
+                { "started", started },
+                { "completed", true },
+                { "cancelled", false },
+                { "newAssetCount", newAssetPaths.Count },
+                { "newAssetPaths", newAssetPaths },
+                { "durationMs", durationMs },
+            };
+        }
+
+        private static Dictionary<string, object> BuildUnityPackageImportFailure(string errorCode,
+            string error, string packagePath, string packageName)
+        {
+            return new Dictionary<string, object>
+            {
+                { "success", false },
+                { "status", "failed" },
+                { "errorCode", errorCode },
+                { "error", error ?? "" },
+                { "packagePath", packagePath ?? "" },
+                { "packageName", packageName ?? "" },
+                { "interactive", false },
+            };
+        }
+
         public static object ExportUnityPackage(Dictionary<string, object> args)
         {
             var assetPaths = GetStringList(args, "assetPaths");
@@ -1807,6 +1959,14 @@ namespace UnityMCP.Editor
             if (!Path.IsPathRooted(normalized))
                 normalized = Path.Combine(GetProjectRoot(), normalized);
 
+            return Path.GetFullPath(normalized);
+        }
+
+        private static string NormalizeUnityPackageInputPath(string packagePath)
+        {
+            string normalized = packagePath.Replace('\\', '/').Trim();
+            if (!Path.IsPathRooted(normalized))
+                normalized = Path.Combine(GetProjectRoot(), normalized);
             return Path.GetFullPath(normalized);
         }
 
