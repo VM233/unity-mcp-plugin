@@ -327,7 +327,7 @@ namespace UnityMCP.Editor
                 return;
             }
 
-            if (AreAssembliesAvailable(_workflow.Assemblies))
+            if (!AreAssembliesAvailable(_workflow.Assemblies))
                 return;
 
             CompleteWorkflow();

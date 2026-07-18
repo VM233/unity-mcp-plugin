@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.13] - 2026-07-18
+
+- Complete package-test manifest restoration after the requested test assemblies become available again instead of waiting forever in `restoring`.
+
 ## [3.3.12] - 2026-07-18
 
 - Finalize Memory Profiler callbacks from a pre-registered Editor update instead of registering `delayCall` inside the native completion callback.
