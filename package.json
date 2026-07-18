@@ -1,6 +1,6 @@
 {
   "name": "com.anklebreaker.unity-mcp",
-  "version": "3.3.13",
+  "version": "3.3.14",
   "displayName": "AnkleBreaker Unity MCP",
   "description": "MCP bridge for structured, queue-safe Unity Editor automation across assets, UI Toolkit, packages, builds, tests, and project-defined workflows.",
   "unity": "2021.3",

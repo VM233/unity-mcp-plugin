@@ -327,9 +327,10 @@ namespace UnityMCP.Editor
                 return;
             }
 
-            if (!AreAssembliesAvailable(_workflow.Assemblies))
-                return;
-
+            // ContinueWorkflow only reaches this point while the Editor is neither compiling
+            // nor updating. Assembly presence is not a reliable restore gate: Unity may unload
+            // test assemblies after removing testables, or retain compiled outputs until a later
+            // refresh. Exact manifest restoration plus an idle Editor is the terminal condition.
             CompleteWorkflow();
         }
 

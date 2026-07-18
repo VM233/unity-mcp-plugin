@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.14] - 2026-07-18
+
+- Finish package-test restoration once the original manifest bytes are restored and the Editor is idle, without relying on transient test-assembly presence.
+
 ## [3.3.13] - 2026-07-18
 
 - Complete package-test manifest restoration after the requested test assemblies become available again instead of waiting forever in `restoring`.
