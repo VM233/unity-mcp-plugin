@@ -23,6 +23,7 @@ namespace UnityMCP.Editor
 
         private sealed class MemorySnapshotJob
         {
+            public readonly object CallbackGate = new object();
             public string JobId;
             public string ApiType;
             public string CaptureFlags;
@@ -34,6 +35,9 @@ namespace UnityMCP.Editor
             public string CompletedUtc;
             public double StartedAt;
             public bool TimedOut;
+            public bool CallbackReceived;
+            public bool CallbackSuccess;
+            public string CallbackPath;
         }
 
         private static MemorySnapshotJob _snapshotJob;
@@ -394,7 +398,7 @@ namespace UnityMCP.Editor
                 double startedAt = EditorApplication.timeSinceStartup;
                 bool routeResolved = false;
 
-                _snapshotJob = new MemorySnapshotJob
+                var job = new MemorySnapshotJob
                 {
                     JobId = Guid.NewGuid().ToString("N"),
                     ApiType = memProfilerType.FullName,
@@ -404,22 +408,46 @@ namespace UnityMCP.Editor
                     StartedUtc = DateTime.UtcNow.ToString("O"),
                     StartedAt = startedAt,
                 };
+                _snapshotJob = job;
 
                 void ResolveOnce(object result)
                 {
                     if (routeResolved)
                         return;
                     routeResolved = true;
-                    EditorApplication.update -= CheckTimeout;
+                    EditorApplication.update -= CheckProgress;
                     resolve(result);
                 }
 
-                void CheckTimeout()
+                void CheckProgress()
                 {
+                    RefreshSnapshotJobFromFiles(job);
+                    if (job.Status != "Capturing")
+                    {
+                        var terminal = SnapshotJobData(job);
+                        terminal["success"] = job.Status == "Completed";
+                        terminal["completed"] = job.Status == "Completed";
+                        if (job.Status == "Failed")
+                            terminal["error"] = job.Error;
+                        ResolveOnce(terminal);
+                        return;
+                    }
+
                     if ((EditorApplication.timeSinceStartup - startedAt) * 1000d < timeoutMs)
                         return;
-                    _snapshotJob.TimedOut = true;
-                    var pending = SnapshotJobData(_snapshotJob);
+
+                    job.TimedOut = true;
+                    RefreshSnapshotJobFromFiles(job);
+                    if (job.Status == "Completed")
+                    {
+                        var completed = SnapshotJobData(job);
+                        completed["success"] = true;
+                        completed["completed"] = true;
+                        ResolveOnce(completed);
+                        return;
+                    }
+
+                    var pending = SnapshotJobData(job);
                     pending["success"] = true;
                     pending["completed"] = false;
                     pending["message"] = $"Memory snapshot is still capturing after {timeoutMs} ms. Poll profiler/memory-snapshot-status.";
@@ -428,37 +456,15 @@ namespace UnityMCP.Editor
 
                 Action<string, bool> callback = (completedPath, success) =>
                 {
-                    EditorApplication.delayCall += () =>
+                    // The native callback is not guaranteed to be safe for registering a new
+                    // Editor callback. Store only atomic state here; the pre-registered update
+                    // handler or the status route performs file finalization on the main thread.
+                    lock (job.CallbackGate)
                     {
-                        if (success)
-                        {
-                            string finalPath = FinalizeSnapshotFile(_snapshotJob, completedPath);
-                            if (string.IsNullOrEmpty(finalPath))
-                            {
-                                _snapshotJob.Status = "Failed";
-                                _snapshotJob.Error = "Memory Profiler reported success but no snapshot file was created.";
-                            }
-                            else
-                            {
-                                _snapshotJob.SnapshotPath = finalPath;
-                                _snapshotJob.Status = "Completed";
-                                _snapshotJob.CompletedUtc = DateTime.UtcNow.ToString("O");
-                            }
-                        }
-                        else
-                        {
-                            _snapshotJob.Status = "Failed";
-                            _snapshotJob.Error = "Memory Profiler reported that snapshot capture failed.";
-                            _snapshotJob.CompletedUtc = DateTime.UtcNow.ToString("O");
-                        }
-
-                        var result = SnapshotJobData(_snapshotJob);
-                        result["success"] = _snapshotJob.Status == "Completed";
-                        result["completed"] = _snapshotJob.Status == "Completed";
-                        if (_snapshotJob.Status == "Failed")
-                            result["error"] = _snapshotJob.Error;
-                        ResolveOnce(result);
-                    };
+                        job.CallbackPath = completedPath;
+                        job.CallbackSuccess = success;
+                        job.CallbackReceived = true;
+                    }
                 };
 
                 Delegate callbackDelegate = callback;
@@ -471,13 +477,16 @@ namespace UnityMCP.Editor
                 {
                     Type flagsType = takeSnapshot.Parameters[2].ParameterType;
                     object flags = BuildDefaultCaptureFlags(flagsType, out string captureFlags);
-                    _snapshotJob.CaptureFlags = captureFlags;
+                    job.CaptureFlags = captureFlags;
                     invokeArgs.Add(flags);
                 }
 
                 takeSnapshot.Method.Invoke(null, invokeArgs.ToArray());
                 if (!routeResolved)
-                    EditorApplication.update += CheckTimeout;
+                {
+                    EditorApplication.update += CheckProgress;
+                    CheckProgress();
+                }
             }
             catch (Exception ex)
             {
@@ -584,10 +593,110 @@ namespace UnityMCP.Editor
         {
             if (job == null || job.Status != "Capturing")
                 return;
+
+            bool callbackReceived;
+            bool callbackSuccess;
+            string callbackPath;
+            lock (job.CallbackGate)
+            {
+                callbackReceived = job.CallbackReceived;
+                callbackSuccess = job.CallbackSuccess;
+                callbackPath = job.CallbackPath;
+            }
+
+            if (callbackReceived)
+            {
+                if (!callbackSuccess)
+                {
+                    job.Status = "Failed";
+                    job.Error = "Memory Profiler reported that snapshot capture failed.";
+                    job.CompletedUtc = DateTime.UtcNow.ToString("O");
+                    return;
+                }
+
+                try
+                {
+                    string callbackFinalPath = FinalizeSnapshotFile(job, callbackPath);
+                    if (!string.IsNullOrEmpty(callbackFinalPath))
+                    {
+                        job.SnapshotPath = callbackFinalPath;
+                        job.Status = "Completed";
+                        job.CompletedUtc = DateTime.UtcNow.ToString("O");
+                        return;
+                    }
+                }
+                catch (IOException)
+                {
+                    // The callback can race the final writer close. Retry on the next update.
+                }
+                catch (UnauthorizedAccessException)
+                {
+                    // Treat a transient sharing violation like a still-active writer.
+                }
+            }
+
             if (File.Exists(job.SnapshotPath))
             {
                 job.Status = "Completed";
                 job.CompletedUtc = DateTime.UtcNow.ToString("O");
+                return;
+            }
+
+            // Some Unity versions finish and close a valid tmpsnap without invoking the
+            // completion delegate. Only recover after the route timeout, once the file has
+            // been stable and both snapshot format signatures are present.
+            if (!job.TimedOut || !File.Exists(job.TempPath))
+                return;
+
+            var tempInfo = new FileInfo(job.TempPath);
+            if ((DateTime.UtcNow - tempInfo.LastWriteTimeUtc).TotalSeconds < 2d ||
+                !HasCompleteSnapshotSignatures(job.TempPath))
+                return;
+
+            try
+            {
+                string recoveredPath = FinalizeSnapshotFile(job, job.TempPath);
+                if (!string.IsNullOrEmpty(recoveredPath))
+                {
+                    job.SnapshotPath = recoveredPath;
+                    job.Status = "Completed";
+                    job.CompletedUtc = DateTime.UtcNow.ToString("O");
+                }
+            }
+            catch (IOException)
+            {
+                // The native writer may still own the file between validation and rename.
+                // Leave the job capturing so the next status poll can retry safely.
+            }
+        }
+
+        private static bool HasCompleteSnapshotSignatures(string path)
+        {
+            const uint headerSignature = 0xAEABCDCDu;
+            const uint footerSignature = 0xABCDCDAEu;
+            try
+            {
+                using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.None))
+                {
+                    if (stream.Length < sizeof(uint) * 2)
+                        return false;
+                    var bytes = new byte[sizeof(uint)];
+                    if (stream.Read(bytes, 0, bytes.Length) != bytes.Length ||
+                        BitConverter.ToUInt32(bytes, 0) != headerSignature)
+                        return false;
+                    stream.Seek(-sizeof(uint), SeekOrigin.End);
+                    if (stream.Read(bytes, 0, bytes.Length) != bytes.Length)
+                        return false;
+                    return BitConverter.ToUInt32(bytes, 0) == footerSignature;
+                }
+            }
+            catch (IOException)
+            {
+                return false;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                return false;
             }
         }
 

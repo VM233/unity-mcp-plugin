@@ -1239,6 +1239,32 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void MemorySnapshot_RecognizesCompleteSnapshotSignatures()
+        {
+            string path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + ".tmpsnap");
+            try
+            {
+                File.WriteAllBytes(path, new byte[]
+                {
+                    0xCD, 0xCD, 0xAB, 0xAE,
+                    0xAE, 0xCD, 0xCD, 0xAB,
+                });
+                var validator = typeof(MCPMemoryProfilerCommands).GetMethod(
+                    "HasCompleteSnapshotSignatures", BindingFlags.NonPublic | BindingFlags.Static);
+                Assert.That(validator, Is.Not.Null);
+                Assert.That(validator.Invoke(null, new object[] { path }), Is.EqualTo(true));
+
+                File.WriteAllBytes(path, new byte[] { 0, 1, 2, 3, 4, 5, 6, 7 });
+                Assert.That(validator.Invoke(null, new object[] { path }), Is.EqualTo(false));
+            }
+            finally
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+        }
+
+        [Test]
         public void ExecuteCode_ResultBudgetTruncatesLargeCollections()
         {
             var response = RequireDictionary(MCPEditorCommands.ExecuteCode(new Dictionary<string, object>

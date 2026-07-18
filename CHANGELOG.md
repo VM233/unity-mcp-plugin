@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.12] - 2026-07-18
+
+- Finalize Memory Profiler callbacks from a pre-registered Editor update instead of registering `delayCall` inside the native completion callback.
+- Recover a timed-out capture when Unity has closed a stable `.tmpsnap` containing valid Memory Profiler header and footer signatures.
+- Bind delayed native callbacks to their originating capture job so a recovered capture cannot corrupt a later snapshot.
+
 ## [3.3.11] - 2026-07-18
 
 - Capture Memory Profiler snapshots through Unity's current public API, write through `.tmpsnap` before finalizing `.snap`, and default to managed objects, native objects, and native allocations.
