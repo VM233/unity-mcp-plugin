@@ -256,6 +256,7 @@ namespace UnityMCP.Editor
             "profiler/memory",
             "profiler/memory-breakdown",
             "profiler/memory-snapshot",
+            "profiler/memory-snapshot-status",
             "profiler/memory-status",
             "profiler/memory-top-assets",
             "profiler/stats",

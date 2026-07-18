@@ -1258,6 +1258,8 @@ namespace UnityMCP.Editor
                     return MCPMemoryProfilerCommands.GetMemoryBreakdown(ParseJson(body));
                 case "profiler/memory-top-assets":
                     return MCPMemoryProfilerCommands.GetTopMemoryConsumers(ParseJson(body));
+                case "profiler/memory-snapshot-status":
+                    return MCPMemoryProfilerCommands.GetMemorySnapshotStatus(ParseJson(body));
                 case "profiler/memory-snapshot":
                     return MCPResponse.Error(
                         "profiler/memory-snapshot must be executed through the deferred route.",

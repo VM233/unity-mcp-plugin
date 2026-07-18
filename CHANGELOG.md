@@ -2,6 +2,11 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.11] - 2026-07-18
+
+- Capture Memory Profiler snapshots through Unity's current public API, write through `.tmpsnap` before finalizing `.snap`, and default to managed objects, native objects, and native allocations.
+- Keep long-running snapshot jobs observable after the initiating request times out through the new first-class `unity_profiler_memory_snapshot_status` tool.
+
 ## [3.3.10] - 2026-07-17
 
 - Added first-class `unity_asset_import_unitypackage` / `asset/import-unitypackage` support for reload-safe non-interactive `.unitypackage` import jobs with callback-confirmed completion, stable failure results, new-asset reporting, and packaged GUID preservation.

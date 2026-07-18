@@ -21,6 +21,23 @@ namespace UnityMCP.Editor
         private static bool _packageChecked;
         private static bool _packageInstalled;
 
+        private sealed class MemorySnapshotJob
+        {
+            public string JobId;
+            public string ApiType;
+            public string CaptureFlags;
+            public string TempPath;
+            public string SnapshotPath;
+            public string Status;
+            public string Error;
+            public string StartedUtc;
+            public string CompletedUtc;
+            public double StartedAt;
+            public bool TimedOut;
+        }
+
+        private static MemorySnapshotJob _snapshotJob;
+
         // ─── Package Detection ───
 
         /// <summary>
@@ -63,7 +80,8 @@ namespace UnityMCP.Editor
                     "profiler/memory-status",
                     "profiler/memory-breakdown",
                     "profiler/memory-top-assets",
-                    hasPkg ? "profiler/memory-snapshot" : null
+                    hasPkg ? "profiler/memory-snapshot" : null,
+                    hasPkg ? "profiler/memory-snapshot-status" : null
                 }.Where(s => s != null).ToArray() },
                 { "quickSummary", new Dictionary<string, object>
                     {
@@ -317,16 +335,18 @@ namespace UnityMCP.Editor
 
             try
             {
-                // Unity exposes this API from UnityEngine.CoreModule. Keep the older Editor
-                // namespace fallbacks for Unity versions/packages that surfaced it there.
-                var memProfilerType = Type.GetType(
-                    "UnityEngine.Profiling.Memory.Experimental.MemoryProfiler, UnityEngine.CoreModule")
-                    ?? Type.GetType(
-                        "UnityEngine.Profiling.Memory.Experimental.MemoryProfiler, UnityEngine")
-                    ?? Type.GetType(
-                        "UnityEditor.Profiling.Memory.Experimental.MemoryProfiler, UnityEditor.CoreModule")
-                    ?? Type.GetType(
-                        "UnityEditor.Profiling.Memory.Experimental.MemoryProfiler, UnityEditor");
+                RefreshSnapshotJobFromFiles(_snapshotJob);
+                if (_snapshotJob != null && _snapshotJob.Status == "Capturing")
+                {
+                    resolve(MCPResponse.Error(
+                        "A memory snapshot capture is already in progress. Poll profiler/memory-snapshot-status.",
+                        "memory_snapshot_in_progress", true, SnapshotJobData(_snapshotJob)));
+                    return;
+                }
+
+                // Unity 2022.2+ exposes the public API in UnityEngine.CoreModule. Keep the
+                // deprecated Experimental namespaces only as fallbacks for older Editors.
+                var memProfilerType = ResolveMemoryProfilerType();
 
                 if (memProfilerType == null)
                 {
@@ -346,8 +366,9 @@ namespace UnityMCP.Editor
                     Directory.CreateDirectory(snapshotDir);
 
                 string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-                string snapshotPath = Path.Combine(snapshotDir,
-                    $"snapshot_{timestamp}_{Guid.NewGuid():N}".Substring(0, 39) + ".snap");
+                string snapshotStem = $"snapshot_{timestamp}_{Guid.NewGuid():N}".Substring(0, 39);
+                string tempPath = Path.Combine(snapshotDir, snapshotStem + ".tmpsnap");
+                string snapshotPath = Path.Combine(snapshotDir, snapshotStem + ".snap");
 
                 var takeSnapshot = memProfilerType.GetMethods(BindingFlags.Public | BindingFlags.Static)
                     .Where(method => method.Name == "TakeSnapshot")
@@ -355,8 +376,10 @@ namespace UnityMCP.Editor
                     .Where(candidate => candidate.Parameters.Length >= 2 &&
                                         candidate.Parameters.Length <= 3 &&
                                         candidate.Parameters[0].ParameterType == typeof(string) &&
-                                        typeof(Delegate).IsAssignableFrom(candidate.Parameters[1].ParameterType))
-                    .OrderBy(candidate => candidate.Parameters.Length)
+                                        IsSnapshotCompletionDelegate(candidate.Parameters[1].ParameterType))
+                    .OrderByDescending(candidate => candidate.Parameters.Length == 3 &&
+                                                    candidate.Parameters[2].ParameterType.IsEnum)
+                    .ThenBy(candidate => candidate.Parameters.Length)
                     .FirstOrDefault();
 
                 if (takeSnapshot == null)
@@ -369,13 +392,24 @@ namespace UnityMCP.Editor
 
                 int timeoutMs = Math.Max(1000, GetInt(args, "timeoutMs", 120000));
                 double startedAt = EditorApplication.timeSinceStartup;
-                bool completed = false;
+                bool routeResolved = false;
 
-                void Complete(object result)
+                _snapshotJob = new MemorySnapshotJob
                 {
-                    if (completed)
+                    JobId = Guid.NewGuid().ToString("N"),
+                    ApiType = memProfilerType.FullName,
+                    TempPath = tempPath,
+                    SnapshotPath = snapshotPath,
+                    Status = "Capturing",
+                    StartedUtc = DateTime.UtcNow.ToString("O"),
+                    StartedAt = startedAt,
+                };
+
+                void ResolveOnce(object result)
+                {
+                    if (routeResolved)
                         return;
-                    completed = true;
+                    routeResolved = true;
                     EditorApplication.update -= CheckTimeout;
                     resolve(result);
                 }
@@ -384,13 +418,12 @@ namespace UnityMCP.Editor
                 {
                     if ((EditorApplication.timeSinceStartup - startedAt) * 1000d < timeoutMs)
                         return;
-                    Complete(MCPResponse.Error(
-                        $"Memory snapshot did not complete within {timeoutMs} ms.",
-                        "memory_snapshot_timeout", true, new Dictionary<string, object>
-                        {
-                            { "snapshotPath", snapshotPath },
-                            { "captureMayStillComplete", true },
-                        }));
+                    _snapshotJob.TimedOut = true;
+                    var pending = SnapshotJobData(_snapshotJob);
+                    pending["success"] = true;
+                    pending["completed"] = false;
+                    pending["message"] = $"Memory snapshot is still capturing after {timeoutMs} ms. Poll profiler/memory-snapshot-status.";
+                    ResolveOnce(pending);
                 }
 
                 Action<string, bool> callback = (completedPath, success) =>
@@ -399,30 +432,32 @@ namespace UnityMCP.Editor
                     {
                         if (success)
                         {
-                            string finalPath = string.IsNullOrEmpty(completedPath)
-                                ? snapshotPath
-                                : completedPath;
-                            var fileInfo = new FileInfo(finalPath);
-                            Complete(new Dictionary<string, object>
+                            string finalPath = FinalizeSnapshotFile(_snapshotJob, completedPath);
+                            if (string.IsNullOrEmpty(finalPath))
                             {
-                                { "success", true },
-                                { "snapshotPath", finalPath },
-                                { "fileExists", fileInfo.Exists },
-                                { "fileSizeBytes", fileInfo.Exists ? fileInfo.Length : 0L },
-                                { "elapsedMs", Math.Round(
-                                    (EditorApplication.timeSinceStartup - startedAt) * 1000d, 1) },
-                            });
+                                _snapshotJob.Status = "Failed";
+                                _snapshotJob.Error = "Memory Profiler reported success but no snapshot file was created.";
+                            }
+                            else
+                            {
+                                _snapshotJob.SnapshotPath = finalPath;
+                                _snapshotJob.Status = "Completed";
+                                _snapshotJob.CompletedUtc = DateTime.UtcNow.ToString("O");
+                            }
                         }
                         else
                         {
-                            Complete(MCPResponse.Error(
-                                "Memory Profiler reported that snapshot capture failed.",
-                                "memory_snapshot_failed", false,
-                                new Dictionary<string, object>
-                                {
-                                    { "snapshotPath", completedPath ?? snapshotPath },
-                                }));
+                            _snapshotJob.Status = "Failed";
+                            _snapshotJob.Error = "Memory Profiler reported that snapshot capture failed.";
+                            _snapshotJob.CompletedUtc = DateTime.UtcNow.ToString("O");
                         }
+
+                        var result = SnapshotJobData(_snapshotJob);
+                        result["success"] = _snapshotJob.Status == "Completed";
+                        result["completed"] = _snapshotJob.Status == "Completed";
+                        if (_snapshotJob.Status == "Failed")
+                            result["error"] = _snapshotJob.Error;
+                        ResolveOnce(result);
                     };
                 };
 
@@ -431,18 +466,17 @@ namespace UnityMCP.Editor
                 if (!callbackType.IsInstanceOfType(callback))
                     callbackDelegate = Delegate.CreateDelegate(callbackType, callback.Target, callback.Method);
 
-                var invokeArgs = new List<object> { snapshotPath, callbackDelegate };
+                var invokeArgs = new List<object> { tempPath, callbackDelegate };
                 if (takeSnapshot.Parameters.Length == 3)
                 {
                     Type flagsType = takeSnapshot.Parameters[2].ParameterType;
-                    object flags = takeSnapshot.Parameters[2].HasDefaultValue
-                        ? takeSnapshot.Parameters[2].DefaultValue
-                        : flagsType.IsEnum ? Enum.ToObject(flagsType, 0x1F) : Activator.CreateInstance(flagsType);
+                    object flags = BuildDefaultCaptureFlags(flagsType, out string captureFlags);
+                    _snapshotJob.CaptureFlags = captureFlags;
                     invokeArgs.Add(flags);
                 }
 
                 takeSnapshot.Method.Invoke(null, invokeArgs.ToArray());
-                if (!completed)
+                if (!routeResolved)
                     EditorApplication.update += CheckTimeout;
             }
             catch (Exception ex)
@@ -451,6 +485,135 @@ namespace UnityMCP.Editor
                     "Failed to start memory snapshot: " + ex.GetBaseException().Message,
                     "memory_snapshot_start_failed"));
             }
+        }
+
+        /// <summary>
+        /// Poll the current or requested memory snapshot after the initiating route times out.
+        /// </summary>
+        public static object GetMemorySnapshotStatus(Dictionary<string, object> args)
+        {
+            string jobId = args != null && args.TryGetValue("jobId", out object value) && value != null
+                ? value.ToString()
+                : "";
+
+            if (_snapshotJob == null || (!string.IsNullOrEmpty(jobId) && _snapshotJob.JobId != jobId))
+            {
+                return MCPResponse.Error(
+                    string.IsNullOrEmpty(jobId)
+                        ? "No memory snapshot job is available in this Editor session."
+                        : $"Memory snapshot job '{jobId}' was not found in this Editor session.",
+                    "memory_snapshot_job_not_found");
+            }
+
+            RefreshSnapshotJobFromFiles(_snapshotJob);
+            var result = SnapshotJobData(_snapshotJob);
+            result["success"] = true;
+            result["completed"] = _snapshotJob.Status == "Completed";
+            return result;
+        }
+
+        private static Type ResolveMemoryProfilerType()
+        {
+            return Type.GetType("Unity.Profiling.Memory.MemoryProfiler, UnityEngine.CoreModule")
+                ?? Type.GetType("Unity.Profiling.Memory.MemoryProfiler, UnityEngine")
+                ?? Type.GetType(
+                    "UnityEngine.Profiling.Memory.Experimental.MemoryProfiler, UnityEngine.CoreModule")
+                ?? Type.GetType(
+                    "UnityEngine.Profiling.Memory.Experimental.MemoryProfiler, UnityEngine")
+                ?? Type.GetType(
+                    "UnityEditor.Profiling.Memory.Experimental.MemoryProfiler, UnityEditor.CoreModule")
+                ?? Type.GetType(
+                    "UnityEditor.Profiling.Memory.Experimental.MemoryProfiler, UnityEditor");
+        }
+
+        private static bool IsSnapshotCompletionDelegate(Type delegateType)
+        {
+            if (!typeof(Delegate).IsAssignableFrom(delegateType))
+                return false;
+            MethodInfo invoke = delegateType.GetMethod("Invoke");
+            ParameterInfo[] parameters = invoke?.GetParameters();
+            return invoke != null && invoke.ReturnType == typeof(void) && parameters != null &&
+                   parameters.Length == 2 && parameters[0].ParameterType == typeof(string) &&
+                   parameters[1].ParameterType == typeof(bool);
+        }
+
+        private static object BuildDefaultCaptureFlags(Type flagsType, out string captureFlags)
+        {
+            if (!flagsType.IsEnum)
+            {
+                captureFlags = "default";
+                return Activator.CreateInstance(flagsType);
+            }
+
+            string[] desiredFlags = { "ManagedObjects", "NativeObjects", "NativeAllocations" };
+            ulong combined = 0;
+            var enabled = new List<string>();
+            foreach (string flagName in desiredFlags)
+            {
+                if (!Enum.GetNames(flagsType).Contains(flagName))
+                    continue;
+                object parsed = Enum.Parse(flagsType, flagName);
+                combined |= Convert.ToUInt64(parsed);
+                enabled.Add(flagName);
+            }
+
+            captureFlags = string.Join(",", enabled);
+            return Enum.ToObject(flagsType, combined);
+        }
+
+        private static string FinalizeSnapshotFile(MemorySnapshotJob job, string completedPath)
+        {
+            string sourcePath = !string.IsNullOrWhiteSpace(completedPath) && File.Exists(completedPath)
+                ? completedPath
+                : File.Exists(job.TempPath) ? job.TempPath : null;
+
+            if (sourcePath == null)
+                return File.Exists(job.SnapshotPath) ? job.SnapshotPath : null;
+
+            if (string.Equals(Path.GetFullPath(sourcePath), Path.GetFullPath(job.SnapshotPath),
+                    StringComparison.OrdinalIgnoreCase))
+                return job.SnapshotPath;
+
+            if (File.Exists(job.SnapshotPath))
+                File.Delete(job.SnapshotPath);
+            File.Move(sourcePath, job.SnapshotPath);
+            return job.SnapshotPath;
+        }
+
+        private static void RefreshSnapshotJobFromFiles(MemorySnapshotJob job)
+        {
+            if (job == null || job.Status != "Capturing")
+                return;
+            if (File.Exists(job.SnapshotPath))
+            {
+                job.Status = "Completed";
+                job.CompletedUtc = DateTime.UtcNow.ToString("O");
+            }
+        }
+
+        private static Dictionary<string, object> SnapshotJobData(MemorySnapshotJob job)
+        {
+            var snapshotFile = new FileInfo(job.SnapshotPath);
+            var tempFile = new FileInfo(job.TempPath);
+            return new Dictionary<string, object>
+            {
+                { "jobId", job.JobId },
+                { "status", job.Status },
+                { "apiType", job.ApiType ?? "" },
+                { "captureFlags", job.CaptureFlags ?? "" },
+                { "snapshotPath", job.SnapshotPath },
+                { "tempPath", job.TempPath },
+                { "fileExists", snapshotFile.Exists },
+                { "fileSizeBytes", snapshotFile.Exists ? snapshotFile.Length : 0L },
+                { "tempFileExists", tempFile.Exists },
+                { "tempFileSizeBytes", tempFile.Exists ? tempFile.Length : 0L },
+                { "startedUtc", job.StartedUtc },
+                { "completedUtc", job.CompletedUtc ?? "" },
+                { "timedOut", job.TimedOut },
+                { "captureMayStillComplete", job.Status == "Capturing" },
+                { "elapsedMs", Math.Round((EditorApplication.timeSinceStartup - job.StartedAt) * 1000d, 1) },
+                { "error", job.Error ?? "" },
+            };
         }
 
         // ─── Helpers ───

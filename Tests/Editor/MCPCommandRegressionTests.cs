@@ -1196,6 +1196,7 @@ namespace UnityMCP.Editor.Tests
                 "profiler/memory-breakdown",
                 "profiler/memory-top-assets",
                 "profiler/memory-snapshot",
+                "profiler/memory-snapshot-status",
             };
 
             foreach (string route in expectedRoutes)
@@ -1213,6 +1214,28 @@ namespace UnityMCP.Editor.Tests
             Assert.That(playModeProperties.Keys, Does.Contain("action"));
             Assert.That(playModeProperties.Keys, Does.Contain("timeoutMs"));
             Assert.That(playModeProperties.Keys, Does.Contain("expectedProjectPath"));
+
+            var snapshotStatusTool = tools.Single(item =>
+                item["route"].ToString() == "profiler/memory-snapshot-status");
+            Assert.That(snapshotStatusTool["readOnly"], Is.EqualTo(true));
+            var snapshotStatusSchema = RequireDictionary(snapshotStatusTool["inputSchema"]);
+            var snapshotStatusProperties = RequireDictionary(snapshotStatusSchema["properties"]);
+            Assert.That(snapshotStatusProperties.Keys, Does.Contain("jobId"));
+        }
+
+        [Test]
+        public void MemorySnapshot_UsesCurrentProfilerApiWhenAvailable()
+        {
+            var resolver = typeof(MCPMemoryProfilerCommands).GetMethod("ResolveMemoryProfilerType",
+                BindingFlags.NonPublic | BindingFlags.Static);
+            Assert.That(resolver, Is.Not.Null);
+            var profilerType = resolver.Invoke(null, null) as Type;
+            Assert.That(profilerType, Is.Not.Null);
+#if UNITY_2022_2_OR_NEWER
+            Assert.That(profilerType.FullName, Is.EqualTo("Unity.Profiling.Memory.MemoryProfiler"));
+#else
+            Assert.That(profilerType.FullName, Does.Contain("MemoryProfiler"));
+#endif
         }
 
         [Test]

@@ -142,6 +142,7 @@ namespace UnityMCP.Editor
                 "profiler/stats",
                 "profiler/memory",
                 "profiler/memory-status",
+                "profiler/memory-snapshot-status",
                 "project-tools/list");
 
             AddProfile(profiles, ToolProfile.FirstClass(readOnly: true, longRunning: true),
@@ -777,6 +778,8 @@ namespace UnityMCP.Editor
                     return "List the largest loaded assets by runtime memory usage.";
                 case "profiler/memory-snapshot":
                     return "Capture a Memory Profiler snapshot and wait for confirmed completion when com.unity.memoryprofiler is installed.";
+                case "profiler/memory-snapshot-status":
+                    return "Poll the current Memory Profiler snapshot job after a long capture outlives the initiating request.";
                 case "mcp/health":
                     return "Inspect MCP bridge health, queue state, sessions, process memory, and recent slow requests.";
                 case "mcp/set-autostart":
@@ -1324,6 +1327,10 @@ namespace UnityMCP.Editor
                     return Schema(Props(
                         Prop("path", "string", "Optional output directory. Defaults to Unity's temporary cache MemorySnapshots folder."),
                         Prop("timeoutMs", "number", "Maximum time to wait for snapshot completion. Defaults to 120000.")
+                    ));
+                case "profiler/memory-snapshot-status":
+                    return Schema(Props(
+                        Prop("jobId", "string", "Optional snapshot job ID. Defaults to the current job in this Editor session.")
                     ));
                 case "scene/hierarchy":
                     return Schema(Props(
