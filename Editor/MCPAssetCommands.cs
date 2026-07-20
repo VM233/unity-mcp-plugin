@@ -250,6 +250,8 @@ namespace UnityMCP.Editor
                     settings[pair.Key] = pair.Value;
                 if (!ValidateImportSettings(settings, out string settingsError))
                     return FailImportPreparation(index, settingsError, out errorResult);
+                if (!TryParseSpriteSlice(settings, sourcePath, out var spriteSlice, out string spriteSliceError))
+                    return FailImportPreparation(index, spriteSliceError, out errorResult);
 
                 if (!MCPImageDuplicateCommands.TryNormalizeMode(GetString(settings, "dedupeMode"), sourcePath,
                         true, out string dedupeMode, out string dedupeModeError))
@@ -294,6 +296,7 @@ namespace UnityMCP.Editor
                     DedupeScope = dedupeScope,
                     DedupeSearchPath = dedupeSearchPath,
                     OnDuplicate = onDuplicate,
+                    SpriteSlice = spriteSlice,
                 });
             }
 
@@ -364,6 +367,9 @@ namespace UnityMCP.Editor
                     !new[] { "none", "uncompressed", "low", "lq", "normal", "compressed", "high", "hq" }
                         .Contains(compression.ToLowerInvariant()))
                     throw new ArgumentException($"Unknown compression '{compression}'");
+
+                if (!TryParseSpriteSlice(settings, null, out _, out string spriteSliceError))
+                    throw new ArgumentException(spriteSliceError);
                 return true;
             }
             catch (Exception exception)
@@ -572,6 +578,9 @@ namespace UnityMCP.Editor
             File.Copy(entry.SourcePath, entry.AbsoluteDestinationPath, true);
             AssetDatabase.ImportAsset(entry.DestinationPath, ImportAssetOptions.ForceUpdate);
             entry.ImporterSettings = ConfigureTextureImporter(entry.DestinationPath, entry.Settings);
+            entry.SpriteSliceResult = entry.SpriteSlice == null
+                ? null
+                : ApplySpriteSlice(entry.DestinationPath, entry.SpriteSlice);
             entry.SubAssets = DescribeSubAssets(entry.DestinationPath);
             entry.Imported = true;
         }
@@ -715,6 +724,7 @@ namespace UnityMCP.Editor
                 { "error", entry.Error ?? "" },
                 { "rollbackError", entry.RollbackError ?? "" },
                 { "importer", entry.ImporterSettings },
+                { "spriteSlice", entry.SpriteSliceResult },
                 { "subAssets", entry.SubAssets ?? new List<Dictionary<string, object>>() },
             };
         }
@@ -822,6 +832,218 @@ namespace UnityMCP.Editor
                 { "meshType", serializedMeshType == null ? "" : ((SpriteMeshType)serializedMeshType.intValue).ToString() },
                 { "mipmapEnabled", importer.mipmapEnabled }
             };
+        }
+
+        private static Dictionary<string, object> ApplySpriteSlice(string assetPath, SpriteSliceSettings settings)
+        {
+            var sliceArgs = new Dictionary<string, object>(settings.Arguments)
+            {
+                { "texturePath", assetPath }
+            };
+            var result = MCPSpriteSheetCommands.SliceSheet(sliceArgs) as Dictionary<string, object>;
+            if (result == null)
+                throw new InvalidOperationException("Fixed-grid sprite slicing returned an invalid result.");
+            if (result.TryGetValue("error", out object error) && error != null &&
+                !string.IsNullOrWhiteSpace(error.ToString()))
+                throw new InvalidOperationException($"Fixed-grid sprite slicing failed: {error}");
+            if (!result.TryGetValue("success", out object success) || !Convert.ToBoolean(success))
+                throw new InvalidOperationException("Fixed-grid sprite slicing did not report success.");
+            return result;
+        }
+
+        private static bool TryParseSpriteSlice(Dictionary<string, object> settings, string sourcePath,
+            out SpriteSliceSettings spriteSlice, out string error)
+        {
+            spriteSlice = null;
+            error = "";
+            if (settings == null || !settings.TryGetValue("spriteSlice", out object rawValue) || rawValue == null)
+                return true;
+            if (!TryConvertToDictionary(rawValue, out var arguments))
+            {
+                error = "spriteSlice must be an object";
+                return false;
+            }
+
+            if (!TryGetRequiredPositiveInt(arguments, "frameWidth", out int frameWidth, out error) ||
+                !TryGetRequiredPositiveInt(arguments, "frameHeight", out int frameHeight, out error) ||
+                !TryGetOptionalPositiveInt(arguments, "columns", out int columns, out error) ||
+                !TryGetOptionalPositiveInt(arguments, "frameCount", out int frameCount, out error) ||
+                !TryGetOptionalNonNegativeInt(arguments, "startX", out int startX, out error) ||
+                !TryGetOptionalNonNegativeInt(arguments, "startY", out int startY, out error) ||
+                !TryGetNormalizedPivot(arguments, out error))
+                return false;
+
+            if (arguments.TryGetValue("preserveSpriteIDs", out object preserveSpriteIDs) && preserveSpriteIDs != null)
+            {
+                try
+                {
+                    Convert.ToBoolean(preserveSpriteIDs);
+                }
+                catch (Exception exception)
+                {
+                    error = $"spriteSlice.preserveSpriteIDs must be a boolean: {exception.Message}";
+                    return false;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(sourcePath))
+            {
+                try
+                {
+                    var fingerprint = MCPImageDuplicateCommands.CreateFingerprint(sourcePath,
+                        MCPImageDuplicateCommands.DecodedPixelsMode);
+                    int availableWidth = fingerprint.Width - startX;
+                    int availableHeight = fingerprint.Height - startY;
+                    int maximumColumns = availableWidth / frameWidth;
+                    int maximumRows = availableHeight / frameHeight;
+                    if (maximumColumns <= 0 || maximumRows <= 0)
+                    {
+                        error = $"spriteSlice frame grid does not fit within source image {fingerprint.Width}x{fingerprint.Height}";
+                        return false;
+                    }
+
+                    int resolvedColumns = columns > 0 ? columns : maximumColumns;
+                    if (resolvedColumns > maximumColumns)
+                    {
+                        error = $"spriteSlice.columns ({resolvedColumns}) exceeds the {maximumColumns} full columns available in source image";
+                        return false;
+                    }
+
+                    int resolvedFrameCount = frameCount > 0 ? frameCount : resolvedColumns * maximumRows;
+                    int requiredRows = (resolvedFrameCount + resolvedColumns - 1) / resolvedColumns;
+                    if (requiredRows > maximumRows)
+                    {
+                        error = $"spriteSlice.frameCount ({resolvedFrameCount}) exceeds the {resolvedColumns}x{maximumRows} full-frame grid available in source image";
+                        return false;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    error = $"Unable to validate spriteSlice source image: {exception.Message}";
+                    return false;
+                }
+            }
+
+            spriteSlice = new SpriteSliceSettings(arguments);
+            return true;
+        }
+
+        private static bool TryConvertToDictionary(object value, out Dictionary<string, object> result)
+        {
+            if (value is Dictionary<string, object> dictionary)
+            {
+                result = new Dictionary<string, object>(dictionary);
+                return true;
+            }
+            if (value is IDictionary dictionaryValue)
+            {
+                result = new Dictionary<string, object>();
+                foreach (DictionaryEntry pair in dictionaryValue)
+                {
+                    if (pair.Key != null)
+                        result[pair.Key.ToString()] = pair.Value;
+                }
+                return true;
+            }
+
+            result = null;
+            return false;
+        }
+
+        private static bool TryGetRequiredPositiveInt(Dictionary<string, object> args, string key,
+            out int value, out string error)
+        {
+            if (!args.TryGetValue(key, out object rawValue) || rawValue == null)
+            {
+                value = 0;
+                error = $"spriteSlice.{key} is required";
+                return false;
+            }
+            return TryGetInteger(rawValue, $"spriteSlice.{key}", 1, out value, out error);
+        }
+
+        private static bool TryGetOptionalPositiveInt(Dictionary<string, object> args, string key,
+            out int value, out string error)
+        {
+            if (!args.TryGetValue(key, out object rawValue) || rawValue == null)
+            {
+                value = 0;
+                error = "";
+                return true;
+            }
+            return TryGetInteger(rawValue, $"spriteSlice.{key}", 1, out value, out error);
+        }
+
+        private static bool TryGetOptionalNonNegativeInt(Dictionary<string, object> args, string key,
+            out int value, out string error)
+        {
+            if (!args.TryGetValue(key, out object rawValue) || rawValue == null)
+            {
+                value = 0;
+                error = "";
+                return true;
+            }
+            return TryGetInteger(rawValue, $"spriteSlice.{key}", 0, out value, out error);
+        }
+
+        private static bool TryGetInteger(object rawValue, string name, int minimum,
+            out int value, out string error)
+        {
+            value = 0;
+            error = "";
+            try
+            {
+                double number = Convert.ToDouble(rawValue, System.Globalization.CultureInfo.InvariantCulture);
+                if (double.IsNaN(number) || double.IsInfinity(number) || Math.Abs(number - Math.Round(number)) > 0.000001d)
+                {
+                    error = $"{name} must be an integer";
+                    return false;
+                }
+                if (number < minimum || number > int.MaxValue)
+                {
+                    error = $"{name} must be at least {minimum}";
+                    return false;
+                }
+                value = (int)number;
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = $"{name} must be an integer: {exception.Message}";
+                return false;
+            }
+        }
+
+        private static bool TryGetNormalizedPivot(Dictionary<string, object> args, out string error)
+        {
+            error = "";
+            bool hasX = args.TryGetValue("pivotX", out object rawX) && rawX != null;
+            bool hasY = args.TryGetValue("pivotY", out object rawY) && rawY != null;
+            if (hasX != hasY)
+            {
+                error = "spriteSlice.pivotX and spriteSlice.pivotY must be provided together";
+                return false;
+            }
+            if (!hasX)
+                return true;
+
+            try
+            {
+                float x = Convert.ToSingle(rawX, System.Globalization.CultureInfo.InvariantCulture);
+                float y = Convert.ToSingle(rawY, System.Globalization.CultureInfo.InvariantCulture);
+                if (float.IsNaN(x) || float.IsInfinity(x) || float.IsNaN(y) || float.IsInfinity(y) ||
+                    x < 0f || x > 1f || y < 0f || y > 1f)
+                {
+                    error = "spriteSlice pivot values must be normalized numbers between 0 and 1";
+                    return false;
+                }
+                return true;
+            }
+            catch (Exception exception)
+            {
+                error = $"spriteSlice pivot values must be numbers: {exception.Message}";
+                return false;
+            }
         }
 
         private static List<Dictionary<string, object>> DescribeSubAssets(string assetPath)
@@ -1914,7 +2136,19 @@ namespace UnityMCP.Editor
             public string Error;
             public string RollbackError;
             public object ImporterSettings;
+            public SpriteSliceSettings SpriteSlice;
+            public Dictionary<string, object> SpriteSliceResult;
             public List<Dictionary<string, object>> SubAssets;
+        }
+
+        private sealed class SpriteSliceSettings
+        {
+            public SpriteSliceSettings(Dictionary<string, object> arguments)
+            {
+                Arguments = arguments;
+            }
+
+            public Dictionary<string, object> Arguments { get; }
         }
     }
 }

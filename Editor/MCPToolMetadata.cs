@@ -2298,6 +2298,24 @@ namespace UnityMCP.Editor
                 Prop("alphaIsTransparency", "boolean", "Treat alpha as transparency."),
                 Prop("meshType", "string", "Sprite mesh type: FullRect or Tight."),
                 Prop("mipmapEnabled", "boolean", "Generate mipmaps."));
+            settingProperties["spriteSlice"] = new Dictionary<string, object>
+            {
+                { "type", "object" },
+                { "description", "Optional explicit fixed-grid sprite slicing applied after import. Use this for sparse animation frames instead of Unity automatic slicing." },
+                { "properties", Props(
+                    Prop("frameWidth", "number", "Required width of each grid frame in pixels."),
+                    Prop("frameHeight", "number", "Required height of each grid frame in pixels."),
+                    Prop("frameCount", "number", "Optional number of frames. Defaults to every full grid cell."),
+                    Prop("baseName", "string", "Generated sprite-name prefix. Defaults to the imported file name."),
+                    Prop("columns", "number", "Optional grid column count. Defaults to all full columns."),
+                    Prop("startX", "number", "Grid start x in pixels. Defaults to 0."),
+                    Prop("startY", "number", "Grid start y in top-left pixels. Defaults to 0."),
+                    Prop("pivotX", "number", "Optional normalized pivot x. Must be supplied with pivotY."),
+                    Prop("pivotY", "number", "Optional normalized pivot y. Must be supplied with pivotX."),
+                    Prop("preserveSpriteIDs", "boolean", "Preserve existing sprite IDs by generated name when replacing an asset. Defaults to true.")
+                ) },
+                { "required", new List<string> { "frameWidth", "frameHeight" } }
+            };
             var importProperties = new Dictionary<string, object>(settingProperties)
             {
                 ["sourcePath"] = Prop("sourcePath", "string", "Absolute external source file path.").Value,

@@ -2548,6 +2548,102 @@ namespace UnityMCP.Editor.Tests
             }
         }
 
+        [Test]
+        public void AssetImport_ExplicitGridSliceKeepsSparseFrames()
+        {
+            string externalPath = CreateExternalSparseSpriteSheetPng();
+            const string spritePath = TEST_FOLDER + "/Sparse Frames.png";
+
+            try
+            {
+                var result = RequireDictionary(MCPAssetCommands.Import(new Dictionary<string, object>
+                {
+                    { "defaults", new Dictionary<string, object>
+                        {
+                            { "dedupeMode", "none" },
+                            { "textureType", "Sprite" }, { "spriteMode", "Multiple" },
+                            { "pixelsPerUnit", 32f }, { "filterMode", "Point" },
+                            { "spriteSlice", new Dictionary<string, object>
+                                {
+                                    { "frameWidth", 48 }, { "frameHeight", 48 },
+                                    { "pivotX", 0.5f }, { "pivotY", 0.4f },
+                                }
+                            },
+                        }
+                    },
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", externalPath }, { "destinationPath", spritePath },
+                            },
+                        }
+                    },
+                    { "execution", new Dictionary<string, object> { { "mode", "immediate" } } },
+                }));
+
+                Assert.That(result["success"], Is.EqualTo(true));
+                var importResult = ((List<Dictionary<string, object>>)result["imports"]).Single();
+                var sliceResult = RequireDictionary(importResult["spriteSlice"]);
+                Assert.That(sliceResult["spriteCount"], Is.EqualTo(4));
+
+                var sprites = AssetDatabase.LoadAllAssetsAtPath(spritePath).OfType<Sprite>()
+                    .OrderBy(sprite => sprite.name).ToArray();
+                Assert.That(sprites, Has.Length.EqualTo(4));
+                for (int index = 0; index < sprites.Length; index++)
+                {
+                    Assert.That(sprites[index].name, Is.EqualTo($"Sparse Frames_{index}"));
+                    Assert.That(sprites[index].rect, Is.EqualTo(new Rect(index * 48, 0, 48, 48)));
+                    Assert.That(sprites[index].pivot.x, Is.EqualTo(24f).Within(0.001f));
+                    Assert.That(sprites[index].pivot.y, Is.EqualTo(19.2f).Within(0.001f));
+                }
+            }
+            finally
+            {
+                if (File.Exists(externalPath)) File.Delete(externalPath);
+            }
+        }
+
+        [Test]
+        public void AssetImport_InvalidSpriteSliceFailsPreflight()
+        {
+            string externalPath = CreateExternalSparseSpriteSheetPng();
+            const string spritePath = TEST_FOLDER + "/Invalid Sparse Frames.png";
+
+            try
+            {
+                var result = RequireDictionary(MCPAssetCommands.Import(new Dictionary<string, object>
+                {
+                    { "defaults", new Dictionary<string, object>
+                        {
+                            { "dedupeMode", "none" },
+                            { "spriteSlice", new Dictionary<string, object>
+                                {
+                                    { "frameWidth", 48 }, { "frameHeight", 48 }, { "frameCount", 5 },
+                                }
+                            },
+                        }
+                    },
+                    { "imports", new object[]
+                        {
+                            new Dictionary<string, object>
+                            {
+                                { "sourcePath", externalPath }, { "destinationPath", spritePath },
+                            },
+                        }
+                    },
+                }));
+
+                Assert.That(result["success"], Is.EqualTo(false));
+                Assert.That(result["error"].ToString(), Does.Contain("spriteSlice.frameCount"));
+                Assert.That(File.Exists(GetAbsolutePath(spritePath)), Is.False);
+            }
+            finally
+            {
+                if (File.Exists(externalPath)) File.Delete(externalPath);
+            }
+        }
+
         [UnityTest]
         public IEnumerator AssetImportDeferred_BatchedModeImportsAllAndAllowsItemOverrides()
         {
@@ -3311,6 +3407,11 @@ namespace UnityMCP.Editor.Tests
             Assert.That(defaultProperties.Keys, Does.Contain("dedupeScope"));
             Assert.That(defaultProperties.Keys, Does.Contain("dedupeSearchPath"));
             Assert.That(defaultProperties.Keys, Does.Contain("onDuplicate"));
+            Assert.That(defaultProperties.Keys, Does.Contain("spriteSlice"));
+            var spriteSliceSchema = RequireDictionary(defaultProperties["spriteSlice"]);
+            var spriteSliceProperties = RequireDictionary(spriteSliceSchema["properties"]);
+            Assert.That(spriteSliceProperties.Keys, Does.Contain("frameWidth"));
+            Assert.That(spriteSliceProperties.Keys, Does.Contain("frameHeight"));
         }
 
         [Test]
@@ -3600,6 +3701,26 @@ namespace UnityMCP.Editor.Tests
             try
             {
                 texture.SetPixels(new[] { color, color, color, color });
+                texture.Apply();
+                File.WriteAllBytes(path, texture.EncodeToPNG());
+                return path;
+            }
+            finally
+            {
+                Object.DestroyImmediate(texture);
+            }
+        }
+
+        private static string CreateExternalSparseSpriteSheetPng()
+        {
+            string path = Path.Combine(Path.GetTempPath(), $"unity-mcp-sparse-sheet-{Guid.NewGuid():N}.png");
+            var texture = new Texture2D(192, 48, TextureFormat.RGBA32, false);
+            try
+            {
+                var pixels = Enumerable.Repeat(Color.clear, texture.width * texture.height).ToArray();
+                texture.SetPixels(pixels);
+                for (int index = 0; index < 4; index++)
+                    texture.SetPixel(index * 48 + 4 + index, 8 + index, Color.white);
                 texture.Apply();
                 File.WriteAllBytes(path, texture.EncodeToPNG());
                 return path;

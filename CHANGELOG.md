@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.15] - 2026-07-20
+
+- Added `spriteSlice` to first-class `asset/import`, enabling validated fixed-grid slicing during batch import so sparse animation frames are never collapsed by Unity automatic slicing.
+
 ## [3.3.14] - 2026-07-18
 
 - Finish package-test restoration once the original manifest bytes are restored and the Editor is idle, without relying on transient test-assembly presence.
