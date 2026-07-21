@@ -151,6 +151,114 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void AddGameObject_ExplicitLayerName_PersistsAndReportsLayer()
+        {
+            CreateTestPrefab();
+            int expectedLayer = LayerMask.NameToLayer("Ignore Raycast");
+            Assert.That(expectedLayer, Is.GreaterThanOrEqualTo(0));
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.AddGameObject(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "parentPrefabPath", "Controls" },
+                { "name", "Layered Child" },
+                { "layer", "Ignore Raycast" },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(result["layer"], Is.EqualTo("Ignore Raycast"));
+            Assert.That(System.Convert.ToInt32(result["layerIndex"]), Is.EqualTo(expectedLayer));
+
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                Assert.That(root.transform.Find("Controls/Layered Child").gameObject.layer,
+                    Is.EqualTo(expectedLayer));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [Test]
+        public void AddGameObject_WithoutLayer_InheritsParentLayer()
+        {
+            CreateTestPrefab();
+            int expectedLayer = LayerMask.NameToLayer("Ignore Raycast");
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                root.transform.Find("Controls").gameObject.layer = expectedLayer;
+                Assert.That(PrefabUtility.SaveAsPrefabAsset(root, PREFAB_PATH), Is.Not.Null);
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+
+            var result = RequireDictionary(MCPPrefabAssetCommands.AddGameObject(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "parentPrefabPath", "Controls" },
+                { "name", "Inherited Layer Child" },
+            }));
+
+            Assert.That(result["layer"], Is.EqualTo("Ignore Raycast"));
+            Assert.That(System.Convert.ToInt32(result["layerIndex"]), Is.EqualTo(expectedLayer));
+
+            root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                Assert.That(root.transform.Find("Controls/Inherited Layer Child").gameObject.layer,
+                    Is.EqualTo(expectedLayer));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [Test]
+        public void TransactionEdit_AddGameObject_ExplicitLayerName_PersistsAndReportsLayer()
+        {
+            CreateTestPrefab();
+            int expectedLayer = LayerMask.NameToLayer("Ignore Raycast");
+            var result = RequireDictionary(MCPPrefabAssetCommands.TransactionEdit(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "operations", new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "type", "addGameObject" },
+                            { "parentPrefabPath", "Controls" },
+                            { "name", "Transaction Layered Child" },
+                            { "layer", "Ignore Raycast" },
+                        },
+                    }
+                },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            var operations = (List<Dictionary<string, object>>)result["operationSummaries"];
+            Assert.That(operations, Has.Count.EqualTo(1));
+            Assert.That(operations[0]["layer"], Is.EqualTo("Ignore Raycast"));
+            Assert.That(System.Convert.ToInt32(operations[0]["layerIndex"]), Is.EqualTo(expectedLayer));
+
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                Assert.That(root.transform.Find("Controls/Transaction Layered Child").gameObject.layer,
+                    Is.EqualTo(expectedLayer));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [Test]
         public void MoveComponent_PreservesSerializedDataBlockOrderAndUntouchedWhitespace()
         {
             CreateTestPrefab(addCollider: true);
@@ -3357,6 +3465,22 @@ namespace UnityMCP.Editor.Tests
             Assert.That(properties.Keys, Does.Contain("properties"));
             Assert.That(properties.Keys, Does.Contain("references"));
             Assert.That(properties.Keys, Does.Contain("expectedProjectPath"));
+        }
+
+        [Test]
+        public void ToolMetadata_PrefabAddGameObjectExposesLayer()
+        {
+            var result = RequireDictionary(MCPToolMetadata.GetRegisteredTools(
+                firstClassOnly: true, compact: true, includeSchema: true, limit: 200));
+            var tools = (List<Dictionary<string, object>>)result["tools"];
+            var tool = tools.Single(item => item["route"].ToString() == "prefab-asset/add-gameobject");
+
+            var schema = RequireDictionary(tool["inputSchema"]);
+            var properties = RequireDictionary(schema["properties"]);
+            Assert.That(properties.Keys, Does.Contain("layer"));
+            var layer = RequireDictionary(properties["layer"]);
+            Assert.That(layer["type"], Is.EqualTo("string"));
+            Assert.That(layer["description"].ToString(), Does.Contain("parent GameObject's layer"));
         }
 
         [Test]

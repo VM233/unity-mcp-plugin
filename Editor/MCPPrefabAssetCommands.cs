@@ -716,6 +716,9 @@ namespace UnityMCP.Editor
                 if (parent == null)
                     return new { error = $"Parent '{parentPrefabPath}' not found in prefab" };
 
+                if (!TryResolveCreatedGameObjectLayer(args, parent, out int layer, out string layerError))
+                    return new { error = layerError };
+
                 GameObject newGo;
                 if (!string.IsNullOrEmpty(primitiveType) && Enum.TryParse<PrimitiveType>(primitiveType, true, out var pt))
                 {
@@ -728,6 +731,7 @@ namespace UnityMCP.Editor
                 }
 
                 newGo.transform.SetParent(parent.transform, false);
+                newGo.layer = layer;
 
                 // Set transform if provided
                 if (args.ContainsKey("position"))
@@ -747,6 +751,8 @@ namespace UnityMCP.Editor
                     { "prefab", root.name },
                     { "createdGameObject", name },
                     { "parent", string.IsNullOrEmpty(parentPrefabPath) ? "root" : parentPrefabPath },
+                    { "layer", LayerMask.LayerToName(newGo.layer) },
+                    { "layerIndex", newGo.layer },
                 };
                 AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
                 return result;
@@ -3323,6 +3329,12 @@ namespace UnityMCP.Editor
                 return false;
             }
 
+            if (!TryResolveCreatedGameObjectLayer(operation, parent, out int layer, out string layerError))
+            {
+                error = $"Operation {operationIndex}: {layerError}";
+                return false;
+            }
+
             string primitiveType = GetString(operation, "primitiveType");
             GameObject newGo;
             if (!string.IsNullOrEmpty(primitiveType) && Enum.TryParse<PrimitiveType>(primitiveType, true, out var pt))
@@ -3336,11 +3348,14 @@ namespace UnityMCP.Editor
             }
 
             newGo.transform.SetParent(parent.transform, false);
+            newGo.layer = layer;
             ApplyTransformArguments(newGo.transform, operation);
 
             summary = BuildBatchSummary(operationIndex, "addGameObject", newGo, null);
             summary["parent"] = string.IsNullOrEmpty(parentPrefabPath) ? "root" : parentPrefabPath;
             summary["prefabPath"] = GetPrefabPath(root, newGo);
+            summary["layer"] = LayerMask.LayerToName(newGo.layer);
+            summary["layerIndex"] = newGo.layer;
             return true;
         }
 
@@ -3693,6 +3708,34 @@ namespace UnityMCP.Editor
                 transform.localEulerAngles = ParseVector3(operation["rotation"]);
             if (operation.ContainsKey("scale"))
                 transform.localScale = ParseVector3(operation["scale"]);
+        }
+
+        private static bool TryResolveCreatedGameObjectLayer(Dictionary<string, object> args, GameObject parent,
+            out int layer, out string error)
+        {
+            layer = parent != null ? parent.layer : 0;
+            error = "";
+
+            if (args == null || !args.TryGetValue("layer", out object rawLayer))
+                return true;
+
+            string layerValue = rawLayer?.ToString()?.Trim();
+            if (string.IsNullOrEmpty(layerValue))
+            {
+                error = "layer must be a defined Unity layer name or an index from 0 to 31";
+                return false;
+            }
+
+            if (!int.TryParse(layerValue, out layer))
+                layer = LayerMask.NameToLayer(layerValue);
+
+            if (layer < 0 || layer > 31)
+            {
+                error = $"Layer '{layerValue}' was not found. Provide a defined Unity layer name or an index from 0 to 31";
+                return false;
+            }
+
+            return true;
         }
 
         private static Dictionary<string, object> BuildBatchSummary(int operationIndex, string operationType,

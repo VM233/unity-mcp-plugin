@@ -802,7 +802,7 @@ namespace UnityMCP.Editor
                 case "prefab-asset/configure-component":
                     return "Ensure and configure one component on a prefab asset GameObject, including serialized properties and ObjectReferences, in one atomic save.";
                 case "prefab-asset/add-gameobject":
-                    return "Create a child GameObject inside a prefab asset.";
+                    return "Create a child GameObject inside a prefab asset with an explicit or parent-inherited Layer.";
                 case "prefab-asset/instantiate-prefab":
                 case "prefab-asset/instantiate-child-prefab":
                     return "Instantiate a prefab asset as a child inside another prefab asset.";
@@ -1448,6 +1448,7 @@ namespace UnityMCP.Editor
                         Prop("parentPrefabPath", "string", "Parent path inside the prefab. Empty means root."),
                         Prop("name", "string", "Name of the new child GameObject."),
                         Prop("primitiveType", "string", "Optional Unity PrimitiveType to create, e.g. Cube or Sphere."),
+                        Prop("layer", "string", "Optional Unity layer name or numeric index. Defaults to the parent GameObject's layer."),
                         Prop("position", "object", "Optional local position object with x/y/z."),
                         Prop("rotation", "object", "Optional local Euler rotation object with x/y/z."),
                         Prop("scale", "object", "Optional local scale object with x/y/z."),
@@ -2231,7 +2232,7 @@ namespace UnityMCP.Editor
             properties["operations"] = new Dictionary<string, object>
             {
                 { "type", "array" },
-                { "description", "Ordered prefab edits. Each item uses type plus the fields accepted by the matching prefab-asset route." },
+                { "description", "Ordered prefab edits. Each item uses type plus the fields accepted by the matching prefab-asset route. addGameObject accepts an optional layer name or numeric index and otherwise inherits its parent's layer." },
                 { "items", new Dictionary<string, object>
                     {
                         { "type", "object" },

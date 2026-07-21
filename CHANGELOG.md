@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.16] - 2026-07-21
+
+- Added optional `layer` support to `prefab-asset/add-gameobject` and transaction `addGameObject` operations, with parent-layer inheritance when omitted and final Layer readback in results.
+
 ## [3.3.15] - 2026-07-20
 
 - Added `spriteSlice` to first-class `asset/import`, enabling validated fixed-grid slicing during batch import so sparse animation frames are never collapsed by Unity automatic slicing.
