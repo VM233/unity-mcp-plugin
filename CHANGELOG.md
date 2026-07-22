@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.19] - 2026-07-22
+
+- Route project-context reads through the Unity main-thread request queue so `EditorPrefs` and project-path access cannot throw worker-thread HTTP 500 errors.
+
 ## [3.3.18] - 2026-07-22
 
 - Classified project-context endpoints and category subroutes as read-only so `unity_get_project_context` no longer fails project-binding validation, while retaining explicit wrong-project rejection.

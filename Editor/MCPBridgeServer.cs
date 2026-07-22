@@ -404,19 +404,6 @@ namespace UnityMCP.Editor
                     return;
                 }
 
-                // ═══ Project Context endpoints (read-only, no queue needed) ═══
-                if (apiPath == "context")
-                {
-                    SendJson(response, 200, MCPContextManager.GetContextResponse());
-                    return;
-                }
-                if (apiPath.StartsWith("context/"))
-                {
-                    string category = apiPath.Substring("context/".Length);
-                    SendJson(response, 200, MCPContextManager.GetContextResponse(category));
-                    return;
-                }
-
                 // ═══ Deferred paths (Unity APIs with async callbacks) ═══
                 if (apiPath == "wait/editor-idle")
                 {
@@ -802,6 +789,18 @@ namespace UnityMCP.Editor
             if (TryBuildProjectMismatchResponse(path, ParseJson(body), out var projectMismatch))
             {
                 return projectMismatch;
+            }
+
+            // Project context reads EditorPrefs and project paths, so it must run through
+            // this main-thread router instead of directly on the HTTP listener thread.
+            if (path == "context")
+            {
+                return MCPContextManager.GetContextResponse();
+            }
+            if (path.StartsWith("context/", StringComparison.Ordinal))
+            {
+                string contextCategory = path.Substring("context/".Length);
+                return MCPContextManager.GetContextResponse(contextCategory);
             }
 
             // Check if category is enabled

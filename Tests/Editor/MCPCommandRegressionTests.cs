@@ -2440,6 +2440,23 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void ProjectContextRoutesExecuteThroughMainThreadRouter()
+        {
+            var method = typeof(MCPBridgeServer).GetMethod("RouteRequest",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(method, Is.Not.Null);
+
+            var allContext = RequireDictionary(method.Invoke(null,
+                new object[] { "context", "GET", "{}" }));
+            Assert.That(allContext.ContainsKey("enabled"), Is.True);
+
+            var categoryContext = RequireDictionary(method.Invoke(null,
+                new object[] { "context/Architecture", "GET", "{}" }));
+            Assert.That(categoryContext.ContainsKey("category") || categoryContext.ContainsKey("error") ||
+                        categoryContext.ContainsKey("enabled"), Is.True);
+        }
+
+        [Test]
         public void JobHistoryIsPaginatedAndOwnerScoped()
         {
             Type history = typeof(MCPToolMetadata).Assembly.GetType("UnityMCP.Editor.MCPJobHistory");
