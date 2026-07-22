@@ -2011,6 +2011,156 @@ namespace UnityMCP.Editor.Tests
             var playMode = (MCPRequestQueue.RequestTicket)playModeArguments[1];
             Assert.That(playMode.Status, Is.EqualTo(MCPRequestQueue.RequestStatus.Queued));
             Assert.That(playMode.ResumeCount, Is.EqualTo(1));
+
+            var addComponentSnapshot = Snapshot("prefab-asset/add-component", false);
+            addComponentSnapshot["persistentBody"] = MiniJson.Serialize(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "prefabPath", "Source" },
+                { "componentType", typeof(BoxCollider).FullName },
+            });
+            addComponentSnapshot["progress"] = new Dictionary<string, object>
+            {
+                { "phase", "mutation-prepared" },
+                { "baselineComponentCount", 0 },
+            };
+            var addComponentArguments = new object[] { addComponentSnapshot, null };
+            Assert.That(restore.Invoke(null, addComponentArguments), Is.EqualTo(true));
+            var resumedAddComponent = (MCPRequestQueue.RequestTicket)addComponentArguments[1];
+            Assert.That(resumedAddComponent.Status, Is.EqualTo(MCPRequestQueue.RequestStatus.Queued));
+            Assert.That(resumedAddComponent.ResumeCount, Is.EqualTo(1));
+            var resumedBody = RequireDictionary(MiniJson.Deserialize(resumedAddComponent.PersistentBody));
+            Assert.That(resumedBody["_resumeCount"], Is.EqualTo(1));
+            Assert.That(RequireDictionary(resumedBody["_resumeProgress"])["phase"],
+                Is.EqualTo("mutation-prepared"));
+
+            var invalidAddComponentSnapshot = Snapshot("prefab-asset/add-component", false);
+            invalidAddComponentSnapshot["progress"] = new Dictionary<string, object>
+            {
+                { "phase", "mutation-prepared" },
+            };
+            var invalidAddComponentArguments = new object[] { invalidAddComponentSnapshot, null };
+            Assert.That(restore.Invoke(null, invalidAddComponentArguments), Is.EqualTo(true));
+            Assert.That(((MCPRequestQueue.RequestTicket)invalidAddComponentArguments[1]).Status,
+                Is.EqualTo(MCPRequestQueue.RequestStatus.UncertainAfterReload));
+        }
+
+        [Test]
+        public void AddComponentDeferred_ReconcilesSavedMutationAfterReloadWithoutDuplicatingIt()
+        {
+            CreateTestPrefab();
+            var added = RequireDictionary(MCPPrefabAssetCommands.AddComponent(
+                new Dictionary<string, object>
+                {
+                    { "assetPath", PREFAB_PATH },
+                    { "prefabPath", "Source" },
+                    { "componentType", typeof(BoxCollider).FullName },
+                }));
+            Assert.That(added["success"], Is.EqualTo(true));
+
+            object deferredResult = null;
+            MCPPrefabAssetCommands.AddComponentDeferred(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "prefabPath", "Source" },
+                { "componentType", typeof(BoxCollider).FullName },
+                { "refreshAssets", false },
+                { "typeResolveStableMs", 0 },
+                { "_resumeCount", 1 },
+                { "_resumeProgress", new Dictionary<string, object>
+                    {
+                        { "phase", "mutation-prepared" },
+                        { "baselineComponentCount", 0 },
+                        { "startedAtUtc", DateTime.UtcNow.AddSeconds(-1).ToString("O") },
+                        { "deadlineUtc", DateTime.UtcNow.AddSeconds(20).ToString("O") },
+                    }
+                },
+            }, value => deferredResult = value, _ => { });
+
+            var reconciled = RequireDictionary(deferredResult);
+            Assert.That(reconciled["success"], Is.EqualTo(true));
+            Assert.That(reconciled["reconciledAfterReload"], Is.EqualTo(true));
+            Assert.That(reconciled["componentCountBefore"], Is.EqualTo(0));
+            Assert.That(reconciled["componentCountAfter"], Is.EqualTo(1));
+
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                Assert.That(root.transform.Find("Source").GetComponents<BoxCollider>(), Has.Length.EqualTo(1));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [Test]
+        public void AddComponentDeferred_ReplaysPreparedMutationWhenReadbackShowsItWasNotSaved()
+        {
+            CreateTestPrefab();
+            object deferredResult = null;
+            MCPPrefabAssetCommands.AddComponentDeferred(new Dictionary<string, object>
+            {
+                { "assetPath", PREFAB_PATH },
+                { "prefabPath", "Source" },
+                { "componentType", typeof(BoxCollider).FullName },
+                { "refreshAssets", false },
+                { "typeResolveStableMs", 0 },
+                { "_resumeCount", 1 },
+                { "_resumeProgress", new Dictionary<string, object>
+                    {
+                        { "phase", "mutation-prepared" },
+                        { "baselineComponentCount", 0 },
+                        { "startedAtUtc", DateTime.UtcNow.AddSeconds(-1).ToString("O") },
+                        { "deadlineUtc", DateTime.UtcNow.AddSeconds(20).ToString("O") },
+                    }
+                },
+            }, value => deferredResult = value, _ => { });
+
+            var replayed = RequireDictionary(deferredResult);
+            Assert.That(replayed["success"], Is.EqualTo(true));
+            Assert.That(replayed["reconciledAfterReload"], Is.EqualTo(false));
+            var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
+            try
+            {
+                Assert.That(root.transform.Find("Source").GetComponents<BoxCollider>(), Has.Length.EqualTo(1));
+            }
+            finally
+            {
+                PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        [Test]
+        public void PrefabFileIo_RetriesWin32UserMappedFileError1224()
+        {
+            MethodInfo retryDefinition = typeof(MCPPrefabAssetCommands).GetMethod(
+                "RetryTransientFileIo", BindingFlags.Static | BindingFlags.NonPublic);
+            MethodInfo transientCheck = typeof(MCPPrefabAssetCommands).GetMethod(
+                "IsTransientFileIoException", BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(retryDefinition, Is.Not.Null);
+            Assert.That(transientCheck, Is.Not.Null);
+
+            var mappedFileError = new IOException("mapped file",
+                unchecked((int)0x800704C8));
+            Assert.That(transientCheck.Invoke(null, new object[] { mappedFileError }), Is.EqualTo(true));
+
+            int attempts = 0;
+            int delays = 0;
+            Func<int> operation = () =>
+            {
+                attempts++;
+                if (attempts < 3)
+                    throw new IOException("mapped file", unchecked((int)0x800704C8));
+                return 42;
+            };
+            Action<int> delay = _ => delays++;
+            object value = retryDefinition.MakeGenericMethod(typeof(int)).Invoke(null,
+                new object[] { operation, 6, delay });
+
+            Assert.That(value, Is.EqualTo(42));
+            Assert.That(attempts, Is.EqualTo(3));
+            Assert.That(delays, Is.EqualTo(2));
         }
 
         [Test]
@@ -3360,6 +3510,9 @@ namespace UnityMCP.Editor.Tests
                 }));
 
             Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(result["persisted"], Is.EqualTo(true));
+            Assert.That(result["persistenceVerifiedBy"], Is.EqualTo("serialized-readback"));
+            Assert.That(result["recoveredFromSaveException"], Is.EqualTo(false));
             var root = PrefabUtility.LoadPrefabContents(PREFAB_PATH);
             try
             {

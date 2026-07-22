@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.17] - 2026-07-22
+
+- Made `prefab-asset/add-component` persist its wait/mutation phase before `AssetDatabase.Refresh`, resume the same deferred request after a Domain Reload, and reconcile the saved component count before deciding whether to complete or replay the mutation.
+- Retry transient prefab file operations for Win32 sharing, lock, and user-mapped-file errors (including 1224), write normalized YAML through atomic replacement, and treat exhausted post-save normalization as a warning instead of overriding a successful Unity save.
+- Verify `prefab-asset/set-property` through serialized Unity readback and recover a successful result when the requested value persisted despite a save-path exception.
+
 ## [3.3.16] - 2026-07-21
 
 - Added optional `layer` support to `prefab-asset/add-gameobject` and transaction `addGameObject` operations, with parent-layer inheritance when omitted and final Layer readback in results.

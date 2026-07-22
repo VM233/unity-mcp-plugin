@@ -58,7 +58,7 @@ namespace UnityMCP.Editor
             { "packages/search", (args, resolve, _) => MCPPackageManagerCommands.SearchPackageDeferred(args, resolve) },
             { "profiler/memory-snapshot", (args, resolve, _) =>
                 MCPMemoryProfilerCommands.TakeMemorySnapshot(args, resolve) },
-            { "prefab-asset/add-component", (args, resolve, _) => MCPPrefabAssetCommands.AddComponentDeferred(args, resolve) },
+            { "prefab-asset/add-component", MCPPrefabAssetCommands.AddComponentDeferred },
             { "prefab-asset/configure-component", MCPPrefabAssetCommands.ConfigureComponentDeferred },
             { "prefab-asset/transaction-edit", MCPPrefabAssetCommands.TransactionEditDeferred },
             { "asset/import", MCPAssetCommands.ImportDeferred },
@@ -426,8 +426,10 @@ namespace UnityMCP.Editor
                 }
                 if (_deferredRoutes.TryGetValue(apiPath, out var deferredHandler))
                 {
-                    var result = MCPRequestQueue.ExecuteDeferredWithTracking(agentId, apiPath,
-                        (resolve, progress) => deferredHandler(ParseJson(body), resolve, progress));
+                    string requestKey = BuildRequestKey(agentId, apiPath, request, requestArgs);
+                    var result = MCPRequestQueue.ExecutePersistentDeferredWithTracking(agentId, apiPath,
+                        (resolve, progress) => deferredHandler(ParseJson(body), resolve, progress),
+                        body, requestKey);
                     SendJson(response, 200, result);
                     return;
                 }

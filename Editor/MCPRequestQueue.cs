@@ -228,28 +228,22 @@ namespace UnityMCP.Editor
         public static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
             Action<Action<object>, Action<object>> deferredAction)
         {
-            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, null, false, out _);
+            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, null, null, false,
+                out _);
         }
 
         public static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
             Action<Action<object>, Action<object>> deferredAction, string requestKey, out bool reused)
         {
-            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, requestKey, true, out reused);
+            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, null, requestKey, true,
+                out reused);
         }
 
         public static RequestTicket SubmitPersistentDeferredRequest(string agentId, string actionName,
             Action<Action<object>, Action<object>> deferredAction, string body, string requestKey, out bool reused)
         {
-            var ticket = SubmitDeferredRequest(agentId, actionName, deferredAction, null, requestKey, true,
-                out reused);
-            lock (_queueLock)
-            {
-                ticket.PersistentBody = body ?? "";
-                ticket.PersistentMethod = "POST";
-                ticket.IsReadOnly = MCPToolMetadata.IsRouteReadOnly(actionName);
-                PersistTicketSnapshotsLocked();
-            }
-            return ticket;
+            return SubmitDeferredRequest(agentId, actionName, deferredAction, null, body ?? "",
+                requestKey, true, out reused);
         }
 
         public static RequestTicket SubmitResumableEditorIdleWait(string agentId,
@@ -267,12 +261,13 @@ namespace UnityMCP.Editor
             string requestKey = MCPEditorCommands.BuildWaitForIdleRequestKey(persistentArguments);
             return SubmitDeferredRequest(agentId, "wait/editor-idle",
                 (resolve, _) => MCPEditorCommands.WaitForIdle(persistentArguments, resolve),
-                persistentArguments, requestKey, false, out reused);
+                persistentArguments, null, requestKey, false, out reused);
         }
 
         private static RequestTicket SubmitDeferredRequest(string agentId, string actionName,
             Action<Action<object>, Action<object>> deferredAction,
-            Dictionary<string, object> persistentArguments, string requestKey, bool reuseCompleted,
+            Dictionary<string, object> persistentArguments, string persistentBody, string requestKey,
+            bool reuseCompleted,
             out bool reused)
         {
             EnsurePersistentSnapshotsLoaded();
@@ -317,6 +312,8 @@ namespace UnityMCP.Editor
                     SubmittedAt    = DateTime.UtcNow,
                     ProgressiveDeferredAction = deferredAction,
                     PersistentArguments = persistentArguments,
+                    PersistentBody = persistentBody,
+                    PersistentMethod = persistentBody == null ? null : "POST",
                     RequestKey = requestKey,
                     ResumeCount = GetInt(persistentArguments, "_resumeCount", 0),
                     IsReadOnly = MCPToolMetadata.IsRouteReadOnly(actionName),
@@ -365,6 +362,14 @@ namespace UnityMCP.Editor
             Action<Action<object>, Action<object>> deferredAction)
         {
             var ticket = SubmitDeferredRequest(agentId, actionName, deferredAction);
+            return WaitForTicket(ticket);
+        }
+
+        public static object ExecutePersistentDeferredWithTracking(string agentId, string actionName,
+            Action<Action<object>, Action<object>> deferredAction, string body, string requestKey)
+        {
+            var ticket = SubmitPersistentDeferredRequest(agentId, actionName, deferredAction, body,
+                requestKey, out _);
             return WaitForTicket(ticket);
         }
 
@@ -1235,7 +1240,7 @@ namespace UnityMCP.Editor
                 return false;
 
             if (previousStatus == RequestStatus.Executing && !ticket.IsReadOnly &&
-                !IsReloadResumableMutation(actionName))
+                !IsReloadResumableMutation(actionName, ticket.Progress))
             {
                 ticket.Status = RequestStatus.UncertainAfterReload;
                 ticket.CompletedAt = DateTime.UtcNow;
@@ -1261,6 +1266,8 @@ namespace UnityMCP.Editor
             var resumedTicket = ticket;
             if (MCPBridgeServer.IsDeferredRoute(resumedTicket.ActionName))
             {
+                resumedTicket.PersistentBody = BuildResumedDeferredBody(resumedTicket.PersistentBody,
+                    resumedTicket.ResumeCount, resumedTicket.Progress);
                 resumedTicket.ProgressiveDeferredAction = (resolve, progressCallback) =>
                     MCPBridgeServer.ExecutePersistedDeferredRoute(resumedTicket.ActionName,
                         resumedTicket.PersistentBody,
@@ -1274,13 +1281,29 @@ namespace UnityMCP.Editor
             return true;
         }
 
-        private static bool IsReloadResumableMutation(string actionName)
+        private static bool IsReloadResumableMutation(string actionName, object progress)
         {
             // Asset refresh persists its own job before entering AssetDatabase.Refresh,
             // and MCPAssetRefreshWorkflow.Start reuses that job for the same request ID.
             // Play Mode transitions are explicit target states (never toggles), so replaying
             // the persisted deferred request after a domain reload is also idempotent.
-            return actionName == "asset/refresh" || actionName == "editor/play-mode";
+            if (actionName == "asset/refresh" || actionName == "editor/play-mode")
+                return true;
+
+            // Prefab add-component records its phase before refreshing or mutating. On resume it
+            // either continues the pre-mutation wait or reconciles the saved component count.
+            return actionName == "prefab-asset/add-component" &&
+                   MCPPrefabAssetCommands.CanResumeAddComponentAfterReload(progress);
+        }
+
+        private static string BuildResumedDeferredBody(string body, int resumeCount, object progress)
+        {
+            var arguments = MiniJson.Deserialize(body ?? "{}") as Dictionary<string, object> ??
+                            new Dictionary<string, object>();
+            arguments["_resumeCount"] = resumeCount;
+            if (progress != null)
+                arguments["_resumeProgress"] = progress;
+            return MiniJson.Serialize(arguments);
         }
 
         private static void EnqueueRestoredTicketLocked(RequestTicket ticket)

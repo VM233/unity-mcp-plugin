@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
+using System.Threading;
 using UnityEditor;
 using UnityEngine;
 
@@ -16,6 +17,10 @@ namespace UnityMCP.Editor
     /// </summary>
     public static class MCPPrefabAssetCommands
     {
+        private const string AddComponentWaitingForTypePhase = "waiting-for-type";
+        private const string AddComponentMutationPreparedPhase = "mutation-prepared";
+        private const int TransientFileIoMaxAttempts = 6;
+
         // ─── Hierarchy ───
 
         /// <summary>
@@ -157,11 +162,17 @@ namespace UnityMCP.Editor
             if (root == null)
                 return new { error = $"Failed to load prefab at '{assetPath}'" };
 
+            object expectedValue = null;
+            bool hasExpectedValue = false;
+            string prefabName = root.name;
+            string gameObjectName = "";
+            var saveWarnings = new List<string>();
             try
             {
                 var go = FindInPrefab(root, prefabPath);
                 if (go == null)
                     return new { error = $"GameObject '{prefabPath}' not found in prefab" };
+                gameObjectName = go.name;
 
                 Type type = MCPComponentCommands.FindType(componentType);
                 if (type == null)
@@ -178,27 +189,122 @@ namespace UnityMCP.Editor
 
                 MCPComponentCommands.SetSerializedValue(prop, args["value"]);
                 serialized.ApplyModifiedProperties();
+                expectedValue = MCPComponentCommands.GetSerializedValue(prop);
+                hasExpectedValue = true;
 
-                SavePrefabAssetNormalized(root, assetPath, BuildExplicitYamlPropertyRoots(propertyName));
-
-                var result = new Dictionary<string, object>
+                SavePrefabAssetNormalized(root, assetPath, BuildExplicitYamlPropertyRoots(propertyName),
+                    saveWarnings);
+                if (!TryVerifyPrefabProperty(assetPath, prefabPath, type, propertyName, expectedValue,
+                        out object actualValue, out string verificationError))
                 {
-                    { "success", true },
-                    { "prefab", root.name },
-                    { "gameObject", go.name },
-                    { "component", componentType },
-                    { "property", propertyName },
-                };
+                    throw new InvalidOperationException(
+                        $"Prefab save could not be verified by serialized readback: {verificationError}. " +
+                        $"Expected {MiniJson.Serialize(expectedValue)}, read {MiniJson.Serialize(actualValue)}.");
+                }
+
+                var result = BuildSetPropertySuccess(prefabName, gameObjectName, componentType,
+                    propertyName, saveWarnings, false, null);
                 AddPrefabFileDiff(result, beforeSnapshot, assetPath, args);
                 return result;
             }
             catch (Exception ex)
             {
+                if (hasExpectedValue && TryVerifyPrefabProperty(assetPath, prefabPath,
+                        MCPComponentCommands.FindType(componentType), propertyName, expectedValue,
+                        out _, out _))
+                {
+                    saveWarnings.Add(
+                        $"The save path raised '{ex.GetBaseException().Message}', but serialized readback " +
+                        "confirmed the requested value was persisted.");
+                    var recovered = BuildSetPropertySuccess(prefabName, gameObjectName, componentType,
+                        propertyName, saveWarnings, true, ex.GetBaseException().Message);
+                    AddPrefabFileDiff(recovered, beforeSnapshot, assetPath, args);
+                    return recovered;
+                }
                 return new { error = $"Failed to set property: {ex.Message}" };
             }
             finally
             {
                 PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        private static Dictionary<string, object> BuildSetPropertySuccess(string prefabName,
+            string gameObjectName, string componentType, string propertyName, IList<string> warnings,
+            bool recoveredFromSaveException, string saveException)
+        {
+            var result = new Dictionary<string, object>
+            {
+                { "success", true },
+                { "prefab", prefabName },
+                { "gameObject", gameObjectName },
+                { "component", componentType },
+                { "property", propertyName },
+                { "persisted", true },
+                { "persistenceVerifiedBy", "serialized-readback" },
+                { "recoveredFromSaveException", recoveredFromSaveException },
+            };
+            if (!string.IsNullOrEmpty(saveException))
+                result["saveException"] = saveException;
+            if (warnings != null && warnings.Count > 0)
+                result["warnings"] = warnings.ToArray();
+            return result;
+        }
+
+        private static bool TryVerifyPrefabProperty(string assetPath, string prefabPath, Type componentType,
+            string propertyName, object expectedValue, out object actualValue, out string error)
+        {
+            actualValue = null;
+            error = "";
+            if (componentType == null)
+            {
+                error = "component type could not be resolved";
+                return false;
+            }
+
+            try
+            {
+                var prefabRoot = AssetDatabase.LoadAssetAtPath<GameObject>(assetPath);
+                if (prefabRoot == null)
+                {
+                    error = $"prefab '{assetPath}' could not be loaded";
+                    return false;
+                }
+
+                var gameObject = FindInPrefab(prefabRoot, prefabPath);
+                if (gameObject == null)
+                {
+                    error = $"GameObject '{prefabPath}' was not found";
+                    return false;
+                }
+
+                var component = gameObject.GetComponent(componentType);
+                if (component == null)
+                {
+                    error = $"component '{componentType.FullName}' was not found";
+                    return false;
+                }
+
+                var serialized = new SerializedObject(component);
+                serialized.Update();
+                var property = serialized.FindProperty(propertyName);
+                if (property == null)
+                {
+                    error = $"property '{propertyName}' was not found";
+                    return false;
+                }
+
+                actualValue = MCPComponentCommands.GetSerializedValue(property);
+                if (MiniJson.Serialize(actualValue) == MiniJson.Serialize(expectedValue))
+                    return true;
+
+                error = "serialized value did not match";
+                return false;
+            }
+            catch (Exception ex)
+            {
+                error = ex.GetBaseException().Message;
+                return false;
             }
         }
 
@@ -257,7 +363,8 @@ namespace UnityMCP.Editor
             }
         }
 
-        public static void AddComponentDeferred(Dictionary<string, object> args, Action<object> resolve)
+        public static void AddComponentDeferred(Dictionary<string, object> args, Action<object> resolve,
+            Action<object> progress)
         {
             string componentType = GetString(args, "componentType");
             if (string.IsNullOrEmpty(componentType))
@@ -275,9 +382,16 @@ namespace UnityMCP.Editor
             int timeoutMs = Math.Max(1, GetInt(args, "typeResolveTimeoutMs", 30000));
             int stableMs = Math.Max(0, GetInt(args, "typeResolveStableMs", 500));
             bool refreshAssets = GetBool(args, "refreshAssets", true);
-            double startTime = EditorApplication.timeSinceStartup;
+            string assetPath = GetString(args, "assetPath");
+            string prefabPath = GetString(args, "prefabPath");
+            var resumeProgress = GetDictionary(args, "_resumeProgress");
+            string resumePhase = GetString(resumeProgress, "phase");
+            int baselineComponentCount = GetInt(resumeProgress, "baselineComponentCount", -1);
+            DateTime startedAtUtc = GetDateTime(resumeProgress, "startedAtUtc", DateTime.UtcNow);
+            DateTime deadlineUtc = GetDateTime(resumeProgress, "deadlineUtc",
+                startedAtUtc.AddMilliseconds(timeoutMs));
             double stableStartTime = -1;
-            bool refreshRequested = false;
+            bool refreshRequested = resumePhase == AddComponentWaitingForTypePhase;
 
             EditorApplication.CallbackFunction tick = null;
             Action<object> complete = result =>
@@ -291,14 +405,19 @@ namespace UnityMCP.Editor
             {
                 try
                 {
-                    if (refreshAssets && refreshRequested == false)
-                    {
-                        refreshRequested = true;
-                        AssetDatabase.Refresh();
-                    }
-
                     bool editorBusy = EditorApplication.isCompiling || EditorApplication.isUpdating;
                     Type resolvedType = MCPComponentCommands.FindType(componentType);
+
+                    if (resolvedType == null && editorBusy == false && refreshAssets &&
+                        refreshRequested == false)
+                    {
+                        refreshRequested = true;
+                        progress?.Invoke(BuildAddComponentProgress(AddComponentWaitingForTypePhase,
+                            assetPath, prefabPath, componentType, -1, startedAtUtc, deadlineUtc));
+                        AssetDatabase.Refresh();
+                        editorBusy = EditorApplication.isCompiling || EditorApplication.isUpdating;
+                        resolvedType = MCPComponentCommands.FindType(componentType);
+                    }
 
                     if (resolvedType != null && editorBusy == false)
                     {
@@ -308,7 +427,65 @@ namespace UnityMCP.Editor
                         double stableElapsedMs = (EditorApplication.timeSinceStartup - stableStartTime) * 1000d;
                         if (stableElapsedMs >= stableMs)
                         {
-                            complete(AddComponent(args));
+                            if (resumePhase == AddComponentMutationPreparedPhase)
+                            {
+                                if (!TryGetPrefabComponentCount(assetPath, prefabPath, resolvedType,
+                                        out int persistedCount, out string prefabName,
+                                        out string gameObjectName, out string reconciliationError))
+                                {
+                                    complete(MCPResponse.Error(reconciliationError,
+                                        "prefab_add_component_reconciliation_failed"));
+                                    return;
+                                }
+
+                                if (persistedCount == baselineComponentCount + 1)
+                                {
+                                    complete(BuildReconciledAddComponentResult(args, prefabName,
+                                        gameObjectName, resolvedType, baselineComponentCount,
+                                        persistedCount));
+                                    return;
+                                }
+
+                                if (persistedCount != baselineComponentCount)
+                                {
+                                    complete(MCPResponse.Error(
+                                        $"Cannot reconcile prefab component count after Domain Reload. " +
+                                        $"Expected {baselineComponentCount} or {baselineComponentCount + 1}, " +
+                                        $"found {persistedCount}.",
+                                        "prefab_add_component_reconciliation_conflict", false,
+                                        new Dictionary<string, object>
+                                        {
+                                            { "assetPath", assetPath },
+                                            { "prefabPath", prefabPath ?? "" },
+                                            { "componentType", componentType },
+                                            { "baselineComponentCount", baselineComponentCount },
+                                            { "persistedComponentCount", persistedCount },
+                                        }));
+                                    return;
+                                }
+                            }
+                            else if (!TryGetPrefabComponentCount(assetPath, prefabPath, resolvedType,
+                                         out baselineComponentCount, out _, out _,
+                                         out string preflightError))
+                            {
+                                complete(MCPResponse.Error(preflightError,
+                                    "prefab_add_component_preflight_failed"));
+                                return;
+                            }
+
+                            progress?.Invoke(BuildAddComponentProgress(AddComponentMutationPreparedPhase,
+                                assetPath, prefabPath, componentType, baselineComponentCount,
+                                startedAtUtc, deadlineUtc));
+                            object result = AddComponent(args);
+                            if (result is Dictionary<string, object> resultDictionary &&
+                                resultDictionary.TryGetValue("success", out object successValue) &&
+                                successValue is bool succeeded && succeeded)
+                            {
+                                resultDictionary["componentCountBefore"] = baselineComponentCount;
+                                resultDictionary["componentCountAfter"] = baselineComponentCount + 1;
+                                resultDictionary["reconciledAfterReload"] = false;
+                            }
+                            complete(result);
                             return;
                         }
                     }
@@ -317,8 +494,8 @@ namespace UnityMCP.Editor
                         stableStartTime = -1;
                     }
 
-                    double elapsedMs = (EditorApplication.timeSinceStartup - startTime) * 1000d;
-                    if (elapsedMs >= timeoutMs)
+                    double elapsedMs = Math.Max(0d, (DateTime.UtcNow - startedAtUtc).TotalMilliseconds);
+                    if (DateTime.UtcNow >= deadlineUtc)
                     {
                         complete(new Dictionary<string, object>
                         {
@@ -345,6 +522,108 @@ namespace UnityMCP.Editor
 
             EditorApplication.update += tick;
             tick();
+        }
+
+        internal static bool CanResumeAddComponentAfterReload(object progress)
+        {
+            if (progress == null)
+                return true;
+            if (!(progress is Dictionary<string, object> state))
+                return false;
+
+            string phase = GetString(state, "phase");
+            if (phase == AddComponentWaitingForTypePhase)
+                return true;
+            return phase == AddComponentMutationPreparedPhase &&
+                   GetInt(state, "baselineComponentCount", -1) >= 0;
+        }
+
+        private static Dictionary<string, object> BuildAddComponentProgress(string phase,
+            string assetPath, string prefabPath, string componentType, int baselineComponentCount,
+            DateTime startedAtUtc, DateTime deadlineUtc)
+        {
+            var state = new Dictionary<string, object>
+            {
+                { "phase", phase },
+                { "assetPath", assetPath ?? "" },
+                { "prefabPath", prefabPath ?? "" },
+                { "componentType", componentType ?? "" },
+                { "startedAtUtc", startedAtUtc.ToString("O") },
+                { "deadlineUtc", deadlineUtc.ToString("O") },
+            };
+            if (baselineComponentCount >= 0)
+                state["baselineComponentCount"] = baselineComponentCount;
+            return state;
+        }
+
+        private static bool TryGetPrefabComponentCount(string assetPath, string prefabPath, Type componentType,
+            out int count, out string prefabName, out string gameObjectName, out string error)
+        {
+            count = -1;
+            prefabName = "";
+            gameObjectName = "";
+            error = "";
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                error = "assetPath is required";
+                return false;
+            }
+
+            GameObject root = null;
+            try
+            {
+                root = PrefabUtility.LoadPrefabContents(assetPath);
+                if (root == null)
+                {
+                    error = $"Failed to load prefab at '{assetPath}'";
+                    return false;
+                }
+
+                var gameObject = FindInPrefab(root, prefabPath);
+                if (gameObject == null)
+                {
+                    error = $"GameObject '{prefabPath}' not found in prefab";
+                    return false;
+                }
+
+                prefabName = root.name;
+                gameObjectName = gameObject.name;
+                count = gameObject.GetComponents(componentType).Length;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                error = ex.GetBaseException().Message;
+                return false;
+            }
+            finally
+            {
+                if (root != null)
+                    PrefabUtility.UnloadPrefabContents(root);
+            }
+        }
+
+        private static Dictionary<string, object> BuildReconciledAddComponentResult(
+            Dictionary<string, object> args, string prefabName, string gameObjectName, Type componentType,
+            int componentCountBefore, int componentCountAfter)
+        {
+            var result = new Dictionary<string, object>
+            {
+                { "success", true },
+                { "prefab", prefabName },
+                { "assetPath", GetString(args, "assetPath") },
+                { "gameObject", gameObjectName },
+                { "prefabPath", GetString(args, "prefabPath") },
+                { "component", componentType.Name },
+                { "fullType", componentType.FullName },
+                { "componentCountBefore", componentCountBefore },
+                { "componentCountAfter", componentCountAfter },
+                { "reconciledAfterReload", true },
+                { "resumeCount", GetInt(args, "_resumeCount", 1) },
+            };
+            if (GetBool(args, "includePrefabFileDiff", true))
+                result["prefabFileDiffUnavailable"] = "reconciled-after-domain-reload";
+            return result;
         }
 
         /// <summary>
@@ -2438,49 +2717,164 @@ namespace UnityMCP.Editor
         }
 
         private static GameObject SavePrefabAssetNormalized(GameObject root, string assetPath,
-            ISet<string> explicitYamlPropertyRoots = null)
+            ISet<string> explicitYamlPropertyRoots = null, ICollection<string> warnings = null)
         {
             string absolutePath = GetAbsoluteAssetPath(assetPath);
-            byte[] beforeBytes = !string.IsNullOrEmpty(absolutePath) && File.Exists(absolutePath)
-                ? File.ReadAllBytes(absolutePath)
-                : null;
-            var savedRoot = PrefabUtility.SaveAsPrefabAsset(root, assetPath);
-            if (savedRoot != null)
-                StabilizePrefabYaml(assetPath, beforeBytes, explicitYamlPropertyRoots);
+            byte[] beforeBytes = null;
+            if (!string.IsNullOrEmpty(absolutePath) && File.Exists(absolutePath))
+            {
+                try
+                {
+                    beforeBytes = ReadAllBytesWithRetry(absolutePath);
+                }
+                catch (Exception ex)
+                {
+                    string warning =
+                        $"Could not capture prefab YAML before saving '{assetPath}': {ex.GetBaseException().Message}";
+                    warnings?.Add(warning);
+                    Debug.LogWarning($"[Unity MCP] {warning}");
+                }
+            }
+
+            var savedRoot = RetryTransientFileIo(
+                () => PrefabUtility.SaveAsPrefabAsset(root, assetPath),
+                TransientFileIoMaxAttempts, null);
+            if (savedRoot != null &&
+                !TryStabilizePrefabYaml(assetPath, beforeBytes, explicitYamlPropertyRoots,
+                    out string stabilizationWarning))
+            {
+                // Whitespace/block-order stabilization is auxiliary. SaveAsPrefabAsset already
+                // persisted the authoritative Unity data, so an exhausted Win32 file lock must
+                // not turn a successful mutation into an unknown/failed result.
+                warnings?.Add(stabilizationWarning);
+                Debug.LogWarning($"[Unity MCP] {stabilizationWarning}");
+            }
             return savedRoot;
         }
 
-        private static void StabilizePrefabYaml(string assetPath, byte[] beforeBytes,
-            ISet<string> explicitYamlPropertyRoots)
+        private static bool TryStabilizePrefabYaml(string assetPath, byte[] beforeBytes,
+            ISet<string> explicitYamlPropertyRoots, out string warning)
         {
-            string absolutePath = GetAbsoluteAssetPath(assetPath);
-            if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
-                return;
-
-            byte[] afterBytes = File.ReadAllBytes(absolutePath);
-            bool hasUtf8Bom = HasUtf8Bom(beforeBytes) || beforeBytes == null && HasUtf8Bom(afterBytes);
-            string afterText = DecodeUtf8(afterBytes);
-            string normalized = NormalizeYamlWhitespace(afterText);
-
-            if (beforeBytes != null)
+            warning = "";
+            try
             {
-                string beforeText = DecodeUtf8(beforeBytes);
-                if (TryPreserveYamlBlockOrder(beforeText, normalized, explicitYamlPropertyRoots,
-                        out string reordered))
-                    normalized = reordered;
+                string absolutePath = GetAbsoluteAssetPath(assetPath);
+                if (string.IsNullOrEmpty(absolutePath) || !File.Exists(absolutePath))
+                    return true;
+
+                byte[] afterBytes = ReadAllBytesWithRetry(absolutePath);
+                bool hasUtf8Bom = HasUtf8Bom(beforeBytes) || beforeBytes == null && HasUtf8Bom(afterBytes);
+                string afterText = DecodeUtf8(afterBytes);
+                string normalized = NormalizeYamlWhitespace(afterText);
+
+                if (beforeBytes != null)
+                {
+                    string beforeText = DecodeUtf8(beforeBytes);
+                    if (TryPreserveYamlBlockOrder(beforeText, normalized, explicitYamlPropertyRoots,
+                            out string reordered))
+                        normalized = reordered;
+                }
+
+                string currentText = DecodeUtf8(afterBytes);
+                if (normalized == currentText && hasUtf8Bom == HasUtf8Bom(afterBytes))
+                    return true;
+
+                WriteAllTextAtomicallyWithRetry(absolutePath, normalized, hasUtf8Bom);
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+                return true;
             }
-
-            string currentText = DecodeUtf8(afterBytes);
-            if (normalized == currentText && hasUtf8Bom == HasUtf8Bom(afterBytes))
-                return;
-
-            File.WriteAllText(absolutePath, normalized, new UTF8Encoding(hasUtf8Bom));
-            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+            catch (Exception ex)
+            {
+                warning = $"Prefab '{assetPath}' was saved, but post-save YAML stabilization was skipped: " +
+                          ex.GetBaseException().Message;
+                return false;
+            }
         }
 
         private static string NormalizeYamlWhitespace(string text)
         {
             return Regex.Replace(text ?? "", @"[\t ]+(?=\r?$)", "", RegexOptions.Multiline);
+        }
+
+        private static byte[] ReadAllBytesWithRetry(string path)
+        {
+            return RetryTransientFileIo(() => File.ReadAllBytes(path), TransientFileIoMaxAttempts, null);
+        }
+
+        private static void WriteAllTextAtomicallyWithRetry(string path, string contents, bool includeUtf8Bom)
+        {
+            string directory = Path.GetDirectoryName(path);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            string tempPath = path + ".unity-mcp-" + Guid.NewGuid().ToString("N") + ".tmp";
+            try
+            {
+                byte[] payload = new UTF8Encoding(false).GetBytes(contents ?? "");
+                if (includeUtf8Bom)
+                {
+                    byte[] preamble = new UTF8Encoding(true).GetPreamble();
+                    var withPreamble = new byte[preamble.Length + payload.Length];
+                    Buffer.BlockCopy(preamble, 0, withPreamble, 0, preamble.Length);
+                    Buffer.BlockCopy(payload, 0, withPreamble, preamble.Length, payload.Length);
+                    payload = withPreamble;
+                }
+                File.WriteAllBytes(tempPath, payload);
+
+                RetryTransientFileIo(() =>
+                {
+                    if (!File.Exists(path))
+                    {
+                        File.Move(tempPath, path);
+                        return true;
+                    }
+
+                    File.Replace(tempPath, path, null, true);
+                    return true;
+                }, TransientFileIoMaxAttempts, null);
+            }
+            finally
+            {
+                if (File.Exists(tempPath))
+                    File.Delete(tempPath);
+            }
+        }
+
+        private static T RetryTransientFileIo<T>(Func<T> operation, int maxAttempts,
+            Action<int> delay)
+        {
+            if (operation == null)
+                throw new ArgumentNullException(nameof(operation));
+            maxAttempts = Math.Max(1, maxAttempts);
+            delay ??= milliseconds => Thread.Sleep(milliseconds);
+
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    return operation();
+                }
+                catch (Exception ex) when (attempt < maxAttempts && IsTransientFileIoException(ex))
+                {
+                    delay(Math.Min(250, 10 << Math.Min(attempt - 1, 4)));
+                }
+            }
+        }
+
+        private static bool IsTransientFileIoException(Exception exception)
+        {
+            for (Exception current = exception; current != null; current = current.InnerException)
+            {
+                if (!(current is IOException ioException))
+                    continue;
+
+                int win32Code = ioException.HResult & 0xFFFF;
+                // ERROR_SHARING_VIOLATION, ERROR_LOCK_VIOLATION, and
+                // ERROR_USER_MAPPED_FILE (the reported Win32 1224 failure).
+                if (win32Code == 32 || win32Code == 33 || win32Code == 1224)
+                    return true;
+            }
+            return false;
         }
 
         private static bool TryPreserveYamlBlockOrder(string beforeText, string afterText,
@@ -2799,12 +3193,16 @@ namespace UnityMCP.Editor
                 }
 
                 byte[] currentBytes = File.Exists(snapshot.AbsolutePath)
-                    ? File.ReadAllBytes(snapshot.AbsolutePath)
+                    ? ReadAllBytesWithRetry(snapshot.AbsolutePath)
                     : Array.Empty<byte>();
                 if (snapshot.Bytes != null && currentBytes.SequenceEqual(snapshot.Bytes))
                     return false;
 
-                File.WriteAllBytes(snapshot.AbsolutePath, snapshot.Bytes ?? Array.Empty<byte>());
+                RetryTransientFileIo(() =>
+                {
+                    File.WriteAllBytes(snapshot.AbsolutePath, snapshot.Bytes ?? Array.Empty<byte>());
+                    return true;
+                }, TransientFileIoMaxAttempts, null);
                 AssetDatabase.ImportAsset(snapshot.AssetPath, ImportAssetOptions.ForceUpdate);
                 return true;
             }
@@ -4127,8 +4525,10 @@ namespace UnityMCP.Editor
             try
             {
                 snapshot.Exists = File.Exists(snapshot.AbsolutePath);
-                snapshot.Bytes = snapshot.Exists ? File.ReadAllBytes(snapshot.AbsolutePath) : Array.Empty<byte>();
-                snapshot.Text = snapshot.Exists ? File.ReadAllText(snapshot.AbsolutePath) : "";
+                snapshot.Bytes = snapshot.Exists
+                    ? ReadAllBytesWithRetry(snapshot.AbsolutePath)
+                    : Array.Empty<byte>();
+                snapshot.Text = snapshot.Exists ? DecodeUtf8(snapshot.Bytes) : "";
             }
             catch (Exception ex)
             {
@@ -4187,6 +4587,17 @@ namespace UnityMCP.Editor
                 return defaultValue;
 
             return int.TryParse(args[key].ToString(), out int value) ? value : defaultValue;
+        }
+
+        private static DateTime GetDateTime(Dictionary<string, object> args, string key,
+            DateTime defaultValue)
+        {
+            if (args == null || !args.TryGetValue(key, out object raw) || raw == null)
+                return defaultValue;
+            return DateTime.TryParse(raw.ToString(), null,
+                System.Globalization.DateTimeStyles.RoundtripKind, out DateTime value)
+                ? value
+                : defaultValue;
         }
 
         private static string GetPrefabPath(GameObject root, GameObject go)
