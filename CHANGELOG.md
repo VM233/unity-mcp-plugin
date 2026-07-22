@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.18] - 2026-07-22
+
+- Classified project-context endpoints and category subroutes as read-only so `unity_get_project_context` no longer fails project-binding validation, while retaining explicit wrong-project rejection.
+
 ## [3.3.17] - 2026-07-22
 
 - Made `prefab-asset/add-component` persist its wait/mutation phase before `AssetDatabase.Refresh`, resume the same deferred request after a Domain Reload, and reconcile the saved component count before deciding whether to complete or replay the mutation.

@@ -102,6 +102,8 @@ namespace UnityMCP.Editor
                 "_meta/capabilities",
                 "_meta/routes",
                 "_meta/tools",
+                "context",
+                "context/*",
                 "queue/info",
                 "queue/status",
                 "asset/list",
@@ -573,7 +575,21 @@ namespace UnityMCP.Editor
 
         private static ToolProfile GetToolProfile(string route)
         {
-            return ToolProfiles.TryGetValue(route, out var profile) ? profile : ToolProfile.Lazy();
+            if (ToolProfiles.TryGetValue(route, out var profile))
+                return profile;
+
+            if (!string.IsNullOrEmpty(route))
+            {
+                int slashIndex = route.IndexOf('/');
+                if (slashIndex > 0)
+                {
+                    string familyRoute = route.Substring(0, slashIndex + 1) + "*";
+                    if (ToolProfiles.TryGetValue(familyRoute, out profile))
+                        return profile;
+                }
+            }
+
+            return ToolProfile.Lazy();
         }
 
         internal static bool IsRouteReadOnly(string route)

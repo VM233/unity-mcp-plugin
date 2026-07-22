@@ -2404,6 +2404,29 @@ namespace UnityMCP.Editor.Tests
             Assert.That(method.Invoke(null, readArguments), Is.EqualTo(false));
             Assert.That(readArguments[2], Is.Null);
 
+            foreach (string contextRoute in new[] { "context", "context/Architecture" })
+            {
+                var contextArguments = new object[]
+                {
+                    contextRoute, new Dictionary<string, object>(), null
+                };
+                Assert.That(method.Invoke(null, contextArguments), Is.EqualTo(false), contextRoute);
+                Assert.That(contextArguments[2], Is.Null, contextRoute);
+            }
+
+            var wrongProjectArguments = new object[]
+            {
+                "context/Architecture",
+                new Dictionary<string, object>
+                {
+                    { "expectedProjectPath", "Z:/__unity_mcp_wrong_project__" }
+                },
+                null
+            };
+            Assert.That(method.Invoke(null, wrongProjectArguments), Is.EqualTo(true));
+            Assert.That(RequireDictionary(wrongProjectArguments[2])["errorCode"],
+                Is.EqualTo("wrong_unity_project"));
+
             var copy = typeof(MCPBridgeServer).GetMethod("CopyArgumentIfMissing",
                 BindingFlags.Static | BindingFlags.NonPublic);
             Assert.That(copy, Is.Not.Null);
