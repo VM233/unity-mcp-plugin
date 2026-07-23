@@ -169,14 +169,31 @@ namespace UnityMCP.Editor
         private static object CapturePausedGameView(string path, string fullPath, int superSize)
         {
             double startedAt = EditorApplication.timeSinceStartup;
+            var result = CaptureGameViewRenderTexture(path, fullPath, superSize);
+            result["waitFrames"] = 0;
+            result["stableFrames"] = 0;
+            result["elapsedMs"] = Math.Round((EditorApplication.timeSinceStartup - startedAt) * 1000d, 2);
+            result["fileReady"] = GetBool(result, "success", false);
+            result["paused"] = true;
+            return result;
+        }
+
+        internal static Dictionary<string, object> CaptureGameViewRenderTexture(string path, int superSize = 1)
+        {
+            return CaptureGameViewRenderTexture(path, Path.GetFullPath(path), superSize);
+        }
+
+        private static Dictionary<string, object> CaptureGameViewRenderTexture(string path, string fullPath,
+            int superSize)
+        {
             Type gameViewType = typeof(EditorWindow).Assembly.GetType("UnityEditor.GameView");
             if (gameViewType == null)
             {
-                return MCPResponse.Error("Paused Game View capture is unavailable because UnityEditor.GameView could not be resolved.",
-                    "paused_game_view_unavailable", false, new Dictionary<string, object>
+                return MCPResponse.Error("Game View render-texture capture is unavailable because UnityEditor.GameView could not be resolved.",
+                    "game_view_render_texture_unavailable", false, new Dictionary<string, object>
                     {
                         { "path", path },
-                        { "paused", true },
+                        { "paused", EditorApplication.isPaused },
                     });
             }
 
@@ -186,23 +203,25 @@ namespace UnityMCP.Editor
                                     gameViews.FirstOrDefault();
             if (gameView == null)
             {
-                return MCPResponse.Error("Paused Game View capture requires an open Game View window.",
-                    "paused_game_view_unavailable", false, new Dictionary<string, object>
+                return MCPResponse.Error("Game View render-texture capture requires an open Game View window.",
+                    "game_view_render_texture_unavailable", false, new Dictionary<string, object>
                     {
                         { "path", path },
-                        { "paused", true },
+                        { "paused", EditorApplication.isPaused },
                     });
             }
 
+            gameView.Repaint();
+            RepaintImmediately(gameView);
             FieldInfo renderTextureField = gameViewType.GetField("m_RenderTexture", GameViewMemberFlags);
             var renderTexture = renderTextureField?.GetValue(gameView) as RenderTexture;
             if (renderTexture == null || renderTexture.IsCreated() == false)
             {
-                return MCPResponse.Error("The paused Game View does not have a completed render texture yet.",
-                    "paused_game_view_texture_unavailable", true, new Dictionary<string, object>
+                return MCPResponse.Error("The Game View does not have a completed render texture yet.",
+                    "game_view_render_texture_unavailable", true, new Dictionary<string, object>
                     {
                         { "path", path },
-                        { "paused", true },
+                        { "paused", EditorApplication.isPaused },
                         { "gameViewType", gameViewType.FullName },
                     });
             }
@@ -214,22 +233,29 @@ namespace UnityMCP.Editor
                 result["path"] = path;
                 result["fullPath"] = fullPath.Replace('\\', '/');
                 result["superSize"] = superSize;
-                result["waitFrames"] = 0;
-                result["stableFrames"] = 0;
-                result["elapsedMs"] = Math.Round((EditorApplication.timeSinceStartup - startedAt) * 1000d, 2);
-                result["fileReady"] = true;
-                result["paused"] = true;
-                result["captureMethod"] = "game_view_render_texture";
+                result["paused"] = EditorApplication.isPaused;
+                result["window"] = gameViewType.FullName;
+                result["floating"] = false;
+                result["coordinateMode"] = "render-texture";
+                result["captureMethod"] = "game-view-render-texture";
+                result["contentRect"] = new Dictionary<string, object>
+                {
+                    { "x", 0 },
+                    { "y", 0 },
+                    { "width", result["width"] },
+                    { "height", result["height"] },
+                };
+                result["warning"] = "";
                 return result;
             }
             catch (Exception ex)
             {
-                return MCPResponse.Error($"Could not capture the paused Game View: {ex.Message}",
-                    "paused_game_view_capture_failed", false, new Dictionary<string, object>
+                return MCPResponse.Error($"Could not capture the Game View render texture: {ex.Message}",
+                    "game_view_render_texture_capture_failed", false, new Dictionary<string, object>
                     {
                         { "path", path },
                         { "fullPath", fullPath.Replace('\\', '/') },
-                        { "paused", true },
+                        { "paused", EditorApplication.isPaused },
                     });
             }
         }
@@ -888,16 +914,16 @@ namespace UnityMCP.Editor
         }
 
         // ─── Capture an arbitrary EditorWindow (Inspector, Project, custom windows…) ───
-        // Unlike Game/Scene view (which ARE cameras and are captured by rendering the camera
-        // into a RenderTexture), an EditorWindow is an IMGUI/UI-Toolkit window with no camera.
-        // The only way to get its pixels is to capture the OS window, via the Win32 PrintWindow
-        // API (occlusion-proof: the window renders itself into an offscreen DC, so no raise/focus
-        // is needed). PLATFORM: Windows editor only — PrintWindow is a Win32 API with no macOS/
-        // Linux equivalent, so this command is unsupported there (returns a clear error).
+        // Unlike Game/Scene view (which ARE cameras and can be captured from a RenderTexture),
+        // a general EditorWindow has no public render target. Most windows use Win32 PrintWindow
+        // for an occlusion-proof capture. GPU-composited surfaces such as UI Builder's viewport
+        // require an on-screen desktop capture after temporarily raising the host window.
+        // PLATFORM: Windows editor only — these Win32 paths have no macOS/Linux equivalent.
         //
         // args: window (required — EditorWindow type FullName e.g. "UnityEditor.InspectorWindow",
         //       simple type name, or tab title); path (optional — default Assets/Screenshots/…,
-        //       any user-chosen .png path is honoured); maxDimension (optional, default 8192).
+        //       any user-chosen .png path is honoured); maxDimension (optional, default 8192);
+        //       captureMode (optional: auto, print-window, or screen).
         public static object CaptureEditorWindow(Dictionary<string, object> args)
         {
 #if UNITY_EDITOR_WIN
@@ -918,6 +944,15 @@ namespace UnityMCP.Editor
                 return Err(matchCount > 1
                     ? "Ambiguous: " + matchCount + " windows match '" + window + "'. Pass the exact type FullName."
                     : "No EditorWindow matches '" + window + "'.");
+
+            string captureMode = ResolveEditorWindowCaptureMode(
+                args != null && args.ContainsKey("captureMode") ? args["captureMode"]?.ToString() : "auto",
+                win.GetType().FullName ?? win.GetType().Name,
+                win.titleContent?.text ?? win.name);
+            if (string.IsNullOrEmpty(captureMode))
+            {
+                return Err("captureMode must be 'auto', 'print-window', or 'screen'.");
+            }
 
             var (pid, main) = ProcInfo();
             if (main == IntPtr.Zero) return Err("Could not resolve the main editor window handle.");
@@ -972,7 +1007,7 @@ namespace UnityMCP.Editor
                 }
 
                 return GrabAndEncode(hwnd, whole, px, py, pw, ph, pixelsPerPoint, path, maxDimension, win,
-                    floating);
+                    floating, captureMode);
             }
             finally
             {
@@ -984,7 +1019,7 @@ namespace UnityMCP.Editor
             return new Dictionary<string, object>
             {
                 { "success", false },
-                { "error", "CaptureEditorWindow is Windows-only: it uses the Win32 PrintWindow API to grab an EditorWindow's pixels, which has no macOS/Linux equivalent. For the game or scene view use screenshot/game or screenshot/scene (camera-based, cross-platform)." },
+                { "error", "CaptureEditorWindow is Windows-only: it uses Win32 window or desktop capture APIs, which have no macOS/Linux equivalent. For the game or scene view use screenshot/game or screenshot/scene (camera-based, cross-platform)." },
                 { "platform", Application.platform.ToString() },
             };
 #endif
@@ -1007,6 +1042,39 @@ namespace UnityMCP.Editor
                 Mathf.Max(1, Mathf.RoundToInt(panelRect.height * scaleY)));
         }
 
+        private static string ResolveEditorWindowCaptureMode(string requestedMode, string fullTypeName, string title)
+        {
+            string normalized = (requestedMode ?? "auto").Trim().ToLowerInvariant();
+            switch (normalized)
+            {
+                case "":
+                case "auto":
+                    return RequiresScreenCapture(fullTypeName, title) ? "screen" : "print-window";
+                case "print":
+                case "printwindow":
+                case "print-window":
+                case "offscreen":
+                    return "print-window";
+                case "desktop":
+                case "onscreen":
+                case "on-screen":
+                case "screen":
+                    return "screen";
+                default:
+                    return "";
+            }
+        }
+
+        private static bool RequiresScreenCapture(string fullTypeName, string title)
+        {
+            string type = fullTypeName ?? "";
+            string windowTitle = title ?? "";
+            return string.Equals(type, "UnityEditor.GameView", StringComparison.Ordinal) ||
+                   type.IndexOf("Unity.UI.Builder", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   type.IndexOf("UIBuilder", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                   string.Equals(windowTitle, "UI Builder", StringComparison.OrdinalIgnoreCase);
+        }
+
 #if UNITY_EDITOR_WIN
         static Dictionary<string, object> Err(string msg, int win32 = 0)
         {
@@ -1018,7 +1086,8 @@ namespace UnityMCP.Editor
         // All GDI handles and the Texture2D are released in finally (deselect-before-delete).
         static Dictionary<string, object> GrabAndEncode(IntPtr hwnd, bool wholeWindow,
             int panelX, int panelY, int panelW, int panelH,
-            float pixelsPerPoint, string path, int maxDimension, EditorWindow win, bool floating)
+            float pixelsPerPoint, string path, int maxDimension, EditorWindow win, bool floating,
+            string captureMode)
         {
             if (IsIconic(hwnd)) return Err("Window is minimized.");
             if (!GetWindowRect(hwnd, out RECT wr)) return Err("GetWindowRect failed.", Marshal.GetLastWin32Error());
@@ -1134,6 +1203,14 @@ namespace UnityMCP.Editor
             long need = (long)cropW * cropH * 4L;
             if (need > int.MaxValue) return Err("Capture buffer too large (" + need + " B)");
 
+            ScreenCaptureWindowState screenCaptureState = default;
+            string screenCaptureWarning = "";
+            bool captureFromScreen = string.Equals(captureMode, "screen", StringComparison.Ordinal);
+            if (captureFromScreen)
+            {
+                screenCaptureState = PrepareWindowForScreenCapture(hwnd, out screenCaptureWarning);
+            }
+
             IntPtr hScreen = IntPtr.Zero, hMemFull = IntPtr.Zero, hBmpFull = IntPtr.Zero, oldFull = IntPtr.Zero;
             IntPtr hMemCrop = IntPtr.Zero, hBmpCrop = IntPtr.Zero, oldCrop = IntPtr.Zero;
             try
@@ -1143,7 +1220,18 @@ namespace UnityMCP.Editor
                 hBmpFull = CreateCompatibleBitmap(hScreen, winW, winH); if (hBmpFull == IntPtr.Zero) return Err("CreateCompatibleBitmap failed.", Marshal.GetLastWin32Error());
                 oldFull = SelectObject(hMemFull, hBmpFull);
 
-                if (!PrintWindow(hwnd, hMemFull, PW_RENDERFULLCONTENT)) return Err("PrintWindow failed.", Marshal.GetLastWin32Error());
+                if (captureFromScreen)
+                {
+                    if (!BitBlt(hMemFull, 0, 0, winW, winH, hScreen, wr.left, wr.top,
+                            SRCCOPY | CAPTUREBLT))
+                    {
+                        return Err("On-screen window capture failed.", Marshal.GetLastWin32Error());
+                    }
+                }
+                else if (!PrintWindow(hwnd, hMemFull, PW_RENDERFULLCONTENT))
+                {
+                    return Err("PrintWindow failed.", Marshal.GetLastWin32Error());
+                }
 
                 IntPtr grabBmp;
                 if (wholeWindow)
@@ -1174,10 +1262,15 @@ namespace UnityMCP.Editor
                 if (scan == 0) return Err("GetDIBits failed.", Marshal.GetLastWin32Error());
                 if (scan != cropH) return Err("GetDIBits partial (" + scan + "/" + cropH + ").");
 
-                // All-black detection (GPU refused PW_RENDERFULLCONTENT): aligned RGB sample.
+                // All-black detection: aligned RGB sample.
                 long sum = 0; int stride = Math.Max(1, (cropW * cropH) / 4096) * 4;
                 for (int i = 0; i + 2 < buf.Length; i += stride) sum += buf[i] + buf[i + 1] + buf[i + 2];
-                if (sum == 0) return Err("All-black frame (GPU refused PW_RENDERFULLCONTENT).");
+                if (sum == 0)
+                {
+                    return Err(captureFromScreen
+                        ? "All-black frame from on-screen window capture."
+                        : "All-black frame (GPU refused PW_RENDERFULLCONTENT).");
+                }
 
                 AnalyzeCenterPixels(buf, cropW, cropH, out int centerColorRange,
                     out int centerDistinctColorBuckets, out bool centerVisuallyBlank);
@@ -1201,6 +1294,7 @@ namespace UnityMCP.Editor
                     { "sizeBytes", png.Length },
                     { "window", win.GetType().FullName },
                     { "floating", floating },
+                    { "captureMethod", captureFromScreen ? "screen-bitmap" : "print-window" },
                     { "coordinateMode", coordinateMode },
                     { "contentRect", new Dictionary<string, object>
                         {
@@ -1213,7 +1307,7 @@ namespace UnityMCP.Editor
                     { "centerColorRange", centerColorRange },
                     { "centerDistinctColorBuckets", centerDistinctColorBuckets },
                     { "centerVisuallyBlank", centerVisuallyBlank },
-                    { "warning", cropWarning },
+                    { "warning", AppendWarning(cropWarning, screenCaptureWarning) },
                 };
             }
             finally
@@ -1225,7 +1319,72 @@ namespace UnityMCP.Editor
                 if (hBmpFull != IntPtr.Zero) DeleteObject(hBmpFull);
                 if (hMemFull != IntPtr.Zero) DeleteDC(hMemFull);
                 if (hScreen != IntPtr.Zero) ReleaseDC(IntPtr.Zero, hScreen);
+                if (captureFromScreen)
+                    RestoreWindowAfterScreenCapture(hwnd, screenCaptureState);
             }
+        }
+
+        private readonly struct ScreenCaptureWindowState
+        {
+            public readonly IntPtr PreviousForegroundWindow;
+            public readonly bool WasTopMost;
+            public readonly bool Raised;
+
+            public ScreenCaptureWindowState(IntPtr previousForegroundWindow, bool wasTopMost, bool raised)
+            {
+                PreviousForegroundWindow = previousForegroundWindow;
+                WasTopMost = wasTopMost;
+                Raised = raised;
+            }
+        }
+
+        private static ScreenCaptureWindowState PrepareWindowForScreenCapture(IntPtr hwnd, out string warning)
+        {
+            warning = "";
+            IntPtr previousForegroundWindow = GetForegroundWindow();
+            long extendedStyle = GetWindowLongPtrCompat(hwnd, GWL_EXSTYLE).ToInt64();
+            bool wasTopMost = (extendedStyle & WS_EX_TOPMOST) != 0;
+            bool raised = wasTopMost || SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW);
+            if (raised == false)
+            {
+                warning = AppendWarning(warning,
+                    "Could not temporarily raise the window for GPU-composited capture.");
+            }
+
+            if (BringWindowToTop(hwnd) == false)
+                warning = AppendWarning(warning, "BringWindowToTop failed.");
+            if (SetForegroundWindow(hwnd) == false)
+                warning = AppendWarning(warning, "SetForegroundWindow failed.");
+            UpdateWindow(hwnd);
+            if (DwmFlush() != 0)
+                warning = AppendWarning(warning, "DwmFlush failed before capture.");
+
+            return new ScreenCaptureWindowState(previousForegroundWindow, wasTopMost, raised);
+        }
+
+        private static void RestoreWindowAfterScreenCapture(IntPtr hwnd, ScreenCaptureWindowState state)
+        {
+            if (state.Raised && state.WasTopMost == false)
+            {
+                SetWindowPos(hwnd, HWND_NOTOPMOST, 0, 0, 0, 0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+            }
+
+            if (state.PreviousForegroundWindow != IntPtr.Zero &&
+                state.PreviousForegroundWindow != hwnd)
+            {
+                SetForegroundWindow(state.PreviousForegroundWindow);
+            }
+
+            DwmFlush();
+        }
+
+        private static IntPtr GetWindowLongPtrCompat(IntPtr hwnd, int index)
+        {
+            return IntPtr.Size == 8
+                ? GetWindowLongPtr64(hwnd, index)
+                : new IntPtr(GetWindowLong32(hwnd, index));
         }
 
         private readonly struct CropCandidate
@@ -1287,7 +1446,11 @@ namespace UnityMCP.Editor
 
         private static string AppendWarning(string existing, string warning)
         {
-            return string.IsNullOrEmpty(existing) ? warning : existing + " " + warning;
+            if (string.IsNullOrEmpty(existing))
+                return warning ?? "";
+            if (string.IsNullOrEmpty(warning))
+                return existing;
+            return existing + " " + warning;
         }
 
         private static void AnalyzeCenterPixels(byte[] bgra, int width, int height, out int colorRange,
@@ -1407,6 +1570,17 @@ namespace UnityMCP.Editor
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool GetWindowRect(IntPtr hWnd, out RECT r);
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool GetClientRect(IntPtr hWnd, out RECT r);
         [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] static extern bool ClientToScreen(IntPtr hWnd, ref POINT point);
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool SetForegroundWindow(IntPtr hWnd);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool BringWindowToTop(IntPtr hWnd);
+        [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool UpdateWindow(IntPtr hWnd);
+        [DllImport("user32.dll", SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)]
+        static extern bool SetWindowPos(IntPtr hWnd, IntPtr hWndInsertAfter, int x, int y, int width, int height,
+            uint flags);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLong", SetLastError = true)]
+        static extern int GetWindowLong32(IntPtr hWnd, int index);
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongPtr", SetLastError = true)]
+        static extern IntPtr GetWindowLongPtr64(IntPtr hWnd, int index);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool EnumWindows(EnumWindowsProc cb, IntPtr l);
         [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
         [DllImport("user32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool IsWindowVisible(IntPtr hWnd);
@@ -1424,10 +1598,20 @@ namespace UnityMCP.Editor
         [DllImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool DeleteObject(IntPtr ho);
         [DllImport("gdi32.dll")] [return: MarshalAs(UnmanagedType.Bool)] static extern bool DeleteDC(IntPtr hdc);
         [DllImport("gdi32.dll", SetLastError = true)] static extern int GetDIBits(IntPtr hdc, IntPtr hbm, uint start, uint cLines, byte[] bits, ref BITMAPINFOHEADER bmi, uint usage);
+        [DllImport("dwmapi.dll")] static extern int DwmFlush();
 
         const uint SRCCOPY = 0x00CC0020;
+        const uint CAPTUREBLT = 0x40000000;
         const uint PW_RENDERFULLCONTENT = 0x00000002; // Windows 8.1+
         const uint DIB_RGB_COLORS = 0;
+        const int GWL_EXSTYLE = -20;
+        const long WS_EX_TOPMOST = 0x00000008L;
+        const uint SWP_NOSIZE = 0x0001;
+        const uint SWP_NOMOVE = 0x0002;
+        const uint SWP_NOACTIVATE = 0x0010;
+        const uint SWP_SHOWWINDOW = 0x0040;
+        static readonly IntPtr HWND_TOPMOST = new IntPtr(-1);
+        static readonly IntPtr HWND_NOTOPMOST = new IntPtr(-2);
         [StructLayout(LayoutKind.Sequential)] struct RECT { public int left, top, right, bottom; }
         [StructLayout(LayoutKind.Sequential)] struct POINT { public int x, y; }
         [StructLayout(LayoutKind.Sequential)]

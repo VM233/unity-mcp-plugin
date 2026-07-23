@@ -1714,6 +1714,27 @@ namespace UnityMCP.Editor.Tests
         }
 
         [Test]
+        public void EditorWindowCapture_AutoUsesScreenPixelsForGpuCompositedWindows()
+        {
+            MethodInfo resolve = typeof(MCPScreenshotCommands).GetMethod("ResolveEditorWindowCaptureMode",
+                BindingFlags.Static | BindingFlags.NonPublic);
+            Assert.That(resolve, Is.Not.Null);
+
+            string Resolve(string requestedMode, string fullTypeName, string title)
+            {
+                return (string)resolve.Invoke(null, new object[] { requestedMode, fullTypeName, title });
+            }
+
+            Assert.That(Resolve("auto", "UnityEditor.GameView", "Game"), Is.EqualTo("screen"));
+            Assert.That(Resolve("auto", "Unity.UI.Builder.Builder", "UI Builder"), Is.EqualTo("screen"));
+            Assert.That(Resolve("auto", "UnityEditor.InspectorWindow", "Inspector"), Is.EqualTo("print-window"));
+            Assert.That(Resolve("print-window", "Unity.UI.Builder.Builder", "UI Builder"),
+                Is.EqualTo("print-window"));
+            Assert.That(Resolve("screen", "UnityEditor.InspectorWindow", "Inspector"), Is.EqualTo("screen"));
+            Assert.That(Resolve("unsupported", "UnityEditor.InspectorWindow", "Inspector"), Is.Empty);
+        }
+
+        [Test]
         public void ProjectToolNamesStayReadableAndBelowClientLimit()
         {
             var method = typeof(MCPToolMetadata).GetMethod("ProjectToolNameToToolName",

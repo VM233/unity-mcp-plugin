@@ -2,6 +2,12 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.20] - 2026-07-23
+
+- Capture runtime UI Toolkit elements from the Game View render texture instead of the Editor window shell, preventing black element crops from GPU-composited Game View content.
+- Capture UI Builder previews through a temporarily raised on-screen window path because Win32 `PrintWindow` omits its GPU-composited viewport.
+- Added explicit `auto`, `print-window`, and `screen` Editor-window capture modes with capture-method diagnostics.
+
 ## [3.3.19] - 2026-07-22
 
 - Route project-context reads through the Unity main-thread request queue so `EditorPrefs` and project-path access cannot throw worker-thread HTTP 500 errors.

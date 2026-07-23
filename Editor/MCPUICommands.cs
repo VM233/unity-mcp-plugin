@@ -907,8 +907,24 @@ namespace UnityMCP.Editor
             {
                 { "window", windowName },
                 { "path", fullWindowPath },
+                { "captureMode", runtime ? "screen" : "auto" },
             };
-            var capture = MCPScreenshotCommands.CaptureEditorWindow(captureArgs) as Dictionary<string, object>;
+            Dictionary<string, object> capture = runtime
+                ? MCPScreenshotCommands.CaptureGameViewRenderTexture(fullWindowPath)
+                : MCPScreenshotCommands.CaptureEditorWindow(captureArgs) as Dictionary<string, object>;
+            if (runtime && (capture == null || GetBool(capture, "success", false) == false))
+            {
+                string renderTextureError = capture == null
+                    ? "Game View render-texture capture returned no result."
+                    : GetString(capture, "error");
+                capture = MCPScreenshotCommands.CaptureEditorWindow(captureArgs) as Dictionary<string, object>;
+                if (capture != null)
+                {
+                    capture["fallbackFrom"] = "game-view-render-texture";
+                    capture["fallbackReason"] = renderTextureError;
+                }
+            }
+
             if (capture == null || GetBool(capture, "success", false) == false)
                 return capture ?? new Dictionary<string, object> { { "success", false }, { "error", "Window capture failed" } };
 
@@ -968,7 +984,9 @@ namespace UnityMCP.Editor
                 { "windowCapture", capture },
                 { "elementCapture", crop },
                 { "error", cropSucceeded ? "" : "Element crop failed. See elementCapture for details." },
-                { "warning", runtime ? "Runtime UI Toolkit coordinates are panel coordinates; verify GameView scale if the crop is offset." : "" },
+                { "warning", runtime && capture.ContainsKey("fallbackFrom")
+                    ? "Game View render-texture capture was unavailable; used an on-screen window fallback."
+                    : "" },
             };
         }
 
@@ -1356,6 +1374,7 @@ namespace UnityMCP.Editor
                         { "window", "UI Builder" },
                         { "path", screenshotPath },
                         { "maxDimension", GetInt(args, "maxDimension", 8192) },
+                        { "captureMode", "screen" },
                     });
                     result["screenshot"] = screenshot;
 
