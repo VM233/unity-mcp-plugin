@@ -3815,6 +3815,81 @@ namespace UnityMCP.Editor.Tests
                 var annotations = RequireDictionary(toolsByRoute[route]["annotations"]);
                 Assert.That(annotations.ContainsKey("readOnlyHint"), Is.False);
             }
+
+            var updateTransitionSchema = RequireDictionary(
+                toolsByRoute["animation/update-transition"]["inputSchema"]);
+            var updateTransitionProperties = RequireDictionary(updateTransitionSchema["properties"]);
+            foreach (string propertyName in new[] { "conditions", "addConditions" })
+            {
+                var arraySchema = RequireDictionary(updateTransitionProperties[propertyName]);
+                Assert.That(arraySchema["type"], Is.EqualTo("array"));
+                var itemSchema = RequireDictionary(arraySchema["items"]);
+                Assert.That(itemSchema["type"], Is.EqualTo("object"));
+                var itemProperties = RequireDictionary(itemSchema["properties"]);
+                CollectionAssert.IsSubsetOf(new[] { "parameter", "mode", "threshold" }, itemProperties.Keys);
+                CollectionAssert.Contains((List<string>)itemSchema["required"], "parameter");
+            }
+
+            var updateConditionsSchema = RequireDictionary(updateTransitionProperties["updateConditions"]);
+            var updateConditionItemSchema = RequireDictionary(updateConditionsSchema["items"]);
+            var updateConditionItemProperties = RequireDictionary(updateConditionItemSchema["properties"]);
+            CollectionAssert.IsSubsetOf(new[] { "index", "parameter", "mode", "threshold" },
+                updateConditionItemProperties.Keys);
+            CollectionAssert.Contains((List<string>)updateConditionItemSchema["required"], "index");
+
+            var removeIndexesSchema = RequireDictionary(updateTransitionProperties["removeConditionIndexes"]);
+            Assert.That(RequireDictionary(removeIndexesSchema["items"])["type"], Is.EqualTo("number"));
+        }
+
+        [Test]
+        public void AnimationUpdateTransition_AddsConditionFromObjectArray()
+        {
+            const string controllerPath = TEST_FOLDER + "/Transition Conditions.controller";
+            var controller = UnityEditor.Animations.AnimatorController.CreateAnimatorControllerAtPath(controllerPath);
+            controller.AddParameter("Melee Attack", UnityEngine.AnimatorControllerParameterType.Trigger);
+            controller.AddParameter("Is Dead", UnityEngine.AnimatorControllerParameterType.Bool);
+
+            var stateMachine = controller.layers[0].stateMachine;
+            var idle = stateMachine.AddState("Idle");
+            var attack = stateMachine.AddState("Attack");
+            stateMachine.defaultState = idle;
+            var transition = idle.AddTransition(attack);
+            transition.AddCondition(UnityEditor.Animations.AnimatorConditionMode.If, 0, "Melee Attack");
+            AssetDatabase.SaveAssets();
+
+            var result = RequireDictionary(MCPAnimationCommands.UpdateTransition(new Dictionary<string, object>
+            {
+                { "controllerPath", controllerPath },
+                { "sourceState", "Idle" },
+                { "destinationState", "Attack" },
+                {
+                    "addConditions", new List<object>
+                    {
+                        new Dictionary<string, object>
+                        {
+                            { "parameter", "Is Dead" },
+                            { "mode", "IfNot" },
+                            { "threshold", 0 },
+                        },
+                    }
+                },
+            }));
+
+            Assert.That(result["success"], Is.EqualTo(true));
+            Assert.That(Convert.ToInt32(result["conditionCount"]), Is.EqualTo(2));
+            var conditions = (List<Dictionary<string, object>>)result["conditions"];
+            Assert.That(conditions[1]["parameter"], Is.EqualTo("Is Dead"));
+            Assert.That(conditions[1]["mode"], Is.EqualTo("IfNot"));
+
+            var reloadedController =
+                AssetDatabase.LoadAssetAtPath<UnityEditor.Animations.AnimatorController>(controllerPath);
+            var reloadedTransition = reloadedController.layers[0].stateMachine.states
+                .Single(child => child.state.name == "Idle").state.transitions
+                .Single(item => item.destinationState != null && item.destinationState.name == "Attack");
+            Assert.That(reloadedTransition.conditions.Length, Is.EqualTo(2));
+            Assert.That(reloadedTransition.conditions[1].parameter, Is.EqualTo("Is Dead"));
+            Assert.That(reloadedTransition.conditions[1].mode,
+                Is.EqualTo(UnityEditor.Animations.AnimatorConditionMode.IfNot));
         }
 
         [Test]

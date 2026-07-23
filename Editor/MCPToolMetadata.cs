@@ -1683,26 +1683,7 @@ namespace UnityMCP.Editor
                         Prop("cycleOffset", "number", "State cycle offset.")
                     ), "controllerPath", "stateName");
                 case "animation/update-transition":
-                    return Schema(Props(
-                        Prop("controllerPath", "string", "AnimatorController asset path."),
-                        Prop("layerIndex", "number", "Layer index. Defaults to 0."),
-                        Prop("sourceState", "string", "Source state name. Required unless fromAnyState is true."),
-                        Prop("destinationState", "string", "Destination state, state machine, or Exit filter."),
-                        Prop("fromAnyState", "boolean", "Modify an Any State transition."),
-                        Prop("transitionIndex", "number", "Optional transition index under the source."),
-                        Prop("hasExitTime", "boolean", "Transition has exit time."),
-                        Prop("exitTime", "number", "Transition exit time."),
-                        Prop("duration", "number", "Transition duration."),
-                        Prop("offset", "number", "Transition offset."),
-                        Prop("hasFixedDuration", "boolean", "Use fixed duration."),
-                        Prop("interruptionSource", "string", "TransitionInterruptionSource value."),
-                        Prop("orderedInterruption", "boolean", "Ordered interruption flag."),
-                        Prop("canTransitionToSelf", "boolean", "Any State can transition to self flag."),
-                        Prop("conditions", "array", "Replace all conditions with this array."),
-                        Prop("addConditions", "array", "Append conditions."),
-                        Prop("updateConditions", "array", "Update conditions by index."),
-                        Prop("removeConditionIndexes", "array", "Remove conditions by index.")
-                    ), "controllerPath");
+                    return AnimationUpdateTransitionSchema();
                 case "animation/connect-states":
                     return Schema(Props(
                         Prop("controllerPath", "string", "AnimatorController asset path."),
@@ -2195,6 +2176,60 @@ namespace UnityMCP.Editor
                 { "items", Schema(referenceProperties, "propertyName") },
             };
             return Schema(properties, "references");
+        }
+
+        private static Dictionary<string, object> AnimationUpdateTransitionSchema()
+        {
+            var conditionProperties = Props(
+                Prop("parameter", "string", "Animator parameter name."),
+                Prop("mode", "string", "AnimatorConditionMode value such as If, IfNot, Greater, Less, Equals, or NotEqual."),
+                Prop("threshold", "number", "Condition threshold. Trigger and bool conditions normally use 0."));
+            var updateConditionProperties = new Dictionary<string, object>(conditionProperties)
+            {
+                ["index"] = Prop("index", "number", "Zero-based condition index to update.").Value,
+            };
+
+            var properties = Props(
+                Prop("controllerPath", "string", "AnimatorController asset path."),
+                Prop("layerIndex", "number", "Layer index. Defaults to 0."),
+                Prop("sourceState", "string", "Source state name. Required unless fromAnyState is true."),
+                Prop("destinationState", "string", "Destination state, state machine, or Exit filter."),
+                Prop("fromAnyState", "boolean", "Modify an Any State transition."),
+                Prop("transitionIndex", "number", "Optional transition index under the source."),
+                Prop("hasExitTime", "boolean", "Transition has exit time."),
+                Prop("exitTime", "number", "Transition exit time."),
+                Prop("duration", "number", "Transition duration."),
+                Prop("offset", "number", "Transition offset."),
+                Prop("hasFixedDuration", "boolean", "Use fixed duration."),
+                Prop("interruptionSource", "string", "TransitionInterruptionSource value."),
+                Prop("orderedInterruption", "boolean", "Ordered interruption flag."),
+                Prop("canTransitionToSelf", "boolean", "Any State can transition to self flag."));
+            properties["conditions"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "Replace all conditions with condition objects." },
+                { "items", Schema(conditionProperties, "parameter") },
+            };
+            properties["addConditions"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "Append condition objects." },
+                { "items", Schema(conditionProperties, "parameter") },
+            };
+            properties["updateConditions"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "Update condition objects by zero-based index." },
+                { "items", Schema(updateConditionProperties, "index") },
+            };
+            properties["removeConditionIndexes"] = new Dictionary<string, object>
+            {
+                { "type", "array" },
+                { "description", "Remove conditions by zero-based index." },
+                { "items", new Dictionary<string, object> { { "type", "number" } } },
+            };
+
+            return Schema(properties, "controllerPath");
         }
 
         private static Dictionary<string, object> PrefabAssetConfigureComponentSchema()

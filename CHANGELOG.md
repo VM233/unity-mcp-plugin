@@ -2,6 +2,10 @@
 
 All notable changes to this package will be documented in this file.
 
+## [3.3.21] - 2026-07-23
+
+- Publish Animator transition condition fields as object-array item schemas so `unity_animation_update_transition` can replace, add, and update conditions directly.
+
 ## [3.3.20] - 2026-07-23
 
 - Capture runtime UI Toolkit elements from the Game View render texture instead of the Editor window shell, preventing black element crops from GPU-composited Game View content.
